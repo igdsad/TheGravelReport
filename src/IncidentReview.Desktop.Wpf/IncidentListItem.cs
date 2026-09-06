@@ -16,6 +16,10 @@ public sealed class IncidentListItem
 
     public IncidentId Id => Incident.Id;
 
+    public string ObservedAtText => ObservedAt.LocalDateTime.ToString("g", CultureInfo.CurrentCulture);
+
+    public string IncidentIdText => Id.ToString();
+
     public string ReplayTime => FormatDuration(Incident.Position.SessionTime.Value);
 
     public string Points => string.Create(

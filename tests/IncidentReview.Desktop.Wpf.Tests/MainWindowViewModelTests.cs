@@ -33,6 +33,10 @@ public sealed class MainWindowViewModelTests
         Assert.AreEqual("3000", viewModel.ReplayLeadInMilliseconds);
         Assert.IsGreaterThan(0, dispatcher.InvocationCount);
         Assert.IsFalse(viewModel.ShowsEmptyState);
+        Assert.AreEqual("2 incidents", viewModel.StatusDetail);
+        Assert.HasCount(1, viewModel.EventLog);
+        Assert.IsFalse(viewModel.EventLog[0].IsError);
+        StringAssert.Contains(viewModel.EventLog[0].Message, "2 incidents");
     }
 
     [TestMethod]
@@ -93,6 +97,36 @@ public sealed class MainWindowViewModelTests
 
         Assert.AreEqual(incident.Id, service.ReviewedIncident);
         Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.ErrorMessage);
+        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.StatusDetail);
+        Assert.IsTrue(viewModel.EventLog[^1].IsError);
+        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.EventLog[^1].Message);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task EventLogDropsOldestEntriesAtItsBound()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            ReviewResult = Result.Failure(ApplicationErrors.ReplayDriverOnTrack),
+        };
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var session = TestModelFactory.Session(sessionId, incident);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(session)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.Incidents[0];
+
+        for (var index = 0; index < 205; index++)
+        {
+            await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
+        }
+
+        Assert.HasCount(200, viewModel.EventLog);
+        Assert.IsTrue(viewModel.EventLog.All(static entry => entry.IsError));
     }
 
     [TestMethod]
@@ -227,6 +261,8 @@ public sealed class MainWindowViewModelTests
         Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
         Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
         Assert.AreEqual(callsBeforeUpdate, service.StatusCalls);
+        Assert.IsTrue(viewModel.EventLog[^1].IsError);
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.EventLog[^1].Message);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 

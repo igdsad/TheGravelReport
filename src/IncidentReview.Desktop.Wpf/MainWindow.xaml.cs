@@ -45,4 +45,18 @@ public partial class MainWindow : Window
             ViewModel.ReviewCommand.Execute(null);
         }
     }
+
+    private void OnReviewIncidentClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: IncidentListItem incident })
+        {
+            return;
+        }
+
+        ViewModel.SelectedIncident = incident;
+        if (ViewModel.ReviewCommand.CanExecute(null))
+        {
+            ViewModel.ReviewCommand.Execute(null);
+        }
+    }
 }

@@ -2,143 +2,215 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="iRacing Incident Review"
-        Width="1000"
-        Height="680"
-        MinWidth="760"
+        Width="1120"
+        Height="720"
+        MinWidth="800"
         MinHeight="520"
         AutomationProperties.AutomationId="IncidentReview.MainWindow">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     </Window.Resources>
-    <Grid Margin="20">
+
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" LastChildFill="False">
-            <StackPanel DockPanel.Dock="Left">
-                <TextBlock FontSize="26" FontWeight="SemiBold" Text="Incident Review" />
-                <TextBlock Margin="0,3,0,0"
-                           AutomationProperties.AutomationId="IncidentReview.ConnectionStatus"
-                           AutomationProperties.Name="Simulator connection status"
-                           Text="{Binding ConnectionStatus}" />
-            </StackPanel>
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Margin="0,0,12,0" VerticalAlignment="Center" Text="{Binding BusyText}" />
+        <DockPanel Grid.Row="0" Margin="16,14,16,0" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left"
+                       VerticalAlignment="Center"
+                       FontSize="24"
+                       FontWeight="SemiBold"
+                       Text="Incident Review" />
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button Margin="0,0,8,0" Padding="12,6"
                         AutomationProperties.AutomationId="IncidentReview.Refresh"
-                        AutomationProperties.Name="Refresh sessions and incidents"
-                        Command="{Binding RefreshCommand}" Content="Refresh" />
+                        AutomationProperties.Name="Refresh incident log"
+                        Command="{Binding RefreshCommand}"
+                        Content="Refresh" />
                 <Button Margin="0,0,8,0" Padding="12,6"
                         AutomationProperties.AutomationId="IncidentReview.ToggleMonitoring"
-                        AutomationProperties.Name="Start or stop live UI updates"
-                        Command="{Binding ToggleMonitoringCommand}" Content="{Binding MonitorActionText}" />
+                        AutomationProperties.Name="Start or stop live incident updates"
+                        Command="{Binding ToggleMonitoringCommand}"
+                        Content="{Binding MonitorActionText}" />
                 <Button Padding="12,6"
                         AutomationProperties.AutomationId="IncidentReview.Cancel"
                         AutomationProperties.Name="Cancel current operation"
-                        Command="{Binding CancelCommand}" Content="Cancel" />
+                        Command="{Binding CancelCommand}"
+                        Content="Cancel" />
             </StackPanel>
         </DockPanel>
 
-        <Border Grid.Row="1" Margin="0,16,0,12" Padding="12" Background="#FFFDE7"
-                BorderBrush="#FFCC80" BorderThickness="1"
-                Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock AutomationProperties.AutomationId="IncidentReview.Error"
-                       AutomationProperties.Name="Incident review error"
-                       Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+        <Border Grid.Row="1" Margin="16,12,16,10"
+                BorderBrush="#B8B8B8" BorderThickness="1" CornerRadius="4">
+            <Grid>
+                <DataGrid x:Name="IncidentGrid"
+                          AutomationProperties.AutomationId="IncidentReview.Incidents"
+                          AutomationProperties.Name="Chronological incident log"
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          GridLinesVisibility="Horizontal"
+                          HeadersVisibility="Column"
+                          IsReadOnly="True"
+                          ItemsSource="{Binding Incidents}"
+                          SelectedItem="{Binding SelectedIncident}"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          MouseDoubleClick="OnIncidentActivated">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Recorded" Binding="{Binding ObservedAtText}" Width="145" />
+                        <DataGridTextColumn Header="Incident ID" Binding="{Binding IncidentIdText}" Width="260" />
+                        <DataGridTextColumn Header="Replay time" Binding="{Binding ReplayTime}" Width="105" />
+                        <DataGridTextColumn Header="Points" Binding="{Binding Points}" Width="135" />
+                        <DataGridTextColumn Header="Lap" Binding="{Binding Lap}" Width="60" />
+                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90" />
+                        <DataGridTextColumn Header="Notes" Binding="{Binding Notes}" Width="*" MinWidth="100" />
+                        <DataGridTemplateColumn Header="Review" Width="90">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Margin="5,2" Padding="10,3"
+                                            AutomationProperties.Name="Review this incident in iRacing"
+                                            Click="OnReviewIncidentClicked"
+                                            Content="Review" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                           AutomationProperties.AutomationId="IncidentReview.EmptyState"
+                           AutomationProperties.Name="Incident log status"
+                           FontSize="16" Foreground="#666666"
+                           Text="{Binding EmptyMessage}"
+                           Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </Grid>
         </Border>
 
-        <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="280" />
-                <ColumnDefinition Width="16" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
-            <GroupBox Grid.Column="0" Header="Sessions">
-                <ListBox x:Name="SessionList"
-                         AutomationProperties.AutomationId="IncidentReview.Sessions"
-                         AutomationProperties.Name="Review sessions"
-                         ItemsSource="{Binding Sessions}"
-                         SelectedItem="{Binding SelectedSession}"
-                         SelectionChanged="OnSessionSelectionChanged">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Margin="2,5">
-                                <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextWrapping="Wrap" />
-                                <TextBlock Margin="0,2,0,0" Text="{Binding IncidentCountText}" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </GroupBox>
-
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+        <Expander Grid.Row="2" Margin="16,0,16,8"
+                  AutomationProperties.AutomationId="IncidentReview.PowerUserDetails"
+                  Header="Power-user details"
+                  IsExpanded="False">
+            <Border Margin="0,7,0,0" Padding="10"
+                    Background="#F7F7F7" BorderBrush="#D3D3D3" BorderThickness="1">
                 <Grid>
-                    <DataGrid x:Name="IncidentGrid"
-                              AutomationProperties.AutomationId="IncidentReview.Incidents"
-                              AutomationProperties.Name="Incidents in chronological order"
-                              AutoGenerateColumns="False"
-                              CanUserAddRows="False"
-                              IsReadOnly="True"
-                              ItemsSource="{Binding Incidents}"
-                              SelectedItem="{Binding SelectedIncident}"
-                              MouseDoubleClick="OnIncidentActivated">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Replay time" Binding="{Binding ReplayTime}" Width="120" />
-                            <DataGridTextColumn Header="Points" Binding="{Binding Points}" Width="150" />
-                            <DataGridTextColumn Header="Lap" Binding="{Binding Lap}" Width="70" />
-                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100" />
-                            <DataGridTextColumn Header="Notes" Binding="{Binding Notes}" Width="*" />
-                        </DataGrid.Columns>
-                    </DataGrid>
-                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                               AutomationProperties.AutomationId="IncidentReview.EmptyState"
-                               AutomationProperties.Name="Incident list status"
-                               FontSize="16" Foreground="#666666"
-                               Text="{Binding EmptyMessage}"
-                               Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="140" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Margin="0,0,0,5"
+                               FontWeight="SemiBold" Text="Event stream" />
+                    <ListBox Grid.Row="1"
+                             AutomationProperties.AutomationId="IncidentReview.EventLog"
+                             AutomationProperties.Name="Application event stream"
+                             ItemsSource="{Binding EventLog}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="2">
+                                    <TextBlock DockPanel.Dock="Left" Width="160"
+                                               Foreground="#666666" Text="{Binding Timestamp}" />
+                                    <TextBlock Text="{Binding Message}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#222222" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsError}" Value="True">
+                                                        <Setter Property="Foreground" Value="#A31515" />
+                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Separator Grid.Row="2" Margin="0,10" />
+
+                    <DockPanel Grid.Row="3" Margin="0,0,0,10">
+                        <TextBlock DockPanel.Dock="Left" Margin="0,0,8,0"
+                                   VerticalAlignment="Center" Text="Session history" />
+                        <ComboBox x:Name="SessionList"
+                                  AutomationProperties.AutomationId="IncidentReview.Sessions"
+                                  AutomationProperties.Name="Review session history"
+                                  DisplayMemberPath="DisplayName"
+                                  ItemsSource="{Binding Sessions}"
+                                  SelectedItem="{Binding SelectedSession}"
+                                  SelectionChanged="OnSessionSelectionChanged" />
+                    </DockPanel>
+
+                    <WrapPanel Grid.Row="4" VerticalAlignment="Center">
+                        <TextBlock Margin="0,0,8,0" VerticalAlignment="Center"
+                                   FontWeight="SemiBold" Text="Replay defaults" />
+                        <TextBlock Margin="0,0,5,0" VerticalAlignment="Center" Text="Lead-in (ms)" />
+                        <TextBox Width="80" Margin="0,0,12,0"
+                                 AutomationProperties.AutomationId="IncidentReview.LeadIn"
+                                 Text="{Binding ReplayLeadInMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Margin="0,0,5,0" VerticalAlignment="Center" Text="Speed" />
+                        <TextBox Width="60" Margin="0,0,12,0"
+                                 AutomationProperties.AutomationId="IncidentReview.PlaybackSpeed"
+                                 Text="{Binding PlaybackSpeed, UpdateSourceTrigger=PropertyChanged}" />
+                        <CheckBox Margin="0,0,12,0" VerticalAlignment="Center"
+                                  AutomationProperties.AutomationId="IncidentReview.AutoPause"
+                                  Content="Pause after seeking" IsChecked="{Binding AutoPause}" />
+                        <TextBlock Margin="0,0,5,0" VerticalAlignment="Center" Text="Camera" />
+                        <TextBox Width="120" Margin="0,0,12,0"
+                                 AutomationProperties.AutomationId="IncidentReview.Camera"
+                                 Text="{Binding PreferredCamera, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Padding="12,4"
+                                AutomationProperties.AutomationId="IncidentReview.SavePreferences"
+                                AutomationProperties.Name="Save replay defaults"
+                                Command="{Binding SavePreferencesCommand}"
+                                Content="Save" />
+                    </WrapPanel>
                 </Grid>
-
-                <StackPanel Grid.Row="1" Margin="0,12,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Padding="18,8"
-                            AutomationProperties.AutomationId="IncidentReview.ReviewIncident"
-                            AutomationProperties.Name="Review selected incident in iRacing"
-                            Command="{Binding ReviewCommand}" Content="Review selected incident" />
-                </StackPanel>
-            </Grid>
-        </Grid>
-
-        <Expander Grid.Row="3" Margin="0,16,0,0" Header="Replay preferences"
-                  AutomationProperties.AutomationId="IncidentReview.Preferences">
-            <WrapPanel Margin="0,10,0,0" VerticalAlignment="Center">
-                <TextBlock Margin="0,0,6,0" VerticalAlignment="Center" Text="Lead-in (ms)" />
-                <TextBox Width="90" Margin="0,0,16,0"
-                         AutomationProperties.AutomationId="IncidentReview.LeadIn"
-                         Text="{Binding ReplayLeadInMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock Margin="0,0,6,0" VerticalAlignment="Center" Text="Playback speed" />
-                <TextBox Width="70" Margin="0,0,16,0"
-                         AutomationProperties.AutomationId="IncidentReview.PlaybackSpeed"
-                         Text="{Binding PlaybackSpeed, UpdateSourceTrigger=PropertyChanged}" />
-                <CheckBox Margin="0,0,16,0" VerticalAlignment="Center"
-                          AutomationProperties.AutomationId="IncidentReview.AutoPause"
-                          Content="Pause after seeking" IsChecked="{Binding AutoPause}" />
-                <TextBlock Margin="0,0,6,0" VerticalAlignment="Center" Text="Camera" />
-                <TextBox Width="150" Margin="0,0,16,0"
-                         AutomationProperties.AutomationId="IncidentReview.Camera"
-                         Text="{Binding PreferredCamera, UpdateSourceTrigger=PropertyChanged}" />
-                <Button Padding="12,6"
-                        AutomationProperties.AutomationId="IncidentReview.SavePreferences"
-                        AutomationProperties.Name="Save replay preferences"
-                        Command="{Binding SavePreferencesCommand}" Content="Save" />
-            </WrapPanel>
+            </Border>
         </Expander>
+
+        <StatusBar Grid.Row="3" AutomationProperties.AutomationId="IncidentReview.StatusBar">
+            <StatusBarItem Padding="0" HorizontalContentAlignment="Stretch">
+                <Grid Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type StatusBar}}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Margin="6,0"
+                               AutomationProperties.AutomationId="IncidentReview.ConnectionStatus"
+                               AutomationProperties.Name="Simulator connection status"
+                               FontWeight="SemiBold" Text="{Binding ConnectionStatus}" />
+                    <Separator Grid.Column="1" />
+                    <TextBlock Grid.Column="2" Margin="8,0" Text="{Binding StatusDetail}"
+                               TextWrapping="Wrap" ToolTip="{Binding StatusDetail}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#333333" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasError}" Value="True">
+                                        <Setter Property="Foreground" Value="#A31515" />
+                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Separator Grid.Column="3" />
+                    <TextBlock Grid.Column="4" Margin="8,0" Text="{Binding MonitoringStatus}" />
+                </Grid>
+            </StatusBarItem>
+        </StatusBar>
     </Grid>
 </Window>

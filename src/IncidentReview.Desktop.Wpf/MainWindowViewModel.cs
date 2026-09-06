@@ -12,6 +12,8 @@ namespace IncidentReview.Desktop.Wpf;
 /// <summary>Coordinates incident-review presentation exclusively through application contracts.</summary>
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    private const int EventLogCapacity = 200;
+
     [Flags]
     private enum DirtyPreferenceFields
     {
@@ -81,6 +83,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ObservableCollection<IncidentListItem> Incidents { get; } = [];
 
+    public ObservableCollection<EventLogItem> EventLog { get; } = [];
+
     public ICommand RefreshCommand { get; }
 
     public ICommand OpenSessionCommand { get; }
@@ -102,11 +106,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 RaiseCommandStates();
                 OnPropertyChanged(nameof(BusyText));
+                OnPropertyChanged(nameof(StatusDetail));
             }
         }
     }
 
     public string BusyText => IsBusy ? "Working…" : string.Empty;
+
+    public string StatusDetail
+    {
+        get
+        {
+            if (ErrorMessage is not null)
+            {
+                return ErrorMessage;
+            }
+
+            if (IsBusy)
+            {
+                return "Working…";
+            }
+
+            return HasIncidents
+                ? FormatIncidentCount(Incidents.Count)
+                : EmptyMessage;
+        }
+    }
 
     public bool IsMonitoring
     {
@@ -116,11 +141,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (SetField(ref _isMonitoring, value))
             {
                 OnPropertyChanged(nameof(MonitorActionText));
+                OnPropertyChanged(nameof(MonitoringStatus));
             }
         }
     }
 
     public string MonitorActionText => IsMonitoring ? "Stop live updates" : "Start live updates";
+
+    public string MonitoringStatus => IsMonitoring ? "Live updates on" : "Live updates off";
 
     public string ConnectionStatus
     {
@@ -136,6 +164,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (SetField(ref _errorMessage, value))
             {
                 OnPropertyChanged(nameof(HasError));
+                OnPropertyChanged(nameof(StatusDetail));
             }
         }
     }
@@ -145,7 +174,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string EmptyMessage
     {
         get => _emptyMessage;
-        private set => SetField(ref _emptyMessage, value);
+        private set
+        {
+            if (SetField(ref _emptyMessage, value))
+            {
+                OnPropertyChanged(nameof(StatusDetail));
+            }
+        }
     }
 
     public bool HasIncidents => Incidents.Count > 0;
@@ -273,7 +308,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     return;
                 }
 
-                await RestoreStatusErrorAsync().ConfigureAwait(false);
+                await RunOnUiAsync(
+                    () =>
+                    {
+                        AddEventLogEntry(
+                            string.Create(
+                                CultureInfo.CurrentCulture,
+                                $"Replay requested for incident {selected.Id} at {selected.ReplayTime}."));
+                        ErrorMessage = _unavailableStatusErrorMessage;
+                    }).ConfigureAwait(false);
             },
             cancellationToken);
     }
@@ -322,6 +365,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                                 _dirtyPreferenceFields = DirtyPreferenceFields.None;
                             }
 
+                            AddEventLogEntry("Replay preferences saved.");
                             ErrorMessage = _unavailableStatusErrorMessage;
                         }).ConfigureAwait(false);
                 }
@@ -349,7 +393,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         _monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             _lifetimeCancellation.Token);
-        await RunOnUiAsync(() => IsMonitoring = true).ConfigureAwait(false);
+        await RunOnUiAsync(
+            () =>
+            {
+                IsMonitoring = true;
+                AddEventLogEntry("Live updates started.");
+            }).ConfigureAwait(false);
         _monitorTask = ObserveUpdatesAsync(_monitorCancellation.Token);
     }
 
@@ -376,7 +425,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             cancellation.Dispose();
             _monitorCancellation = null;
             _monitorTask = null;
-            await RunOnUiAsync(() => IsMonitoring = false).ConfigureAwait(false);
+            await RunOnUiAsync(
+                () =>
+                {
+                    IsMonitoring = false;
+                    AddEventLogEntry("Live updates stopped.");
+                }).ConfigureAwait(false);
         }
     }
 
@@ -429,12 +483,34 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                                 ? null
                                 : FormatError(statusChanged.Error);
                             ErrorMessage = _unavailableStatusErrorMessage;
+                            AddEventLogEntry(
+                                _unavailableStatusErrorMessage ??
+                                    string.Create(
+                                        CultureInfo.CurrentCulture,
+                                        $"Simulator status changed: {ConnectionStatus}."),
+                                statusChanged.Error is not null);
                         }).ConfigureAwait(false);
 
                     if (statusChanged.Error is not null)
                     {
                         continue;
                     }
+                }
+                else if (update is ReviewUpdate.IncidentChanged incidentChanged)
+                {
+                    await RunOnUiAsync(
+                        () => AddEventLogEntry(
+                            string.Create(
+                                CultureInfo.CurrentCulture,
+                                $"Incident recorded: {incidentChanged.Incident}."))).ConfigureAwait(false);
+                }
+                else if (update is ReviewUpdate.SessionChanged sessionChanged)
+                {
+                    await RunOnUiAsync(
+                        () => AddEventLogEntry(
+                            string.Create(
+                                CultureInfo.CurrentCulture,
+                                $"Session changed: {sessionChanged.Session}."))).ConfigureAwait(false);
                 }
 
                 await RunUiOperationAsync(
@@ -577,6 +653,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ErrorMessage = status.Value == ReviewServiceStatus.Unavailable
                     ? _unavailableStatusErrorMessage
                     : null;
+                if (refreshMode == RefreshMode.UserInitiated)
+                {
+                    AddEventLogEntry(
+                        string.Create(
+                            CultureInfo.CurrentCulture,
+                            $"Refreshed incident log: {FormatIncidentCount(Incidents.Count)} loaded."));
+                }
             }).ConfigureAwait(false);
     }
 
@@ -612,6 +695,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : "No incidents are available for this session.";
         OnPropertyChanged(nameof(HasIncidents));
         OnPropertyChanged(nameof(ShowsEmptyState));
+        OnPropertyChanged(nameof(StatusDetail));
     }
 
     private void ApplyPreferences(UserPreferences preferences, bool preserveDirtyFields)
@@ -668,10 +752,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private Task ShowErrorAsync(Error error) => SetErrorAsync(FormatError(error));
 
-    private Task RestoreStatusErrorAsync() =>
-        RunOnUiAsync(() => ErrorMessage = _unavailableStatusErrorMessage);
+    private Task SetErrorAsync(string? message) =>
+        RunOnUiAsync(
+            () =>
+            {
+                ErrorMessage = message;
+                if (message is not null)
+                {
+                    AddEventLogEntry(message, isError: true);
+                }
+            });
 
-    private Task SetErrorAsync(string? message) => RunOnUiAsync(() => ErrorMessage = message);
+    private void AddEventLogEntry(string message, bool isError = false)
+    {
+        while (EventLog.Count >= EventLogCapacity)
+        {
+            EventLog.RemoveAt(0);
+        }
+
+        EventLog.Add(new EventLogItem(DateTimeOffset.Now, message, isError));
+    }
 
     private Task RunOnUiAsync(Action action)
     {
@@ -694,6 +794,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     };
 
     private static string FormatError(Error error) => error.Message;
+
+    private static string FormatIncidentCount(int count) => count == 1
+        ? "1 incident"
+        : string.Create(CultureInfo.CurrentCulture, $"{count} incidents");
 
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> source)
     {
