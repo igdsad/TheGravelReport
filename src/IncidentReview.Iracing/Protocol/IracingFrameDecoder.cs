@@ -1,0 +1,250 @@
+using System.Buffers.Binary;
+using System.Globalization;
+using IncidentReview.Domain;
+using IncidentReview.Results;
+using IncidentReview.Telemetry.Contracts;
+
+namespace IncidentReview.Iracing.Protocol;
+
+internal static class IracingFrameDecoder
+{
+    private static readonly SimulatorCode Simulator =
+        SimulatorCode.TryCreate("iracing").Value;
+
+    public static Result<TelemetrySample> Decode(
+        IracingFrameSnapshot snapshot,
+        string connectionIdentity,
+        TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionIdentity);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+
+        if (!TryReadBoolean(snapshot, IracingProtocol.IsReplayPlayingVariable, out var isReplayPlaying) ||
+            !TryReadInt32(snapshot, IracingProtocol.MyIncidentCountVariable, out var incidentCountValue) ||
+            !TryReadBoolean(snapshot, IracingProtocol.IsOnTrackVariable, out var isOnTrack))
+        {
+            return Invalid();
+        }
+
+        var sessionNumberVariable = isReplayPlaying
+            ? IracingProtocol.ReplaySessionNumberVariable
+            : IracingProtocol.SessionNumberVariable;
+        var sessionTimeVariable = isReplayPlaying
+            ? IracingProtocol.ReplaySessionTimeVariable
+            : IracingProtocol.SessionTimeVariable;
+        if (!TryReadInt32(snapshot, sessionNumberVariable, out var sessionNumberValue) ||
+            !TryReadDouble(snapshot, sessionTimeVariable, out var sessionSeconds) ||
+            !TryConvertSessionMilliseconds(sessionSeconds, out var sessionMilliseconds))
+        {
+            return Invalid();
+        }
+
+        var sessionNumber = SessionNumber.TryCreate(sessionNumberValue);
+        var sessionTime = SessionTime.TryCreateMilliseconds(sessionMilliseconds);
+        var incidentCounter = IncidentCounter.TryCreate(incidentCountValue);
+        var observedAt = UtcInstant.TryCreateUnixMilliseconds(
+            timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        if (!sessionNumber.IsSuccess || !sessionTime.IsSuccess ||
+            !incidentCounter.IsSuccess || !observedAt.IsSuccess)
+        {
+            return Invalid();
+        }
+
+        var subSessionId = snapshot.SubSessionId;
+        var isDurable = subSessionId is not null;
+        var sessionKeyText = isDurable
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"v1:subsession:{subSessionId!.Value}:session:{sessionNumber.Value.Value}")
+            : connectionIdentity;
+        var sessionKey = SimulatorSessionKey.TryCreate(sessionKeyText);
+        var descriptor = SimulatorSessionDescriptor.TryCreate(
+            Simulator,
+            sessionKey.IsSuccess ? sessionKey.Value : null,
+            sessionNumber.Value,
+            isReplayPlaying ? SessionMode.Replay : SessionMode.Live,
+            isDurable
+                ? SimulatorIdentityScope.Durable
+                : SimulatorIdentityScope.ConnectionScoped);
+        var position = ReplayPosition.TryCreate(sessionNumber.Value, sessionTime.Value);
+        if (!sessionKey.IsSuccess || !descriptor.IsSuccess || !position.IsSuccess)
+        {
+            return Invalid();
+        }
+
+        if (!TryReadOptionalLap(snapshot, out var lap) ||
+            !TryReadOptionalLapDistance(snapshot, out var lapDistance))
+        {
+            return Invalid();
+        }
+
+        var sample = TelemetrySample.TryCreate(
+            descriptor.Value,
+            position.Value,
+            incidentCounter.Value,
+            lap,
+            lapDistance,
+            isOnTrack ? OnTrackState.OnTrack : OnTrackState.NotOnTrack,
+            observedAt.Value);
+        return sample.IsSuccess ? sample : Invalid();
+    }
+
+    private static bool TryReadOptionalLap(IracingFrameSnapshot snapshot, out LapNumber? lap)
+    {
+        if (!snapshot.Variables.ContainsKey(IracingProtocol.LapVariable))
+        {
+            lap = null;
+            return true;
+        }
+
+        if (!TryReadInt32(snapshot, IracingProtocol.LapVariable, out var value))
+        {
+            lap = null;
+            return false;
+        }
+
+        if (value < 0)
+        {
+            lap = null;
+            return true;
+        }
+
+        var result = LapNumber.TryCreate(value);
+        lap = result.IsSuccess ? result.Value : null;
+        return result.IsSuccess;
+    }
+
+    private static bool TryConvertSessionMilliseconds(double seconds, out long milliseconds)
+    {
+        if (!double.IsFinite(seconds) || seconds < 0)
+        {
+            milliseconds = default;
+            return false;
+        }
+
+        var flooredMilliseconds = Math.Floor(seconds * 1000d);
+        if (!double.IsFinite(flooredMilliseconds) ||
+            flooredMilliseconds < 0 ||
+            flooredMilliseconds > long.MaxValue / TimeSpan.TicksPerMillisecond)
+        {
+            milliseconds = default;
+            return false;
+        }
+
+        milliseconds = (long)flooredMilliseconds;
+        return true;
+    }
+
+    private static bool TryReadOptionalLapDistance(
+        IracingFrameSnapshot snapshot,
+        out LapDistance? lapDistance)
+    {
+        if (!snapshot.Variables.ContainsKey(IracingProtocol.LapDistanceVariable))
+        {
+            lapDistance = null;
+            return true;
+        }
+
+        if (!TryReadSingle(snapshot, IracingProtocol.LapDistanceVariable, out var value))
+        {
+            lapDistance = null;
+            return false;
+        }
+
+        if (value < 0)
+        {
+            lapDistance = null;
+            return true;
+        }
+
+        var result = LapDistance.TryCreate(value);
+        lapDistance = result.IsSuccess ? result.Value : null;
+        return result.IsSuccess;
+    }
+
+    private static bool TryReadInt32(
+        IracingFrameSnapshot snapshot,
+        string name,
+        out int value)
+    {
+        if (!TryGetScalar(snapshot, name, IracingVariableType.Integer, sizeof(int), out var bytes))
+        {
+            value = default;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadInt32LittleEndian(bytes);
+        return true;
+    }
+
+    private static bool TryReadDouble(
+        IracingFrameSnapshot snapshot,
+        string name,
+        out double value)
+    {
+        if (!TryGetScalar(snapshot, name, IracingVariableType.Double, sizeof(double), out var bytes))
+        {
+            value = default;
+            return false;
+        }
+
+        value = BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(bytes));
+        return true;
+    }
+
+    private static bool TryReadSingle(
+        IracingFrameSnapshot snapshot,
+        string name,
+        out float value)
+    {
+        if (!TryGetScalar(snapshot, name, IracingVariableType.Single, sizeof(float), out var bytes))
+        {
+            value = default;
+            return false;
+        }
+
+        value = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(bytes));
+        return true;
+    }
+
+    private static bool TryReadBoolean(
+        IracingFrameSnapshot snapshot,
+        string name,
+        out bool value)
+    {
+        if (!TryGetScalar(snapshot, name, IracingVariableType.Boolean, sizeof(byte), out var bytes) ||
+            bytes[0] is not (0 or 1))
+        {
+            value = default;
+            return false;
+        }
+
+        value = bytes[0] == 1;
+        return true;
+    }
+
+    private static bool TryGetScalar(
+        IracingFrameSnapshot snapshot,
+        string name,
+        IracingVariableType type,
+        int size,
+        out ReadOnlySpan<byte> bytes)
+    {
+        if (!snapshot.Variables.TryGetValue(name, out var variable) ||
+            variable.Type != type ||
+            variable.Count != 1 ||
+            variable.Offset < 0 ||
+            (long)variable.Offset + size > snapshot.Frame.Length)
+        {
+            bytes = default;
+            return false;
+        }
+
+        bytes = snapshot.Frame.AsSpan(variable.Offset, size);
+        return true;
+    }
+
+    private static Result<TelemetrySample> Invalid() =>
+        Result<TelemetrySample>.Failure(IracingErrors.InvalidTelemetryFrame);
+}
