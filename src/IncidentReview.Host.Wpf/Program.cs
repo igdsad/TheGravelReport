@@ -62,6 +62,7 @@ internal static class Program
             var configuration = host.Services
                 .GetRequiredService<IOptions<HostConfiguration>>()
                 .Value;
+            IncidentReviewDesktopApplication? desktopApplication = null;
             using (var startupCancellation = new CancellationTokenSource(configuration.StartupTimeout))
             {
                 var bootstrap = host.Services.GetRequiredService<BootstrapCoordinator>();
@@ -71,6 +72,18 @@ internal static class Program
                 runtime = host.Services.GetRequiredService<IApplicationRuntime>();
                 RequireSuccess(
                     runtime.StartAsync(startupCancellation.Token).GetAwaiter().GetResult());
+                if (!verifyStartup)
+                {
+                    var startupPreferences = RequireSuccess(
+                        host.Services
+                            .GetRequiredService<IIncidentReviewService>()
+                            .GetPreferencesAsync(startupCancellation.Token)
+                            .GetAwaiter()
+                            .GetResult());
+                    desktopApplication = host.Services
+                        .GetRequiredService<IncidentReviewDesktopApplication>();
+                    desktopApplication.PrepareForStartup(startupPreferences);
+                }
             }
 
             if (verifyStartup)
@@ -80,7 +93,8 @@ internal static class Program
                 return ExitCodes.Success;
             }
 
-            var application = host.Services.GetRequiredService<IncidentReviewDesktopApplication>();
+            var application = desktopApplication ?? throw new InvalidOperationException(
+                "The desktop application was not prepared for startup.");
             using var supervisor = RuntimeSupervisor.Attach(runtime, application.Dispatcher);
             var exitCode = application.Run();
             supervisor.BeginExpectedStop();

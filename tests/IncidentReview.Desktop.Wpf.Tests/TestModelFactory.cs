@@ -28,8 +28,9 @@ internal static class TestModelFactory
         long leadIn = 3_000,
         double speed = 0.5,
         bool autoPause = true,
-        string? camera = "Cockpit") =>
-        UserPreferences.TryCreateMilliseconds(leadIn, speed, autoPause, camera).Value;
+        string? camera = "Cockpit",
+        ThemePreference theme = ThemePreference.FollowDesktop) =>
+        UserPreferences.TryCreateMilliseconds(leadIn, speed, autoPause, camera, theme).Value;
 
     public static ReviewSession Session(
         SessionIdentity? id = null,

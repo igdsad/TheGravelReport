@@ -15,6 +15,7 @@ public abstract class MainWindowAction
     {
         public ApplySnapshot(
             ReviewSnapshot snapshot,
+            ResolvedTheme resolvedTheme,
             SnapshotRefreshMode refreshMode,
             DateTimeOffset occurredAt)
         {
@@ -24,16 +25,60 @@ public abstract class MainWindowAction
                 throw new ArgumentOutOfRangeException(nameof(refreshMode));
             }
 
+            if (!Enum.IsDefined(resolvedTheme))
+            {
+                throw new ArgumentOutOfRangeException(nameof(resolvedTheme));
+            }
+
             Snapshot = snapshot;
+            ResolvedTheme = resolvedTheme;
             RefreshMode = refreshMode;
             OccurredAt = occurredAt;
         }
 
         public ReviewSnapshot Snapshot { get; }
 
+        public ResolvedTheme ResolvedTheme { get; }
+
         public SnapshotRefreshMode RefreshMode { get; }
 
         public DateTimeOffset OccurredAt { get; }
+    }
+
+    /// <summary>Applies one complete preference value and its resolved visual palette.</summary>
+    public sealed class ApplyPreferences : MainWindowAction
+    {
+        public ApplyPreferences(UserPreferences preferences, ResolvedTheme resolvedTheme)
+        {
+            ArgumentNullException.ThrowIfNull(preferences);
+            if (!Enum.IsDefined(resolvedTheme))
+            {
+                throw new ArgumentOutOfRangeException(nameof(resolvedTheme));
+            }
+
+            Preferences = preferences;
+            ResolvedTheme = resolvedTheme;
+        }
+
+        public UserPreferences Preferences { get; }
+
+        public ResolvedTheme ResolvedTheme { get; }
+    }
+
+    /// <summary>Applies a changed Windows palette only while following the desktop.</summary>
+    public sealed class DesktopThemeChanged : MainWindowAction
+    {
+        public DesktopThemeChanged(ResolvedTheme resolvedTheme)
+        {
+            if (!Enum.IsDefined(resolvedTheme))
+            {
+                throw new ArgumentOutOfRangeException(nameof(resolvedTheme));
+            }
+
+            ResolvedTheme = resolvedTheme;
+        }
+
+        public ResolvedTheme ResolvedTheme { get; }
     }
 
     /// <summary>Changes whether a user operation is in progress.</summary>

@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using System.Windows;
 using IncidentReview.Application.Contracts;
 using IncidentReview.Domain;
 using IncidentReview.Results;
@@ -49,6 +50,8 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
     public Func<CancellationToken, Task<Result<ReviewSnapshot>>>? SnapshotHandler { get; set; }
 
     public Func<IncidentId, ReplayOffset, CancellationToken, Task<Result>>? ReviewHandler { get; set; }
+
+    public Func<UserPreferences, CancellationToken, Task<Result>>? UpdatePreferencesHandler { get; set; }
 
     public Task<Result<ReviewServiceStatus>> GetStatusAsync(CancellationToken cancellationToken)
     {
@@ -107,12 +110,15 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
     public Task<Result<UserPreferences>> GetPreferencesAsync(CancellationToken cancellationToken) =>
         Task.FromResult(PreferencesResult);
 
-    public Task<Result> UpdatePreferencesAsync(
+    public async Task<Result> UpdatePreferencesAsync(
         UserPreferences preferences,
         CancellationToken cancellationToken)
     {
         UpdatedPreferences = preferences;
-        if (UpdatePreferencesResult.IsSuccess && SnapshotResult.IsSuccess)
+        var result = UpdatePreferencesHandler is null
+            ? UpdatePreferencesResult
+            : await UpdatePreferencesHandler(preferences, cancellationToken);
+        if (result.IsSuccess && SnapshotResult.IsSuccess)
         {
             var current = SnapshotResult.Value;
             SnapshotResult = Result<ReviewSnapshot>.Success(ReviewSnapshot.Create(
@@ -126,7 +132,7 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
                 current.CurrentCameraGroup));
         }
 
-        return Task.FromResult(UpdatePreferencesResult);
+        return result;
     }
 
     public IAsyncEnumerable<ReviewUpdate> ObserveUpdatesAsync(CancellationToken cancellationToken) =>
@@ -137,14 +143,60 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
 
 internal sealed class RecordingDispatcher : IUiDispatcher
 {
+    private readonly bool _hasAccess;
+
+    public RecordingDispatcher(bool hasAccess = false)
+    {
+        _hasAccess = hasAccess;
+    }
+
     public int InvocationCount { get; private set; }
 
-    public bool CheckAccess() => false;
+    public bool CheckAccess() => _hasAccess;
 
     public Task InvokeAsync(Action action)
     {
         InvocationCount++;
         action();
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class FakeThemeController : IThemeController
+{
+    public FakeThemeController(ResolvedTheme desktopTheme = ResolvedTheme.Light)
+    {
+        DesktopTheme = desktopTheme;
+    }
+
+    public event EventHandler<ResolvedThemeChangedEventArgs>? DesktopThemeChanged;
+
+    public ResolvedTheme DesktopTheme { get; private set; }
+
+    public ResolvedTheme? AppliedTheme { get; private set; }
+
+    public ResolvedTheme Resolve(ThemePreference preference) => preference switch
+    {
+        ThemePreference.FollowDesktop => DesktopTheme,
+        ThemePreference.Light => ResolvedTheme.Light,
+        ThemePreference.Dark => ResolvedTheme.Dark,
+        _ => throw new ArgumentOutOfRangeException(nameof(preference)),
+    };
+
+    public void Apply(ResourceDictionary target, ResolvedTheme resolvedTheme)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        AppliedTheme = resolvedTheme;
+    }
+
+    public void SetDesktopTheme(ResolvedTheme theme)
+    {
+        DesktopTheme = theme;
+        DesktopThemeChanged?.Invoke(this, new ResolvedThemeChangedEventArgs(theme));
+    }
+
+    public void Dispose()
+    {
+        DesktopThemeChanged = null;
     }
 }

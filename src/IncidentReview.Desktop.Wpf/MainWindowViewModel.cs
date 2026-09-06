@@ -18,18 +18,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private readonly IIncidentReviewService _service;
     private readonly IUiDispatcher _dispatcher;
+    private readonly IThemeController _themeController;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private CancellationTokenSource? _activeOperationCancellation;
     private CancellationTokenSource? _monitorCancellation;
     private Task? _monitorTask;
-    private MainWindowState _state = MainWindowReducer.InitialState;
+    private MainWindowState _state;
     private bool _isDisposed;
 
-    public MainWindowViewModel(IIncidentReviewService service, IUiDispatcher dispatcher)
+    public MainWindowViewModel(
+        IIncidentReviewService service,
+        IUiDispatcher dispatcher,
+        IThemeController themeController)
     {
         _service = service ?? throw new ArgumentNullException(nameof(service));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _themeController = themeController ?? throw new ArgumentNullException(nameof(themeController));
+        _state = MainWindowReducer.CreateInitialState(
+            _themeController.Resolve(ThemePreference.FollowDesktop));
+        _themeController.DesktopThemeChanged += OnDesktopThemeChanged;
 
         RefreshCommand = new AsyncPresentationCommand(
             RefreshAsync,
@@ -39,6 +47,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ReviewAfterCommand = CreateReviewCommand(AfterOffset);
         SavePreferencesCommand = new AsyncPresentationCommand(
             SavePreferencesAsync,
+            () => !State.IsBusy && State.IsInitialized);
+        CycleThemeCommand = new AsyncPresentationCommand(
+            CycleThemeAsync,
             () => !State.IsBusy && State.IsInitialized);
         ToggleMonitoringCommand = new AsyncPresentationCommand(
             ToggleMonitoringAsync,
@@ -77,9 +88,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ICommand SavePreferencesCommand { get; }
 
+    public ICommand CycleThemeCommand { get; }
+
     public ICommand ToggleMonitoringCommand { get; }
 
     public ICommand CancelCommand { get; }
+
+    /// <summary>
+    /// Seeds durable preferences and their resolved palette before the window is shown.
+    /// </summary>
+    public void PrepareForStartup(UserPreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        ThrowIfDisposed();
+        if (!_dispatcher.CheckAccess())
+        {
+            throw new InvalidOperationException(
+                "Startup preferences must be applied on the WPF dispatcher thread.");
+        }
+
+        ApplyAction(new MainWindowAction.ApplyPreferences(
+            preferences,
+            _themeController.Resolve(preferences.Theme)));
+    }
 
     /// <summary>Loads the first coherent snapshot, then observes application changes.</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -140,7 +171,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     saved.ReplayLeadInMilliseconds,
                     saved.PlaybackSpeed,
                     saved.AutoPause,
-                    State.SelectedCameraChoice.CameraName);
+                    State.SelectedCameraChoice.CameraName,
+                    saved.Theme);
                 if (!preferences.IsSuccess)
                 {
                     await ShowErrorAsync(preferences.Error!).ConfigureAwait(false);
@@ -164,6 +196,63 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     await ShowNoticeAsync(
                         "Camera preference saved.",
                         isError: false).ConfigureAwait(false);
+                }
+            },
+            cancellationToken);
+
+    /// <summary>Cycles and durably saves Follow desktop, Light, and Dark in that order.</summary>
+    public Task CycleThemeAsync(CancellationToken cancellationToken) =>
+        RunUiOperationAsync(
+            async token =>
+            {
+                var previousPreferences = State.SavedPreferences;
+                var nextTheme = NextTheme(previousPreferences.Theme);
+                var nextPreferences = UserPreferences.TryCreateMilliseconds(
+                    previousPreferences.ReplayLeadInMilliseconds,
+                    previousPreferences.PlaybackSpeed,
+                    previousPreferences.AutoPause,
+                    previousPreferences.PreferredCamera,
+                    nextTheme);
+                if (!nextPreferences.IsSuccess)
+                {
+                    await ShowErrorAsync(nextPreferences.Error!).ConfigureAwait(false);
+                    return;
+                }
+
+                await ApplyPreferencesOnUiAsync(nextPreferences.Value).ConfigureAwait(false);
+
+                var persisted = false;
+                try
+                {
+                    var result = await _service.UpdatePreferencesAsync(
+                        nextPreferences.Value,
+                        token).ConfigureAwait(false);
+                    if (!result.IsSuccess)
+                    {
+                        await ApplyPreferencesOnUiAsync(previousPreferences).ConfigureAwait(false);
+                        await ShowErrorAsync(result.Error!).ConfigureAwait(false);
+                        return;
+                    }
+
+                    persisted = true;
+                    var refreshed = await RefreshSnapshotCoreAsync(
+                        SnapshotRefreshMode.Automatic,
+                        token).ConfigureAwait(false);
+                    if (refreshed && State.StatusError is null)
+                    {
+                        await ShowNoticeAsync(
+                            "Theme preference saved.",
+                            isError: false).ConfigureAwait(false);
+                    }
+                }
+                catch
+                {
+                    if (!persisted)
+                    {
+                        await ApplyPreferencesOnUiAsync(previousPreferences).ConfigureAwait(false);
+                    }
+
+                    throw;
                 }
             },
             cancellationToken);
@@ -233,6 +322,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         _isDisposed = true;
+        _themeController.DesktopThemeChanged -= OnDesktopThemeChanged;
         _lifetimeCancellation.Cancel();
         _activeOperationCancellation?.Cancel();
         await StopMonitoringAsync().ConfigureAwait(false);
@@ -320,11 +410,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return false;
         }
 
-        await ApplyActionOnUiAsync(
-            new MainWindowAction.ApplySnapshot(
-                result.Value,
-                refreshMode,
-                DateTimeOffset.Now)).ConfigureAwait(false);
+        await ApplySnapshotOnUiAsync(
+            result.Value,
+            refreshMode,
+            DateTimeOffset.Now).ConfigureAwait(false);
         return true;
     }
 
@@ -363,14 +452,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         new MainWindowAction.ShowNotice(DateTimeOffset.Now, message, isError));
 
     private Task ApplyActionOnUiAsync(MainWindowAction action)
+        => InvokeOnUiAsync(() => ApplyAction(action));
+
+    private Task ApplyPreferencesOnUiAsync(UserPreferences preferences) => InvokeOnUiAsync(
+        () => ApplyAction(new MainWindowAction.ApplyPreferences(
+            preferences,
+            _themeController.Resolve(preferences.Theme))));
+
+    private Task ApplySnapshotOnUiAsync(
+        ReviewSnapshot snapshot,
+        SnapshotRefreshMode refreshMode,
+        DateTimeOffset occurredAt) => InvokeOnUiAsync(
+            () => ApplyAction(new MainWindowAction.ApplySnapshot(
+                snapshot,
+                _themeController.Resolve(snapshot.Preferences.Theme),
+                refreshMode,
+                occurredAt)));
+
+    private Task InvokeOnUiAsync(Action action)
     {
         if (_dispatcher.CheckAccess())
         {
-            ApplyAction(action);
+            action();
             return Task.CompletedTask;
         }
 
-        return _dispatcher.InvokeAsync(() => ApplyAction(action));
+        return _dispatcher.InvokeAsync(action);
     }
 
     private void ApplyAction(MainWindowAction action)
@@ -395,6 +502,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ((AsyncPresentationCommand<IncidentListItem>)ReviewAtCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand<IncidentListItem>)ReviewAfterCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)SavePreferencesCommand).RaiseCanExecuteChanged();
+        ((AsyncPresentationCommand)CycleThemeCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)ToggleMonitoringCommand).RaiseCanExecuteChanged();
         ((PresentationCommand)CancelCommand).RaiseCanExecuteChanged();
     }
@@ -409,6 +517,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             $"{offset.Milliseconds / 1_000d:G} sec after"),
         _ => "event time",
     };
+
+    private static ThemePreference NextTheme(ThemePreference current) => current switch
+    {
+        ThemePreference.FollowDesktop => ThemePreference.Light,
+        ThemePreference.Light => ThemePreference.Dark,
+        ThemePreference.Dark => ThemePreference.FollowDesktop,
+        _ => throw new ArgumentOutOfRangeException(nameof(current), current, "Unknown theme preference."),
+    };
+
+    private async void OnDesktopThemeChanged(object? sender, ResolvedThemeChangedEventArgs e)
+    {
+        _ = sender;
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await ApplyActionOnUiAsync(
+                new MainWindowAction.DesktopThemeChanged(e.Theme)).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException) when (_isDisposed)
+        {
+        }
+        catch (TaskCanceledException) when (_isDisposed)
+        {
+        }
+    }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_isDisposed, this);
 

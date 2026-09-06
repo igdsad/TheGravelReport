@@ -26,7 +26,7 @@ public sealed class MainWindowViewModelTests
             cameraGroups: ["Cockpit", "TV1"],
             currentCameraGroup: "Cockpit"));
         var dispatcher = new RecordingDispatcher();
-        await using var viewModel = new MainWindowViewModel(service, dispatcher);
+        await using var viewModel = CreateViewModel(service, dispatcher);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 
@@ -55,7 +55,7 @@ public sealed class MainWindowViewModelTests
             SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
                 status: ReviewServiceStatus.WaitingForSimulator)),
         };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 
@@ -75,7 +75,7 @@ public sealed class MainWindowViewModelTests
                 status: ReviewServiceStatus.Unavailable,
                 statusError: ApplicationErrors.ReplayUnavailable)),
         };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 
@@ -99,7 +99,7 @@ public sealed class MainWindowViewModelTests
         var session = TestModelFactory.Session(sessionId, incident);
         service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
             activeSession: session));
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         var row = viewModel.State.Incidents[0];
 
@@ -128,7 +128,7 @@ public sealed class MainWindowViewModelTests
         var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
         service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
             activeSession: TestModelFactory.Session(sessionId, incident)));
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
 
         await viewModel.ReviewIncidentAsync(
@@ -151,7 +151,7 @@ public sealed class MainWindowViewModelTests
         service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
             revision: 2,
             activeSession: TestModelFactory.Session(sessionId, incident)));
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         await viewModel.ReviewIncidentAsync(
             viewModel.State.Incidents[0],
@@ -171,13 +171,18 @@ public sealed class MainWindowViewModelTests
     public async Task SaveCameraPreservesHiddenPlaybackPreferences()
     {
         var service = new FakeIncidentReviewService();
-        var stored = TestModelFactory.Preferences(5_000, 0.75, true, "TV1");
+        var stored = TestModelFactory.Preferences(
+            5_000,
+            0.75,
+            true,
+            "TV1",
+            ThemePreference.Dark);
         service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
             revision: 1,
             preferences: stored,
             cameraGroups: ["TV1", "TV2"],
             currentCameraGroup: "TV1"));
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         viewModel.SelectedCameraChoice = viewModel.State.CameraChoices.Single(
             static choice => choice.CameraName == "TV2");
@@ -189,6 +194,7 @@ public sealed class MainWindowViewModelTests
         Assert.AreEqual(0.75, service.UpdatedPreferences.PlaybackSpeed);
         Assert.IsTrue(service.UpdatedPreferences.AutoPause);
         Assert.AreEqual("TV2", service.UpdatedPreferences.PreferredCamera);
+        Assert.AreEqual(ThemePreference.Dark, service.UpdatedPreferences.Theme);
         Assert.IsFalse(viewModel.State.IsCameraSelectionDirty);
         Assert.AreEqual("TV2", viewModel.State.SelectedCameraChoice.CameraName);
         AssertCurrentStatusIsNewestEvent(viewModel);
@@ -205,7 +211,7 @@ public sealed class MainWindowViewModelTests
                 revision: 1,
                 cameraGroups: ["TV1"])),
         };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         viewModel.SelectedCameraChoice = viewModel.State.CameraChoices.Single(
             static choice => choice.CameraName == "TV1");
@@ -230,7 +236,7 @@ public sealed class MainWindowViewModelTests
         service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
             revision: 1,
             activeSession: TestModelFactory.Session(sessionId, first)));
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         await viewModel.StartMonitoringAsync(CancellationToken.None);
         var callsBeforeUpdate = service.SnapshotCalls;
@@ -266,7 +272,7 @@ public sealed class MainWindowViewModelTests
                 return Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot());
             },
         };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
 
         var refresh = viewModel.RefreshAsync(CancellationToken.None);
         await entered.Task;
@@ -293,7 +299,7 @@ public sealed class MainWindowViewModelTests
                 return Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot());
             },
         };
-        var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        var viewModel = CreateViewModel(service);
         var refresh = viewModel.RefreshAsync(CancellationToken.None);
         await entered.Task;
 
@@ -318,12 +324,196 @@ public sealed class MainWindowViewModelTests
             SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
                 activeSession: TestModelFactory.Session(sessionId, incident))),
         };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await using var viewModel = CreateViewModel(service);
         await viewModel.RefreshAsync(CancellationToken.None);
         var item = viewModel.State.Incidents[0];
 
         Assert.AreEqual(item.Id.ToString(), item.FullIncidentIdText);
         Assert.AreEqual($"…{item.FullIncidentIdText[^8..]}", item.IncidentIdText);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public async Task StartupPreferencesResolveBeforeTheFirstSnapshot()
+    {
+        var service = new FakeIncidentReviewService();
+        var themeController = new FakeThemeController(ResolvedTheme.Dark);
+        await using var viewModel = CreateViewModel(
+            service,
+            new RecordingDispatcher(hasAccess: true),
+            themeController);
+        var stored = TestModelFactory.Preferences(theme: ThemePreference.Light);
+
+        viewModel.PrepareForStartup(stored);
+
+        Assert.IsFalse(viewModel.State.IsInitialized);
+        Assert.AreSame(stored, viewModel.State.SavedPreferences);
+        Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);
+        Assert.AreEqual(0, service.SnapshotCalls);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public async Task ThemeCycleAppliesImmediatelyPersistsAndPreservesReplayPreferences()
+    {
+        var stored = TestModelFactory.Preferences(
+            leadIn: 5_000,
+            speed: 0.75,
+            autoPause: true,
+            camera: "TV1",
+            theme: ThemePreference.FollowDesktop);
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                revision: 1,
+                preferences: stored)),
+        };
+        var themeController = new FakeThemeController(ResolvedTheme.Dark);
+        await using var viewModel = CreateViewModel(service, themeController: themeController);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        Assert.IsTrue(viewModel.CycleThemeCommand.CanExecute(parameter: null));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.UpdatePreferencesHandler = async (_, token) =>
+        {
+            entered.SetResult();
+            return await release.Task.WaitAsync(token);
+        };
+
+        var firstCycle = viewModel.CycleThemeAsync(CancellationToken.None);
+        await entered.Task;
+
+        Assert.IsFalse(firstCycle.IsCompleted);
+        Assert.IsTrue(viewModel.State.IsBusy);
+        Assert.IsFalse(viewModel.CycleThemeCommand.CanExecute(parameter: null));
+        Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);
+        release.SetResult(Result.Success());
+        await firstCycle;
+
+        Assert.IsNotNull(service.UpdatedPreferences);
+        Assert.AreEqual(5_000, service.UpdatedPreferences.ReplayLeadInMilliseconds);
+        Assert.AreEqual(0.75, service.UpdatedPreferences.PlaybackSpeed);
+        Assert.IsTrue(service.UpdatedPreferences.AutoPause);
+        Assert.AreEqual("TV1", service.UpdatedPreferences.PreferredCamera);
+        Assert.AreEqual(ThemePreference.Light, service.UpdatedPreferences.Theme);
+        Assert.AreEqual("Theme preference saved.", viewModel.State.StatusDetail);
+
+        service.UpdatePreferencesHandler = null;
+        await viewModel.CycleThemeAsync(CancellationToken.None);
+        Assert.AreEqual(ThemePreference.Dark, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Dark, viewModel.State.ResolvedTheme);
+
+        await viewModel.CycleThemeAsync(CancellationToken.None);
+        Assert.AreEqual(ThemePreference.FollowDesktop, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Dark, viewModel.State.ResolvedTheme);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task ThemePersistenceFailureRestoresPriorStateAndReportsExactError()
+    {
+        var stored = TestModelFactory.Preferences(theme: ThemePreference.FollowDesktop);
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                revision: 1,
+                preferences: stored)),
+        };
+        var themeController = new FakeThemeController(ResolvedTheme.Dark);
+        await using var viewModel = CreateViewModel(service, themeController: themeController);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.UpdatePreferencesHandler = async (_, token) =>
+        {
+            entered.SetResult();
+            return await release.Task.WaitAsync(token);
+        };
+
+        var cycle = viewModel.CycleThemeAsync(CancellationToken.None);
+        await entered.Task;
+        themeController.SetDesktopTheme(ResolvedTheme.Light);
+        release.SetResult(Result.Failure(ApplicationErrors.ReplayUnavailable));
+        await cycle;
+
+        Assert.IsNotNull(service.UpdatedPreferences);
+        Assert.AreEqual(ThemePreference.Light, service.UpdatedPreferences.Theme);
+        Assert.AreSame(stored, viewModel.State.SavedPreferences);
+        Assert.AreEqual(ThemePreference.FollowDesktop, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.State.StatusDetail);
+        Assert.IsTrue(viewModel.State.HasError);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
+    [TestProperty("Requirement", "IR-UI-003")]
+    [TestProperty("Requirement", "QR-ERR-002")]
+    public async Task CancelledThemeSaveRestoresPriorPreferenceWithoutInventingAnError()
+    {
+        var stored = TestModelFactory.Preferences(theme: ThemePreference.Dark);
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                revision: 1,
+                preferences: stored)),
+        };
+        var themeController = new FakeThemeController(ResolvedTheme.Light);
+        await using var viewModel = CreateViewModel(service, themeController: themeController);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var statusBefore = viewModel.State.CurrentStatusEvent;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.UpdatePreferencesHandler = async (_, token) =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return Result.Success();
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        var cycle = viewModel.CycleThemeAsync(cancellation.Token);
+        await entered.Task;
+        cancellation.Cancel();
+        await cycle;
+
+        Assert.AreSame(stored, viewModel.State.SavedPreferences);
+        Assert.AreEqual(ThemePreference.Dark, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Dark, viewModel.State.ResolvedTheme);
+        Assert.AreSame(statusBefore, viewModel.State.CurrentStatusEvent);
+        Assert.IsFalse(viewModel.State.IsBusy);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public async Task DesktopChangesFlowThroughStateOnlyWhileFollowingDesktop()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                revision: 1,
+                preferences: TestModelFactory.Preferences(
+                    theme: ThemePreference.FollowDesktop))),
+        };
+        var themeController = new FakeThemeController(ResolvedTheme.Light);
+        await using var viewModel = CreateViewModel(service, themeController: themeController);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        themeController.SetDesktopTheme(ResolvedTheme.Dark);
+        Assert.AreEqual(ResolvedTheme.Dark, viewModel.State.ResolvedTheme);
+
+        await viewModel.CycleThemeAsync(CancellationToken.None);
+        Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
+        themeController.SetDesktopTheme(ResolvedTheme.Light);
+        themeController.SetDesktopTheme(ResolvedTheme.Dark);
+
+        Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);
     }
 
     private static async Task ExecuteAndWaitAsync(
@@ -344,6 +534,14 @@ public sealed class MainWindowViewModelTests
         Assert.AreSame(viewModel.State.EventLog[^1], viewModel.State.CurrentStatusEvent);
         Assert.AreEqual(viewModel.State.EventLog[^1].Message, viewModel.State.StatusDetail);
     }
+
+    private static MainWindowViewModel CreateViewModel(
+        FakeIncidentReviewService service,
+        RecordingDispatcher? dispatcher = null,
+        FakeThemeController? themeController = null) => new(
+            service,
+            dispatcher ?? new RecordingDispatcher(),
+            themeController ?? new FakeThemeController());
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {

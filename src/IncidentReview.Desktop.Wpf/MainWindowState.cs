@@ -23,6 +23,7 @@ public sealed class MainWindowState
         IEnumerable<CameraChoice> cameraChoices,
         CameraChoice selectedCameraChoice,
         bool isCameraSelectionDirty,
+        ResolvedTheme resolvedTheme,
         bool isBusy,
         bool isMonitoring,
         IEnumerable<EventLogItem> eventLog,
@@ -47,6 +48,12 @@ public sealed class MainWindowState
         CameraChoices = Copy(cameraChoices);
         SelectedCameraChoice = selectedCameraChoice;
         IsCameraSelectionDirty = isCameraSelectionDirty;
+        if (!Enum.IsDefined(resolvedTheme))
+        {
+            throw new ArgumentOutOfRangeException(nameof(resolvedTheme));
+        }
+
+        ResolvedTheme = resolvedTheme;
         IsBusy = isBusy;
         IsMonitoring = isMonitoring;
         EventLog = Copy(eventLog);
@@ -86,6 +93,26 @@ public sealed class MainWindowState
     public CameraChoice SelectedCameraChoice { get; }
 
     public bool IsCameraSelectionDirty { get; }
+
+    /// <summary>Gets the persisted theme policy currently represented by this state.</summary>
+    public ThemePreference ConfiguredThemePreference => SavedPreferences.Theme;
+
+    /// <summary>Gets the concrete palette that the view must render.</summary>
+    public ResolvedTheme ResolvedTheme { get; }
+
+    public bool FollowsDesktopTheme => ConfiguredThemePreference == ThemePreference.FollowDesktop;
+
+    public bool UsesLightThemePreference => ConfiguredThemePreference == ThemePreference.Light;
+
+    public bool UsesDarkThemePreference => ConfiguredThemePreference == ThemePreference.Dark;
+
+    public string ThemeToolTip => ConfiguredThemePreference switch
+    {
+        ThemePreference.FollowDesktop => "Theme: Follow desktop. Click for light mode.",
+        ThemePreference.Light => "Theme: Light. Click for dark mode.",
+        ThemePreference.Dark => "Theme: Dark. Click to follow desktop.",
+        _ => throw new InvalidOperationException("The theme preference is invalid."),
+    };
 
     public bool IsBusy { get; }
 

@@ -8,13 +8,16 @@ namespace IncidentReview.Desktop.Wpf;
 /// <summary>Hosts the incident-review presentation.</summary>
 public partial class MainWindow : Window
 {
+    private readonly IThemeController _themeController;
     private bool _initialized;
 
-    public MainWindow(MainWindowViewModel viewModel)
+    public MainWindow(MainWindowViewModel viewModel, IThemeController themeController)
     {
         ViewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _themeController = themeController ?? throw new ArgumentNullException(nameof(themeController));
         InitializeComponent();
         DataContext = ViewModel;
+        ApplyThemeFromState();
         Loaded += OnLoaded;
         Closed += OnClosed;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
@@ -44,8 +47,13 @@ public partial class MainWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(MainWindowViewModel.State) ||
-            ViewModel.State.EventLog.Count == 0)
+        if (e.PropertyName != nameof(MainWindowViewModel.State))
+        {
+            return;
+        }
+
+        ApplyThemeFromState();
+        if (ViewModel.State.EventLog.Count == 0)
         {
             return;
         }
@@ -55,6 +63,9 @@ public partial class MainWindow : Window
             DispatcherPriority.Background,
             new Action(() => EventLogList.ScrollIntoView(newest)));
     }
+
+    private void ApplyThemeFromState() =>
+        _themeController.Apply(Resources, ViewModel.State.ResolvedTheme);
 
     private void OnClosed(object? sender, EventArgs e)
     {

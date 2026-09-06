@@ -12,8 +12,11 @@ public static class MainWindowReducer
     private static readonly UserPreferences DefaultPreferences =
         UserPreferences.TryCreateMilliseconds(0, 1, autoPause: false, preferredCamera: null).Value;
 
-    /// <summary>Gets the state rendered before the first application snapshot arrives.</summary>
-    public static MainWindowState InitialState { get; } = new(
+    /// <summary>Gets the deterministic light-fallback state used by tests and design tooling.</summary>
+    public static MainWindowState InitialState { get; } = CreateInitialState(ResolvedTheme.Light);
+
+    /// <summary>Creates the state rendered before the first application snapshot arrives.</summary>
+    public static MainWindowState CreateInitialState(ResolvedTheme resolvedTheme) => new(
         isInitialized: false,
         revision: 0,
         ReviewServiceStatus.Stopped,
@@ -27,6 +30,7 @@ public static class MainWindowReducer
         cameraChoices: [CameraChoice.Current],
         selectedCameraChoice: CameraChoice.Current,
         isCameraSelectionDirty: false,
+        resolvedTheme,
         isBusy: false,
         isMonitoring: false,
         eventLog: [],
@@ -41,6 +45,12 @@ public static class MainWindowReducer
         return action switch
         {
             MainWindowAction.ApplySnapshot apply => ApplySnapshot(state, apply),
+            MainWindowAction.ApplyPreferences preferences => Copy(
+                state,
+                savedPreferences: preferences.Preferences,
+                resolvedTheme: preferences.ResolvedTheme),
+            MainWindowAction.DesktopThemeChanged desktopTheme =>
+                ApplyDesktopThemeChanged(state, desktopTheme),
             MainWindowAction.SetBusy busy => Copy(state, isBusy: busy.IsBusy),
             MainWindowAction.SetMonitoring monitoring => ApplyMonitoring(state, monitoring),
             MainWindowAction.SelectIncident selection => ApplyIncidentSelection(state, selection),
@@ -104,6 +114,7 @@ public static class MainWindowReducer
             cameraChoices,
             selectedCamera,
             cameraSelectionDirty,
+            action.ResolvedTheme,
             state.IsBusy,
             state.IsMonitoring,
             state.EventLog,
@@ -157,6 +168,13 @@ public static class MainWindowReducer
 
         return next;
     }
+
+    private static MainWindowState ApplyDesktopThemeChanged(
+        MainWindowState state,
+        MainWindowAction.DesktopThemeChanged action) =>
+        state.ConfiguredThemePreference == ThemePreference.FollowDesktop
+            ? Copy(state, resolvedTheme: action.ResolvedTheme)
+            : state;
 
     private static MainWindowState ApplyMonitoring(
         MainWindowState state,
@@ -262,6 +280,8 @@ public static class MainWindowReducer
         bool replaceSelectedIncidentId = false,
         CameraChoice? selectedCameraChoice = null,
         bool? isCameraSelectionDirty = null,
+        UserPreferences? savedPreferences = null,
+        ResolvedTheme? resolvedTheme = null,
         IEnumerable<EventLogItem>? eventLog = null,
         EventLogItem? currentStatusEvent = null) => new(
             state.IsInitialized,
@@ -269,7 +289,7 @@ public static class MainWindowReducer
             state.Status,
             state.StatusError,
             state.ActiveSession,
-            state.SavedPreferences,
+            savedPreferences ?? state.SavedPreferences,
             state.Incidents,
             replaceSelectedIncidentId ? selectedIncidentId : state.SelectedIncidentId,
             state.ActiveDriverName,
@@ -277,6 +297,7 @@ public static class MainWindowReducer
             state.CameraChoices,
             selectedCameraChoice ?? state.SelectedCameraChoice,
             isCameraSelectionDirty ?? state.IsCameraSelectionDirty,
+            resolvedTheme ?? state.ResolvedTheme,
             isBusy ?? state.IsBusy,
             isMonitoring ?? state.IsMonitoring,
             eventLog ?? state.EventLog,

@@ -1,4 +1,5 @@
 using System.Windows;
+using IncidentReview.Domain;
 
 namespace IncidentReview.Desktop.Wpf;
 
@@ -19,6 +20,13 @@ public sealed class IncidentReviewDesktopApplication : System.Windows.Applicatio
         base.OnStartup(e);
         MainWindow = _mainWindow;
         _mainWindow.Show();
+    }
+
+    /// <summary>Applies stored preferences while the window is still hidden.</summary>
+    public void PrepareForStartup(UserPreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        _mainWindow.ViewModel.PrepareForStartup(preferences);
     }
 
     private async void OnMainWindowClosed(object? sender, EventArgs e)

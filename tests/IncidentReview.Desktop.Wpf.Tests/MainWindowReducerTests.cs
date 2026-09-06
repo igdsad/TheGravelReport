@@ -293,6 +293,69 @@ public sealed class MainWindowReducerTests
         Assert.AreSame(connected.EventLog[^1], connected.CurrentStatusEvent);
     }
 
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public void ThemePreferenceAndResolvedPaletteEnterStateTogether()
+    {
+        var darkPreferences = TestModelFactory.Preferences(theme: ThemePreference.Dark);
+
+        var state = MainWindowReducer.Reduce(
+            MainWindowReducer.InitialState,
+            new MainWindowAction.ApplyPreferences(darkPreferences, ResolvedTheme.Dark));
+
+        Assert.AreSame(darkPreferences, state.SavedPreferences);
+        Assert.AreEqual(ThemePreference.Dark, state.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Dark, state.ResolvedTheme);
+        Assert.IsTrue(state.UsesDarkThemePreference);
+        Assert.IsFalse(state.UsesLightThemePreference);
+        Assert.IsFalse(state.FollowsDesktopTheme);
+        Assert.AreEqual("Theme: Dark. Click to follow desktop.", state.ThemeToolTip);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public void DesktopThemeChangesOnlyAffectFollowDesktopState()
+    {
+        var following = MainWindowReducer.Reduce(
+            MainWindowReducer.InitialState,
+            new MainWindowAction.DesktopThemeChanged(ResolvedTheme.Dark));
+
+        Assert.AreEqual(ResolvedTheme.Dark, following.ResolvedTheme);
+
+        var forcedLight = MainWindowReducer.Reduce(
+            following,
+            new MainWindowAction.ApplyPreferences(
+                TestModelFactory.Preferences(theme: ThemePreference.Light),
+                ResolvedTheme.Light));
+        var afterDesktopChange = MainWindowReducer.Reduce(
+            forcedLight,
+            new MainWindowAction.DesktopThemeChanged(ResolvedTheme.Dark));
+
+        Assert.AreSame(forcedLight, afterDesktopChange);
+        Assert.AreEqual(ResolvedTheme.Light, afterDesktopChange.ResolvedTheme);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public void SnapshotAtomicallyAppliesStoredThemeAndResolvedPalette()
+    {
+        var snapshot = Snapshot(
+            revision: 1,
+            preferences: TestModelFactory.Preferences(theme: ThemePreference.Dark));
+
+        var state = MainWindowReducer.Reduce(
+            MainWindowReducer.InitialState,
+            new MainWindowAction.ApplySnapshot(
+                snapshot,
+                ResolvedTheme.Dark,
+                SnapshotRefreshMode.Automatic,
+                TestTime));
+
+        Assert.AreSame(snapshot.Preferences, state.SavedPreferences);
+        Assert.AreEqual(ThemePreference.Dark, state.ConfiguredThemePreference);
+        Assert.AreEqual(ResolvedTheme.Dark, state.ResolvedTheme);
+    }
+
     private static MainWindowState ReduceSnapshot(
         MainWindowState state,
         ReviewSnapshot snapshot,
@@ -301,8 +364,17 @@ public sealed class MainWindowReducerTests
             state,
             new MainWindowAction.ApplySnapshot(
                 snapshot,
+                Resolve(snapshot.Preferences.Theme),
                 refreshMode,
                 occurredAt ?? TestTime));
+
+    private static ResolvedTheme Resolve(ThemePreference preference) => preference switch
+    {
+        ThemePreference.FollowDesktop => ResolvedTheme.Light,
+        ThemePreference.Light => ResolvedTheme.Light,
+        ThemePreference.Dark => ResolvedTheme.Dark,
+        _ => throw new ArgumentOutOfRangeException(nameof(preference)),
+    };
 
     private static ReviewSnapshot Snapshot(
         long revision,
