@@ -13,6 +13,7 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
     private readonly SqliteMigrationRunner _migrationRunner;
     private readonly SqliteSchemaValidator _schemaValidator;
     private readonly SqliteStoreGate _gate;
+    private readonly Action<SqliteConnection>? _configureMigrationConnection;
     private readonly ILogger _logger;
     private readonly object _initializationLock = new();
     private bool _initialized;
@@ -22,12 +23,23 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
         IReadOnlyList<DbUp.Engine.SqlScript> testMigrations,
         SqliteStoreGate gate,
         ILogger<SqliteStoreInitializer> logger)
+        : this(options, testMigrations, gate, logger, configureMigrationConnection: null)
+    {
+    }
+
+    internal SqliteStoreInitializer(
+        SqliteStoreOptions options,
+        IReadOnlyList<DbUp.Engine.SqlScript> testMigrations,
+        SqliteStoreGate gate,
+        ILogger<SqliteStoreInitializer> logger,
+        Action<SqliteConnection>? configureMigrationConnection)
     {
         _options = options;
         _connectionFactory = new SqliteConnectionFactory(options);
         _migrationRunner = new SqliteMigrationRunner(testMigrations, logger);
         _schemaValidator = new SqliteSchemaValidator(options.BusyTimeoutSeconds, logger);
         _gate = gate;
+        _configureMigrationConnection = configureMigrationConnection;
         _logger = logger;
     }
 
@@ -62,7 +74,19 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            using var connection = _connectionFactory.CreateOpen();
+            if (File.Exists(_options.DatabasePath))
+            {
+                using var preflightConnection = _connectionFactory.CreateOpenReadOnly();
+                var preflightResult = _schemaValidator.ValidateMigrationPreflight(preflightConnection);
+                if (!preflightResult.IsSuccess)
+                {
+                    return preflightResult;
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            using var connection = _connectionFactory.CreateOpenForInitialization();
+            _configureMigrationConnection?.Invoke(connection);
             var migrationResult = _migrationRunner.Migrate(connection, cancellationToken);
             if (!migrationResult.IsSuccess)
             {

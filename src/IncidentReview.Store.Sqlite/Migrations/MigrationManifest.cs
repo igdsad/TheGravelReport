@@ -14,7 +14,7 @@ internal static class MigrationManifest
         new(
             "001_InitialSchema.sql",
             ResourcePrefix + "001_InitialSchema.sql",
-            "2b295f1cd969e26c30945b5ddaa8ba822d746395ca0ee91143e429501625e519"),
+            "d8f86828d65f37b74e72c1b4bd00af91975aae3381d58dd1a3972cbe12d01407"),
     ];
 
     public static IReadOnlyList<SqlScript> LoadProductionScripts()

@@ -19,6 +19,8 @@ CREATE TABLE "Session" (
         AND substr(session_id, 14, 1) = '-'
         AND substr(session_id, 19, 1) = '-'
         AND substr(session_id, 24, 1) = '-'
+        AND substr(session_id, 15, 1) = '7'
+        AND substr(session_id, 20, 1) IN ('8', '9', 'a', 'b')
         AND session_id = lower(session_id)
         AND length(replace(session_id, '-', '')) = 32
         AND replace(session_id, '-', '') NOT GLOB '*[^0-9a-f]*'),
@@ -46,7 +48,7 @@ CREATE TABLE "Session" (
 
 CREATE UNIQUE INDEX ux_session_simulator_key
     ON "Session" (simulator, simulator_session_key)
-    WHERE simulator_session_key IS NOT NULL;
+    WHERE simulator_session_key IS NOT NULL AND identity_kind = 1;
 
 CREATE TABLE Incident (
     incident_id TEXT NOT NULL CONSTRAINT pk_incident PRIMARY KEY,
@@ -72,6 +74,8 @@ CREATE TABLE Incident (
         AND substr(incident_id, 14, 1) = '-'
         AND substr(incident_id, 19, 1) = '-'
         AND substr(incident_id, 24, 1) = '-'
+        AND substr(incident_id, 15, 1) = '7'
+        AND substr(incident_id, 20, 1) IN ('8', '9', 'a', 'b')
         AND incident_id = lower(incident_id)
         AND length(replace(incident_id, '-', '')) = 32
         AND replace(incident_id, '-', '') NOT GLOB '*[^0-9a-f]*'),
@@ -130,6 +134,8 @@ CREATE TABLE StoreOperation (
         AND substr(operation_id, 14, 1) = '-'
         AND substr(operation_id, 19, 1) = '-'
         AND substr(operation_id, 24, 1) = '-'
+        AND substr(operation_id, 15, 1) = '7'
+        AND substr(operation_id, 20, 1) IN ('8', '9', 'a', 'b')
         AND operation_id = lower(operation_id)
         AND length(replace(operation_id, '-', '')) = 32
         AND replace(operation_id, '-', '') NOT GLOB '*[^0-9a-f]*'),

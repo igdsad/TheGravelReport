@@ -25,12 +25,20 @@ internal sealed class TemporarySqliteDatabase : IDisposable
 
     public SqliteStoreOptions Options { get; }
 
-    public SqliteConnection OpenConnection()
+    public SqliteConnection CreateConnection()
+    {
+        _ = Directory.CreateDirectory(_directoryPath);
+        return OpenConnection(SqliteOpenMode.ReadWriteCreate);
+    }
+
+    public SqliteConnection OpenConnection() => OpenConnection(SqliteOpenMode.ReadWrite);
+
+    private SqliteConnection OpenConnection(SqliteOpenMode mode)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,
-            Mode = SqliteOpenMode.ReadWrite,
+            Mode = mode,
             Cache = SqliteCacheMode.Private,
             ForeignKeys = true,
             Pooling = false,

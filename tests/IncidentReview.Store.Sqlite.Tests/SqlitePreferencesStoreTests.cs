@@ -237,6 +237,7 @@ public sealed class SqlitePreferencesStoreTests
         var result = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
 
         AssertFailure(result, StoreErrorCodes.PersistenceFailure, ErrorKind.Persistence);
+        Assert.IsFalse(File.Exists(database.DatabasePath));
         Assert.IsFalse(result.Error!.Message.Contains(database.DatabasePath, StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(result.Error.Message.Contains("ApplicationPreferences", StringComparison.Ordinal));
     }

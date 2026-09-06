@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using IncidentReview.Domain;
 using IncidentReview.Results;
+using IncidentReview.Store.Contracts;
 using IncidentReview.Store.Sqlite.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -8,6 +11,10 @@ namespace IncidentReview.Store.Sqlite.Tests;
 [TestClass]
 public sealed class SqliteInitializationTests
 {
+    private const string VersionFourUuid = "550e8400-e29b-41d4-a716-446655440000";
+    private const string VersionSevenUuidWithInvalidVariant =
+        "01941f29-7c00-7000-7000-000000000001";
+
     private static readonly string[] ExpectedTables =
     [
         "ApplicationPreferences",
@@ -139,15 +146,223 @@ public sealed class SqliteInitializationTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    [DataRow(2)]
+    [DataRow(-1)]
+    public async Task UnsupportedUnjournaledSchemaVersionIsRejectedWithoutMutation(int schemaVersion)
+    {
+        using var providerDatabase = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(providerDatabase);
+        using var database = new TemporarySqliteDatabase();
+        using (var connection = database.CreateConnection())
+        {
+            ExecuteNonQuery(connection, "CREATE TABLE Sentinel (value TEXT NOT NULL);");
+            ExecuteNonQuery(connection, "INSERT INTO Sentinel (value) VALUES ('preserve-me');");
+            SetSchemaVersion(connection, schemaVersion);
+        }
+
+        var beforeHash = SHA256.HashData(File.ReadAllBytes(database.DatabasePath));
+        var initializer = SqliteTestingRegistration.CreateInitializer(database.Options);
+
+        var result = await initializer.InitializeAsync(CancellationToken.None);
+
+        var afterHash = SHA256.HashData(File.ReadAllBytes(database.DatabasePath));
+        AssertFailure(result, "store.sqlite.schema-invalid");
+        CollectionAssert.AreEqual(beforeHash, afterHash);
+        using var verification = database.OpenConnection();
+        Assert.AreEqual(schemaVersion, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
+        Assert.AreEqual("preserve-me", ExecuteScalarString(verification, "SELECT value FROM Sentinel;"));
+        Assert.AreEqual(0L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'SchemaVersions';"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-002")]
+    public async Task SimulatorSessionKeyIsUniqueOnlyForDurableIdentityEvidence()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using var connection = database.OpenConnection();
+
+        InsertSession(
+            connection,
+            SessionIdentity.Generate().ToString(),
+            "shared-key",
+            identityKind: 2);
+        InsertSession(
+            connection,
+            SessionIdentity.Generate().ToString(),
+            "shared-key",
+            identityKind: 2);
+        InsertSession(
+            connection,
+            SessionIdentity.Generate().ToString(),
+            "shared-key",
+            identityKind: 1);
+
+        Assert.ThrowsExactly<SqliteException>(() => InsertSession(
+            connection,
+            SessionIdentity.Generate().ToString(),
+            "shared-key",
+            identityKind: 1));
+        Assert.AreEqual(3L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM \"Session\";"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsRequiredIndexWithWrongColumnOrder()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "DROP INDEX ux_session_simulator_key;");
+            ExecuteNonQuery(
+                connection,
+                """
+                CREATE UNIQUE INDEX ux_session_simulator_key
+                    ON "Session" (simulator_session_key, simulator)
+                    WHERE simulator_session_key IS NOT NULL AND identity_kind = 1;
+                """);
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsRequiredIndexWithNonCanonicalKeySemantics()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "DROP INDEX ux_session_simulator_key;");
+            ExecuteNonQuery(
+                connection,
+                """
+                CREATE UNIQUE INDEX ux_session_simulator_key
+                    ON "Session" (simulator COLLATE NOCASE DESC, simulator_session_key)
+                    WHERE simulator_session_key IS NOT NULL AND identity_kind = 1;
+                """);
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsRequiredIndexWithWrongPredicate()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "DROP INDEX ux_session_simulator_key;");
+            ExecuteNonQuery(
+                connection,
+                """
+                CREATE UNIQUE INDEX ux_session_simulator_key
+                    ON "Session" (simulator, simulator_session_key)
+                    WHERE simulator_session_key IS NOT NULL;
+                """);
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsRequiredIndexThatIsNotUnique()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "DROP INDEX ux_incident_session_epoch_total;");
+            ExecuteNonQuery(
+                connection,
+                """
+                CREATE INDEX ux_incident_session_epoch_total
+                    ON Incident (session_id, counter_epoch, incident_points_total);
+                """);
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-002")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task CancellationDuringSuccessfulMigrationReportsCommittedSuccess()
+    {
+        using var database = new TemporarySqliteDatabase();
+        using var migrationGate = new SqliteTestMigrationGate();
+        using var cancellation = new CancellationTokenSource();
+        var initializer = SqliteMigrationTestingRegistration.CreateInitializer(
+            database.Options,
+            migrationGate);
+        var initialization = Task.Run(() => initializer.InitializeAsync(cancellation.Token));
+
+        var enteredMigration = migrationGate.WaitUntilEntered(TimeSpan.FromSeconds(10));
+        if (enteredMigration)
+        {
+            cancellation.Cancel();
+        }
+
+        migrationGate.Release();
+        var result = await initialization;
+
+        Assert.IsTrue(enteredMigration, "The migration did not reach its deterministic test gate.");
+        Assert.IsTrue(result.IsSuccess, result.Error?.ToString());
+        using var connection = database.OpenConnection();
+        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    [DataRow(VersionFourUuid)]
+    [DataRow(VersionSevenUuidWithInvalidVariant)]
+    public async Task SchemaRejectsNonVersionSevenOrInvalidVariantIdentifiers(string invalidIdentifier)
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using var connection = database.OpenConnection();
+        var validSessionId = SessionIdentity.Generate().ToString();
+        InsertSession(connection, validSessionId, "valid-session");
+
+        Assert.ThrowsExactly<SqliteException>(() =>
+            InsertSession(connection, invalidIdentifier, "invalid-session"));
+        Assert.ThrowsExactly<SqliteException>(() =>
+            InsertIncident(connection, invalidIdentifier, validSessionId, total: 1, delta: 1));
+        Assert.ThrowsExactly<SqliteException>(() =>
+            InsertStoreOperation(connection, invalidIdentifier));
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-STR-003")]
     public async Task SessionDeleteCascadesToIncidentAndCheckpoint()
     {
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
         using var connection = database.OpenConnection();
-        var sessionId = Guid.NewGuid().ToString("D");
+        var sessionId = SessionIdentity.Generate().ToString();
         InsertSession(connection, sessionId, "durable-key");
-        InsertIncident(connection, Guid.NewGuid().ToString("D"), sessionId, total: 2, delta: 2);
+        InsertIncident(connection, IncidentId.Generate().ToString(), sessionId, total: 2, delta: 2);
         ExecuteParameterized(
             connection,
             """
@@ -171,12 +386,12 @@ public sealed class SqliteInitializationTests
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
         using var connection = database.OpenConnection();
-        var sessionId = Guid.NewGuid().ToString("D");
+        var sessionId = SessionIdentity.Generate().ToString();
         InsertSession(connection, sessionId, "unique-key");
-        InsertIncident(connection, Guid.NewGuid().ToString("D"), sessionId, total: 4, delta: 4);
+        InsertIncident(connection, IncidentId.Generate().ToString(), sessionId, total: 4, delta: 4);
 
         Assert.ThrowsExactly<SqliteException>(() =>
-            InsertIncident(connection, Guid.NewGuid().ToString("D"), sessionId, total: 4, delta: 1));
+            InsertIncident(connection, IncidentId.Generate().ToString(), sessionId, total: 4, delta: 1));
     }
 
     [TestMethod]
@@ -186,15 +401,15 @@ public sealed class SqliteInitializationTests
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
         using var connection = database.OpenConnection();
-        var sessionId = Guid.NewGuid().ToString("D");
+        var sessionId = SessionIdentity.Generate().ToString();
         InsertSession(connection, sessionId, "checks-key");
 
         Assert.ThrowsExactly<SqliteException>(() =>
-            InsertIncident(connection, Guid.NewGuid().ToString("D"), sessionId, total: 1, delta: 0));
+            InsertIncident(connection, IncidentId.Generate().ToString(), sessionId, total: 1, delta: 0));
         Assert.ThrowsExactly<SqliteException>(() =>
             InsertIncident(
                 connection,
-                Guid.NewGuid().ToString("D"),
+                IncidentId.Generate().ToString(),
                 sessionId,
                 total: 1,
                 delta: 1,
@@ -232,8 +447,8 @@ public sealed class SqliteInitializationTests
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
         using var connection = database.OpenConnection();
-        var sessionId = Guid.NewGuid().ToString("D");
-        var incidentId = Guid.NewGuid().ToString("D");
+        var sessionId = SessionIdentity.Generate().ToString();
+        var incidentId = IncidentId.Generate().ToString();
 
         ExecuteParameterized(
             connection,
@@ -276,8 +491,10 @@ public sealed class SqliteInitializationTests
             WHERE preferences_id = 1;
             """,
             ("@camera", new string('c', 128)));
+        InsertStoreOperation(connection, OperationId.Create().ToString());
 
         Assert.AreEqual(1L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM Incident;"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM StoreOperation;"));
     }
 
     [TestMethod]
@@ -287,9 +504,9 @@ public sealed class SqliteInitializationTests
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
         using var connection = database.OpenConnection();
-        var sessionId = Guid.NewGuid().ToString("D");
+        var sessionId = SessionIdentity.Generate().ToString();
         InsertSession(connection, sessionId, "invalid-domain-key");
-        InsertIncident(connection, Guid.NewGuid().ToString("D"), sessionId, total: 1, delta: 1);
+        InsertIncident(connection, IncidentId.Generate().ToString(), sessionId, total: 1, delta: 1);
 
         Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
             connection,
@@ -387,7 +604,11 @@ public sealed class SqliteInitializationTests
         return names.ToArray();
     }
 
-    private static void InsertSession(SqliteConnection connection, string sessionId, string simulatorKey)
+    private static void InsertSession(
+        SqliteConnection connection,
+        string sessionId,
+        string simulatorKey,
+        int identityKind = 1)
     {
         ExecuteParameterized(
             connection,
@@ -396,10 +617,11 @@ public sealed class SqliteInitializationTests
                 session_id, simulator, simulator_session_key, identity_kind,
                 simulator_session_number, session_mode,
                 started_at_utc_ms, created_at_utc_ms, updated_at_utc_ms)
-            VALUES (@sessionId, 'iracing', @simulatorKey, 1, 0, 1, 1000, 1000, 1000);
+            VALUES (@sessionId, 'iracing', @simulatorKey, @identityKind, 0, 1, 1000, 1000, 1000);
             """,
             ("@sessionId", sessionId),
-            ("@simulatorKey", simulatorKey));
+            ("@simulatorKey", simulatorKey),
+            ("@identityKind", identityKind));
     }
 
     private static void InsertIncident(
@@ -429,6 +651,31 @@ public sealed class SqliteInitializationTests
             ("@delta", delta),
             ("@total", total),
             ("@lapDistance", lapDistance));
+    }
+
+    private static void InsertStoreOperation(SqliteConnection connection, string operationId)
+    {
+        ExecuteParameterized(
+            connection,
+            """
+            INSERT INTO StoreOperation (
+                operation_id, command_kind, command_version,
+                payload_fingerprint_sha256, committed_at_utc_ms)
+            VALUES (@operationId, 'test.operation', 1, @fingerprint, 1000);
+            """,
+            ("@operationId", operationId),
+            ("@fingerprint", new byte[32]));
+    }
+
+    private static void SetSchemaVersion(SqliteConnection connection, int schemaVersion)
+    {
+        var sql = schemaVersion switch
+        {
+            -1 => "PRAGMA user_version = -1;",
+            2 => "PRAGMA user_version = 2;",
+            _ => throw new ArgumentOutOfRangeException(nameof(schemaVersion)),
+        };
+        ExecuteNonQuery(connection, sql);
     }
 
     private static void ExecuteParameterized(

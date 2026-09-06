@@ -51,7 +51,6 @@ internal sealed class SqliteMigrationRunner
             return Result.Failure(SqliteStoreErrors.MigrationFailed);
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
         return Result.Success();
     }
 }
