@@ -14,7 +14,7 @@ public sealed class IracingConfigurationTests
 {
     [TestMethod]
     [TestProperty("Requirement", "QR-ARC-001")]
-    public void AddIracingIntegrationRegistersBothContractsAsSingletonsIdempotently()
+    public void AddIracingIntegrationRegistersAllContractsAsSingletonsIdempotently()
     {
         var services = new ServiceCollection();
 
@@ -28,10 +28,15 @@ public sealed class IracingConfigurationTests
         var replay = services
             .Where(static item => item.ServiceType == typeof(IReplayController))
             .ToArray();
+        var replayContext = services
+            .Where(static item => item.ServiceType == typeof(IReplayContextReader))
+            .ToArray();
         Assert.HasCount(1, telemetry);
         Assert.HasCount(1, replay);
+        Assert.HasCount(1, replayContext);
         Assert.AreEqual(ServiceLifetime.Singleton, telemetry[0].Lifetime);
         Assert.AreEqual(ServiceLifetime.Singleton, replay[0].Lifetime);
+        Assert.AreEqual(ServiceLifetime.Singleton, replayContext[0].Lifetime);
     }
 
     [TestMethod]

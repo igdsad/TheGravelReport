@@ -72,7 +72,8 @@ internal sealed class IracingReplayController : IReplayController
             return Result.Failure(IracingErrors.ReplayUnavailable);
         }
 
-        if (observation.Frame?.Metadata is not { } metadata)
+        if (observation.Frame?.Metadata is not { Player: { } player } metadata ||
+            metadata.CameraGroups.Count == 0)
         {
             return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
         }
@@ -104,7 +105,7 @@ internal sealed class IracingReplayController : IReplayController
         }
 
         var command = IracingReplayEncoder.EncodeFocusPlayer(
-            metadata.PlayerCarNumberRaw,
+            player.CarNumberRaw,
             cameraGroupNumber,
             cameraNumber);
         if (!command.IsSuccess)
@@ -121,7 +122,7 @@ internal sealed class IracingReplayController : IReplayController
         return await ConfirmAsync(
             observation.Version,
             frame =>
-                frame.CameraCarIndex == metadata.PlayerCarIndex &&
+                frame.CameraCarIndex == player.CarIndex &&
                 frame.CameraGroupNumber == cameraGroupNumber,
             IracingErrors.ReplayCameraTimeout,
             cancellationToken).ConfigureAwait(false);

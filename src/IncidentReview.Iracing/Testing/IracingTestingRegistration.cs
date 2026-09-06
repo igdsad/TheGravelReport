@@ -70,6 +70,7 @@ public static class IracingTestingRegistration
                 sender,
                 connectionState,
                 confirmationTimeout),
+            new IracingReplayContextReader(connectionState),
             sender,
             connectionState);
     }
@@ -97,6 +98,7 @@ public static class IracingTestingRegistration
         return new IracingTestIntegrationContext(
             source,
             new IracingReplayController(sender, connectionState, confirmationTimeout),
+            new IracingReplayContextReader(connectionState),
             sender);
     }
 
@@ -208,12 +210,8 @@ public static class IracingTestingRegistration
 
     private static ReplayFrameState CreateTestFrame(IracingTestReplayState state)
     {
-        if (!IracingSessionInfoDecoder.TryGetReplayMetadata(
-                state.SessionInfo,
-                out var metadata))
-        {
-            metadata = null;
-        }
+        var metadata = IracingSessionInfoDecoder.ReadReplayContextMetadata(
+            state.SessionInfo);
 
         return new ReplayFrameState(
             state.ReplaySessionNumber,
@@ -262,8 +260,8 @@ public static class IracingTestingRegistration
         ReplayBroadcastCommand command)
     {
         var rawCarNumber = unchecked((short)((uint)command.WParam >> 16));
-        var carIndex = current.Metadata?.PlayerCarNumberRaw == rawCarNumber
-            ? current.Metadata.PlayerCarIndex
+        var carIndex = current.Metadata.Player?.CarNumberRaw == rawCarNumber
+            ? current.Metadata.Player.CarIndex
             : current.CameraCarIndex;
         return current with
         {
@@ -278,6 +276,7 @@ public static class IracingTestingRegistration
          DriverCarIdx: 4
          Drivers:
          - CarIdx: 4
+           UserName: René Test Driver
            CarNumberRaw: 23
         CameraInfo:
          Groups:
@@ -314,16 +313,21 @@ public sealed class IracingTestReplayContext
 
     internal IracingTestReplayContext(
         IReplayController controller,
+        IReplayContextReader contextReader,
         RecordingReplayMessageSender sender,
         IracingConnectionState connectionState)
     {
         Controller = controller;
+        ContextReader = contextReader;
         _sender = sender;
         _connectionState = connectionState;
     }
 
     /// <summary>Gets the replay contract under test.</summary>
     public IReplayController Controller { get; }
+
+    /// <summary>Gets the read-only replay-context contract under test.</summary>
+    public IReplayContextReader ContextReader { get; }
 
     /// <summary>Gets a stable snapshot of all delivered wire commands.</summary>
     public IReadOnlyList<IracingTestReplayMessage> Messages =>
@@ -341,9 +345,8 @@ public sealed class IracingTestReplayContext
 
     private static ReplayFrameState CreateFrame(IracingTestReplayState state)
     {
-        _ = IracingSessionInfoDecoder.TryGetReplayMetadata(
-            state.SessionInfo,
-            out var metadata);
+        var metadata = IracingSessionInfoDecoder.ReadReplayContextMetadata(
+            state.SessionInfo);
         return new ReplayFrameState(
             state.ReplaySessionNumber,
             state.ReplaySessionTimeMilliseconds,
@@ -365,10 +368,12 @@ public sealed class IracingTestIntegrationContext
     internal IracingTestIntegrationContext(
         ITelemetrySource telemetry,
         IReplayController controller,
+        IReplayContextReader contextReader,
         RecordingReplayMessageSender sender)
     {
         Telemetry = telemetry;
         Controller = controller;
+        ContextReader = contextReader;
         _sender = sender;
     }
 
@@ -377,6 +382,9 @@ public sealed class IracingTestIntegrationContext
 
     /// <summary>Gets the replay controller observing every copied telemetry frame.</summary>
     public IReplayController Controller { get; }
+
+    /// <summary>Gets the read-only context reader sharing the telemetry connection state.</summary>
+    public IReplayContextReader ContextReader { get; }
 
     /// <summary>Gets a stable snapshot of delivered commands.</summary>
     public IReadOnlyList<IracingTestReplayMessage> Messages =>

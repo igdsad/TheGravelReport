@@ -19,6 +19,18 @@ public sealed class ReplayApiTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "QR-ARC-002")]
+    public void ContextReaderExposesOneSynchronousRead()
+    {
+        var methods = typeof(IReplayContextReader).GetMethods();
+
+        Assert.HasCount(1, methods);
+        Assert.AreEqual(nameof(IReplayContextReader.Read), methods[0].Name);
+        Assert.AreEqual(typeof(Result<ReplayContext>), methods[0].ReturnType);
+        Assert.IsEmpty(methods[0].GetParameters());
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "QR-ARC-003")]
     public void AssemblyExportsOnlyTheDeliberateContractSurface()
     {
@@ -28,7 +40,9 @@ public sealed class ReplayApiTests
             new[]
             {
                 typeof(IReplayController),
+                typeof(IReplayContextReader),
                 typeof(ReplayErrorCodes),
+                typeof(ReplayContext),
                 typeof(ReplayPlayback),
             },
             exportedTypes);

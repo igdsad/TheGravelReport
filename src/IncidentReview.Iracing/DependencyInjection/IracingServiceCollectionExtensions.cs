@@ -35,6 +35,9 @@ public static class IracingServiceCollectionExtensions
             new IracingReplayController(
                 provider.GetRequiredService<IReplayMessageSender>(),
                 provider.GetRequiredService<IracingConnectionState>()));
+        services.TryAddSingleton<IReplayContextReader>(static provider =>
+            new IracingReplayContextReader(
+                provider.GetRequiredService<IracingConnectionState>()));
         return services;
     }
 }

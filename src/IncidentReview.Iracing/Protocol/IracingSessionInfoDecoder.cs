@@ -11,20 +11,105 @@ internal static class IracingSessionInfoDecoder
         ArgumentNullException.ThrowIfNull(sessionInfo);
         metadata = null;
 
-        if (!TryTokenize(sessionInfo, out var lines) ||
-            !TryGetSection(lines, "DriverInfo", out var driverLines) ||
-            !TryGetSection(lines, "CameraInfo", out var cameraLines) ||
-            !TryReadPlayer(driverLines, out var playerCarIndex, out var playerCarNumberRaw) ||
-            !TryReadCameraGroups(cameraLines, out var cameraGroups))
+        var context = ReadReplayContextMetadata(sessionInfo);
+        if (context.Player is not { } player || context.CameraGroups.Count == 0)
         {
             return false;
         }
 
         metadata = new IracingReplayMetadata(
-            playerCarIndex,
-            playerCarNumberRaw,
-            cameraGroups);
+            player.CarIndex,
+            player.CarNumberRaw,
+            context.CameraGroups);
         return true;
+    }
+
+    public static IracingReplayContextMetadata ReadReplayContextMetadata(string sessionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(sessionInfo);
+        IracingPlayerMetadata? player = null;
+        if (TryTokenizeSection(sessionInfo, "DriverInfo", out var driverLines) &&
+            TryReadPlayer(
+                driverLines,
+                out var playerCarIndex,
+                out var playerCarNumberRaw,
+                out var driverDisplayName))
+        {
+            player = new IracingPlayerMetadata(
+                playerCarIndex,
+                playerCarNumberRaw,
+                driverDisplayName);
+        }
+
+        IReadOnlyList<IracingCameraGroupMetadata> cameraGroups = [];
+        if (TryTokenizeSection(sessionInfo, "CameraInfo", out var cameraLines))
+        {
+            _ = TryReadCameraGroups(cameraLines, out cameraGroups);
+        }
+
+        return new IracingReplayContextMetadata(player, cameraGroups);
+    }
+
+    private static bool TryTokenizeSection(
+        string sessionInfo,
+        string sectionName,
+        out IReadOnlyList<YamlLine> section)
+    {
+        var rawLines = sessionInfo.Split('\n');
+        var sectionStart = -1;
+        var sectionEnd = rawLines.Length;
+        for (var index = 0; index < rawLines.Length; index++)
+        {
+            var rawLine = rawLines[index];
+            var line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
+            var content = StripComment(line.AsSpan()).TrimEnd();
+            if (content.IsEmpty || content.SequenceEqual("---") || content.SequenceEqual("..."))
+            {
+                continue;
+            }
+
+            var isTopLevel = line.Length > 0 && line[0] is not (' ' or '\t');
+            if (!isTopLevel)
+            {
+                continue;
+            }
+
+            if (TrySplitMapping(content, out var key, out var scalar) &&
+                string.Equals(key, sectionName, StringComparison.Ordinal) &&
+                scalar.IsEmpty)
+            {
+                if (sectionStart >= 0)
+                {
+                    section = [];
+                    return false;
+                }
+
+                sectionStart = index;
+                continue;
+            }
+
+            if (sectionStart >= 0 && sectionEnd == rawLines.Length)
+            {
+                sectionEnd = index;
+            }
+        }
+
+        if (sectionStart < 0)
+        {
+            section = [];
+            return false;
+        }
+
+        var sectionText = string.Join(
+            '\n',
+            rawLines.Skip(sectionStart).Take(sectionEnd - sectionStart));
+        if (!TryTokenize(sectionText, out var lines))
+        {
+            section = [];
+            return false;
+        }
+
+        return TryGetSection(lines, sectionName, out section);
     }
 
     public static long? TryGetSubSessionId(string sessionInfo)
@@ -56,10 +141,12 @@ internal static class IracingSessionInfoDecoder
     private static bool TryReadPlayer(
         IReadOnlyList<YamlLine> lines,
         out int playerCarIndex,
-        out int playerCarNumberRaw)
+        out int playerCarNumberRaw,
+        out string? driverDisplayName)
     {
         playerCarIndex = default;
         playerCarNumberRaw = default;
+        driverDisplayName = null;
         if (!TryGetDirectIndent(lines, out var directIndent) ||
             !TryGetUniqueInteger(lines, directIndent, "DriverCarIdx", out playerCarIndex) ||
             playerCarIndex < 0 ||
@@ -69,6 +156,7 @@ internal static class IracingSessionInfoDecoder
         }
 
         var matchingNumber = default(int?);
+        string? matchingDisplayName = null;
         for (var index = driversIndex + 1; index < lines.Count; index++)
         {
             var line = lines[index];
@@ -101,6 +189,15 @@ internal static class IracingSessionInfoDecoder
             }
 
             matchingNumber = number;
+            matchingDisplayName = TryGetUniqueScalar(
+                lines,
+                index + 1,
+                entryEnd,
+                line.Indent + 1,
+                "UserName",
+                out var userName)
+                ? userName
+                : null;
             index = entryEnd - 1;
         }
 
@@ -110,6 +207,7 @@ internal static class IracingSessionInfoDecoder
         }
 
         playerCarNumberRaw = rawNumber;
+        driverDisplayName = matchingDisplayName;
         return true;
     }
 

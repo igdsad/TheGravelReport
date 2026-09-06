@@ -8,7 +8,7 @@ internal sealed class IracingConnectionState
     private TaskCompletionSource _changed = CreateSignal();
     private ReplayFrameState? _latestFrame;
     private string? _metadataSource;
-    private IracingReplayMetadata? _metadata;
+    private IracingReplayContextMetadata _metadata = IracingReplayContextMetadata.Empty;
     private long _version;
     private bool _isAvailable;
 
@@ -46,11 +46,8 @@ internal sealed class IracingConnectionState
             if (!string.Equals(_metadataSource, snapshot.SessionInfo, StringComparison.Ordinal))
             {
                 _metadataSource = snapshot.SessionInfo;
-                _metadata = IracingSessionInfoDecoder.TryGetReplayMetadata(
-                    snapshot.SessionInfo,
-                    out var metadata)
-                    ? metadata
-                    : null;
+                _metadata = IracingSessionInfoDecoder.ReadReplayContextMetadata(
+                    snapshot.SessionInfo);
             }
 
             _latestFrame = DecodeReplayFrame(snapshot, _metadata);
@@ -120,7 +117,7 @@ internal sealed class IracingConnectionState
                 _isAvailable = false;
                 _latestFrame = null;
                 _metadataSource = null;
-                _metadata = null;
+                _metadata = IracingReplayContextMetadata.Empty;
                 _version++;
                 signal = RotateSignal();
             }
@@ -138,7 +135,7 @@ internal sealed class IracingConnectionState
 
     private static ReplayFrameState DecodeReplayFrame(
         IracingFrameSnapshot snapshot,
-        IracingReplayMetadata? metadata)
+        IracingReplayContextMetadata metadata)
     {
         int? sessionNumber = IracingFrameDecoder.TryReadInt32(
             snapshot,
@@ -222,7 +219,7 @@ internal sealed record ReplayFrameState(
     int? CameraCarIndex,
     int? CameraGroupNumber,
     int? CameraNumber,
-    IracingReplayMetadata? Metadata)
+    IracingReplayContextMetadata Metadata)
 {
     public bool IsSessionScreen =>
         (CameraState & (int)IracingCameraState.IsSessionScreen) != 0;
