@@ -105,6 +105,65 @@ public sealed class MainWindowViewModelTests
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "IR-UI-002")]
+    public async Task SuccessfulReviewDisplaysConfirmedStatusAndEvent()
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var session = TestModelFactory.Session(sessionId, incident);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(session)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.Incidents[0];
+
+        await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
+
+        var expected = $"Replay ready for incident {incident.Id}.";
+        Assert.IsFalse(viewModel.HasError);
+        Assert.AreEqual(expected, viewModel.StatusDetail);
+        Assert.IsFalse(viewModel.EventLog[^1].IsError);
+        Assert.AreEqual(expected, viewModel.EventLog[^1].Message);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task BusyStatusTemporarilyOverridesConfirmedReviewStatus()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeIncidentReviewService();
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var session = TestModelFactory.Session(sessionId, incident);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(session)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.Incidents[0];
+        await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
+        service.StatusHandler = async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
+        };
+
+        var refresh = viewModel.RefreshAsync(CancellationToken.None);
+        await entered.Task;
+
+        Assert.AreEqual("Working…", viewModel.StatusDetail);
+
+        release.SetResult();
+        await refresh;
+        Assert.AreEqual($"Replay ready for incident {incident.Id}.", viewModel.StatusDetail);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "IR-UI-002")]
     public async Task RowReviewCommandUsesItsIncidentWithoutChangingSelection()
     {
         var service = new FakeIncidentReviewService();

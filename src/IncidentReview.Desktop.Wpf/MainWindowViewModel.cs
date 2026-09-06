@@ -42,6 +42,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _isDisposed;
     private string _connectionStatus = "Starting";
     private string? _errorMessage;
+    private string? _activityStatusMessage;
     private string? _unavailableStatusErrorMessage;
     private string _emptyMessage = "No incidents are available for this session.";
     private SessionListItem? _selectedSession;
@@ -130,6 +131,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (IsBusy)
             {
                 return "Working…";
+            }
+
+            if (_activityStatusMessage is not null)
+            {
+                return _activityStatusMessage;
             }
 
             return HasIncidents
@@ -323,10 +329,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 await RunOnUiAsync(
                     () =>
                     {
-                        AddEventLogEntry(
-                            string.Create(
-                                CultureInfo.CurrentCulture,
-                                $"Replay requested for incident {incident.Id} at {incident.ReplayTime}."));
+                        var message = string.Create(
+                            CultureInfo.CurrentCulture,
+                            $"Replay ready for incident {incident.Id}.");
+                        AddEventLogEntry(message);
+                        SetActivityStatusMessage(message);
                         ErrorMessage = _unavailableStatusErrorMessage;
                     }).ConfigureAwait(false);
             },
@@ -768,12 +775,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RunOnUiAsync(
             () =>
             {
+                if (message is not null)
+                {
+                    SetActivityStatusMessage(null);
+                }
+
                 ErrorMessage = message;
                 if (message is not null)
                 {
                     AddEventLogEntry(message, isError: true);
                 }
             });
+
+    private void SetActivityStatusMessage(string? message)
+    {
+        if (_activityStatusMessage == message)
+        {
+            return;
+        }
+
+        _activityStatusMessage = message;
+        OnPropertyChanged(nameof(StatusDetail));
+    }
 
     private void AddEventLogEntry(string message, bool isError = false)
     {
