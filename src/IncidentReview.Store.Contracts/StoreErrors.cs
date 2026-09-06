@@ -34,4 +34,24 @@ public static class StoreErrors
         StoreErrorCodes.IndeterminateCommit,
         ErrorKind.Indeterminate,
         "The store could not determine whether the operation committed.");
+
+    public static Error SessionIdentityConflict { get; } = Error.Create(
+        StoreErrorCodes.SessionIdentityConflict,
+        ErrorKind.Conflict,
+        "The simulator session identity is already assigned.");
+
+    public static Error CheckpointConflict { get; } = Error.Create(
+        StoreErrorCodes.CheckpointConflict,
+        ErrorKind.Conflict,
+        "The incident checkpoint changed before the command could commit.");
+
+    public static Error EntityNotFound { get; } = Error.Create(
+        StoreErrorCodes.EntityNotFound,
+        ErrorKind.NotFound,
+        "The requested store entity was not found.");
+
+    public static Error InvalidCommand { get; } = Error.Create(
+        StoreErrorCodes.InvalidCommand,
+        ErrorKind.Validation,
+        "The store command is internally inconsistent.");
 }

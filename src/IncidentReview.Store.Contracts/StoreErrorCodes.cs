@@ -32,4 +32,16 @@ public static class StoreErrorCodes
     /// <summary>The store cannot prove whether the command committed.</summary>
     public static ErrorCode IndeterminateCommit { get; } =
         ErrorCode.Define("store.commit.indeterminate");
+
+    public static ErrorCode SessionIdentityConflict { get; } =
+        ErrorCode.Define("store.session.identity-conflict");
+
+    public static ErrorCode CheckpointConflict { get; } =
+        ErrorCode.Define("store.checkpoint.conflict");
+
+    public static ErrorCode EntityNotFound { get; } =
+        ErrorCode.Define("store.entity.not-found");
+
+    public static ErrorCode InvalidCommand { get; } =
+        ErrorCode.Define("store.command.invalid");
 }
