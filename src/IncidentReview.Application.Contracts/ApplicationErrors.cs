@@ -48,7 +48,7 @@ public static class ApplicationErrors
     public static Error ReplaySessionIdentityUnavailable { get; } = Error.Create(
         ApplicationErrorCodes.ReplaySessionIdentityUnavailable,
         ErrorKind.Conflict,
-        "iRacing did not provide a stable ID for this replay, so the app cannot verify that it matches the saved incident. Keep Incident Review running while recording and entering replay, then try again.");
+        "iRacing did not provide a stable ID for this replay, so the app cannot verify that it matches the saved incident. Keep the app running while recording and entering replay, then try again.");
 
     public static Error RuntimeStopped { get; } = Error.Create(
         ApplicationErrorCodes.RuntimeStopped,

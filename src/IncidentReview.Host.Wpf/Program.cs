@@ -17,6 +17,7 @@ namespace IncidentReview.Host.Wpf;
 
 internal static class Program
 {
+    private const string ProductName = "GravelReview";
     private const string VerifyStartupArgument = "--verify-startup";
 
     [STAThread]
@@ -281,14 +282,14 @@ internal static class Program
         {
             FatalApplicationException fatal => fatal.Error.Message,
             OptionsValidationException => HostConfiguration.InvalidConfigurationMessage,
-            _ => "Incident Review stopped because of an unexpected error.",
+            _ => $"{ProductName} stopped because of an unexpected error.",
         };
-        Trace.TraceError("Incident Review fatal failure: {0}", exception);
+        Trace.TraceError("{0} fatal failure: {1}", ProductName, exception);
         if (!headless)
         {
             _ = MessageBox.Show(
                 message,
-                "iRacing Incident Review",
+                ProductName,
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }

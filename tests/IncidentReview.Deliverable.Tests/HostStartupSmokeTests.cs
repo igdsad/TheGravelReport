@@ -57,6 +57,23 @@ public sealed class HostStartupSmokeTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "QR-ARC-002")]
+    public void ReleaseHostUsesGravelReviewProductMetadataAndStableAssemblyIdentity()
+    {
+        var executable = FindReleaseHostExecutable();
+        var hostAssembly = Path.ChangeExtension(executable, ".dll");
+        Assert.IsTrue(File.Exists(executable), $"Release host not found: {executable}");
+        Assert.IsTrue(File.Exists(hostAssembly), $"Release host assembly not found: {hostAssembly}");
+
+        var versionInfo = FileVersionInfo.GetVersionInfo(hostAssembly);
+        Assert.AreEqual("GravelReview", versionInfo.FileDescription);
+        Assert.AreEqual("GravelReview", versionInfo.ProductName);
+        Assert.AreEqual(
+            "IncidentReview.Host.Wpf",
+            System.Reflection.AssemblyName.GetAssemblyName(hostAssembly).Name);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "QR-DEP-001")]
     [TestProperty("Requirement", "QR-ERR-001")]
     public async Task ReleaseHostRejectsInvalidBoundOptionsDuringStartup()

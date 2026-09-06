@@ -7,6 +7,17 @@ namespace IncidentReview.Application.Tests;
 public sealed class ApplicationContractInvariantTests
 {
     [TestMethod]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    public void SessionIdentityErrorUsesProductNeutralContractLanguage()
+    {
+        Assert.AreEqual(
+            "iRacing did not provide a stable ID for this replay, so the app cannot verify " +
+            "that it matches the saved incident. Keep the app running while recording and " +
+            "entering replay, then try again.",
+            ApplicationErrors.ReplaySessionIdentityUnavailable.Message);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "QR-ARC-002")]
     public void ReviewSessionRejectsIncidentsFromAnotherSession()
     {

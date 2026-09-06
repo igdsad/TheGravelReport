@@ -8,6 +8,8 @@
     <AssemblyName>IncidentReview.Host.Wpf</AssemblyName>
     <RootNamespace>IncidentReview.Host.Wpf</RootNamespace>
     <ApplicationIcon>../../assets/branding/favicon.ico</ApplicationIcon>
+    <AssemblyTitle>GravelReview</AssemblyTitle>
+    <Product>GravelReview</Product>
   </PropertyGroup>
 
   <ItemGroup>
