@@ -1,0 +1,15 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)eng\ArchitecturePolicy.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)eng\ArchitecturePolicy.props')" />
+
+  <Target Name="ValidateCentralPackageManagement"
+          BeforeTargets="CollectPackageReferences">
+    <ItemGroup>
+      <_VersionedPackageReference Include="@(PackageReference)"
+                                  Condition="'%(PackageReference.Version)' != '' or '%(PackageReference.VersionOverride)' != ''" />
+    </ItemGroup>
+
+    <Error Condition="'@(_VersionedPackageReference)' != ''"
+           Text="Package versions must be declared only in Directory.Packages.props. Invalid references: @(_VersionedPackageReference, ', ')." />
+  </Target>
+</Project>
