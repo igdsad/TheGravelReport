@@ -1,8 +1,8 @@
 # iRacing Incident Review — System Design
 
-- **Status:** Proposed implementation baseline; implementation has not started
-- **Document version:** 1.0-draft
-- **Last updated:** 2026-09-05
+- **Status:** Accepted implementation baseline; implementation in progress
+- **Document version:** 1.1
+- **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
 
@@ -188,6 +188,8 @@ tests/
   IncidentReview.Architecture.Tests/
   IncidentReview.Results.Tests/
   IncidentReview.Domain.Tests/
+  IncidentReview.Telemetry.Contracts.Tests/
+  IncidentReview.Replay.Contracts.Tests/
   IncidentReview.Application.Tests/
   IncidentReview.Store.ContractTests/
   IncidentReview.Store.Sqlite.Tests/
@@ -613,6 +615,8 @@ Session
   simulator                  text
   simulator_session_key      text/null
   identity_kind              integer
+  simulator_session_number   integer
+  session_mode               integer
   started_at_utc_ms          integer
   ended_at_utc_ms            integer/null
   track_id / track_name      text/null
