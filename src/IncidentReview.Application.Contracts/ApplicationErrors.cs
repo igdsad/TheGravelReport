@@ -23,7 +23,7 @@ public static class ApplicationErrors
     public static Error ReplayUnavailable { get; } = Error.Create(
         ApplicationErrorCodes.ReplayUnavailable,
         ErrorKind.Unavailable,
-        "Replay control is unavailable until the simulator is connected.");
+        "Replay control requires iRacing to be connected, the driver out of the car, and the selected incident's session loaded.");
 
     public static Error RuntimeStopped { get; } = Error.Create(
         ApplicationErrorCodes.RuntimeStopped,

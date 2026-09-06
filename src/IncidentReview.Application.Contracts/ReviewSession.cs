@@ -33,9 +33,11 @@ public sealed record ReviewSession
         ArgumentNullException.ThrowIfNull(startedAt);
         ArgumentNullException.ThrowIfNull(incidents);
         var snapshot = Array.AsReadOnly(incidents.ToArray());
-        if (snapshot.Any(static incident => incident is null))
+        if (snapshot.Any(incident => incident is null || incident.Session != id))
         {
-            throw new ArgumentException("Incidents cannot contain null values.", nameof(incidents));
+            throw new ArgumentException(
+                "Incidents must be non-null and belong to the supplied session.",
+                nameof(incidents));
         }
 
         return new ReviewSession(id, descriptor, startedAt, snapshot);
