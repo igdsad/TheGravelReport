@@ -2,11 +2,39 @@
   <Import Project="$(MSBuildThisFileDirectory)eng\ArchitecturePolicy.props"
           Condition="Exists('$(MSBuildThisFileDirectory)eng\ArchitecturePolicy.props')" />
 
+  <PropertyGroup>
+    <_IncidentReviewSourceRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)src'))</_IncidentReviewSourceRoot>
+    <_IsIncidentReviewProductionProject>$([System.String]::Copy('$(MSBuildProjectDirectory)').StartsWith('$(_IncidentReviewSourceRoot)'))</_IsIncidentReviewProductionProject>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(_IsIncidentReviewProductionProject)' == 'True'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)tools\IncidentReview.Analyzers\IncidentReview.Analyzers.csproj"
+                      Condition="Exists('$(MSBuildThisFileDirectory)tools\IncidentReview.Analyzers\IncidentReview.Analyzers.csproj')"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="ValidateArchitecturePolicy"
+          BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <_KnownArchitectureProjects>;@(ArchitectureProject);</_KnownArchitectureProjects>
+      <_AllowedArchitectureEdges>;@(AllowedProjectReference->'%(Identity)|%(To)', ';');</_AllowedArchitectureEdges>
+      <_AllowedPackageOwners>;@(PackageOwner->'%(Identity)|%(Project)', ';');</_AllowedPackageOwners>
+    </PropertyGroup>
+
+    <Error Condition="!$([System.String]::Copy('$(_KnownArchitectureProjects)').Contains(';$(MSBuildProjectName);'))"
+           Text="Project '$(MSBuildProjectName)' is not declared in eng/ArchitecturePolicy.props." />
+    <Error Condition="'%(ProjectReference.Identity)' != '' and '%(ProjectReference.ReferenceOutputAssembly)' != 'false' and !$([System.String]::Copy('$(_AllowedArchitectureEdges)').Contains(';$(MSBuildProjectName)|%(ProjectReference.Filename);'))"
+           Text="Project '$(MSBuildProjectName)' has forbidden project reference '%(ProjectReference.Filename)'." />
+    <Error Condition="'%(PackageReference.Identity)' != '' and '%(PackageReference.IsImplicitlyDefined)' != 'true' and '%(PackageReference.Sdk)' == '' and !$([System.String]::Copy('$(_AllowedPackageOwners)').Contains(';%(PackageReference.Identity)|$(MSBuildProjectName);'))"
+           Text="Project '$(MSBuildProjectName)' consumes package '%(PackageReference.Identity)' without an exact PackageOwner rule." />
+  </Target>
+
   <Target Name="ValidateCentralPackageManagement"
           BeforeTargets="CollectPackageReferences">
     <ItemGroup>
       <_VersionedPackageReference Include="@(PackageReference)"
-                                  Condition="'%(PackageReference.IsImplicitlyDefined)' != 'true' and ('%(PackageReference.Version)' != '' or '%(PackageReference.VersionOverride)' != '')" />
+                                  Condition="'%(PackageReference.IsImplicitlyDefined)' != 'true' and '%(PackageReference.Sdk)' == '' and ('%(PackageReference.Version)' != '' or '%(PackageReference.VersionOverride)' != '')" />
     </ItemGroup>
 
     <Error Condition="'@(_VersionedPackageReference)' != ''"
