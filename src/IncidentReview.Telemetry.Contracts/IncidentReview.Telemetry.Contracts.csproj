@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Telemetry.Contracts</AssemblyName>
+    <RootNamespace>IncidentReview.Telemetry.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

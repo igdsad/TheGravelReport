@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Store.Sqlite</AssemblyName>
+    <RootNamespace>IncidentReview.Store.Sqlite</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="dbup-core" />
+    <PackageReference Include="dbup-sqlite" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="SQLitePCLRaw.bundle_winsqlite3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

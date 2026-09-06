@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Iracing</AssemblyName>
+    <RootNamespace>IncidentReview.Iracing</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

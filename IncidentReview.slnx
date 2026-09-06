@@ -1,0 +1,34 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IncidentReview.Results/IncidentReview.Results.csproj" />
+    <Project Path="src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <Project Path="src/IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
+    <Project Path="src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
+    <Project Path="src/IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
+    <Project Path="src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <Project Path="src/IncidentReview.Application/IncidentReview.Application.csproj" />
+    <Project Path="src/IncidentReview.Store.Sqlite/IncidentReview.Store.Sqlite.csproj" />
+    <Project Path="src/IncidentReview.Iracing/IncidentReview.Iracing.csproj" />
+    <Project Path="src/IncidentReview.Desktop.Wpf/IncidentReview.Desktop.Wpf.csproj" />
+    <Project Path="src/IncidentReview.Host.Wpf/IncidentReview.Host.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
+    <Project Path="tests/IncidentReview.Architecture.Tests/IncidentReview.Architecture.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Results.Tests/IncidentReview.Results.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Domain.Tests/IncidentReview.Domain.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Application.Tests/IncidentReview.Application.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Store.ContractTests/IncidentReview.Store.ContractTests.csproj" />
+    <Project Path="tests/IncidentReview.Store.Sqlite.Tests/IncidentReview.Store.Sqlite.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Iracing.Tests/IncidentReview.Iracing.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Desktop.Wpf.Tests/IncidentReview.Desktop.Wpf.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Deliverable.Tests/IncidentReview.Deliverable.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Iracing.ProtocolSimulator/IncidentReview.Iracing.ProtocolSimulator.csproj" />
+    <Project Path="tests/IncidentReview.Analyzers.Tests/IncidentReview.Analyzers.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Verification.Tests/IncidentReview.Verification.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/IncidentReview.Analyzers/IncidentReview.Analyzers.csproj" />
+    <Project Path="tools/IncidentReview.Verification/IncidentReview.Verification.csproj" />
+  </Folder>
+</Solution>

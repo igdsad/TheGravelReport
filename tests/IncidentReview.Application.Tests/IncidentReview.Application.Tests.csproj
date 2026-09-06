@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Application.Tests</AssemblyName>
+    <RootNamespace>IncidentReview.Application.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/IncidentReview.Application/IncidentReview.Application.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
+    <ProjectReference Include="../IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
+  </ItemGroup>
+</Project>

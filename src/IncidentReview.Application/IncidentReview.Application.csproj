@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Application</AssemblyName>
+    <RootNamespace>IncidentReview.Application</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

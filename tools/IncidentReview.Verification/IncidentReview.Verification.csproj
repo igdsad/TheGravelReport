@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>IncidentReview.Verification</AssemblyName>
+    <RootNamespace>IncidentReview.Verification</RootNamespace>
+  </PropertyGroup>
+</Project>

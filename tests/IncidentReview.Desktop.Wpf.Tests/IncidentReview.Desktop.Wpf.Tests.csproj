@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>IncidentReview.Desktop.Wpf.Tests</AssemblyName>
+    <RootNamespace>IncidentReview.Desktop.Wpf.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/IncidentReview.Desktop.Wpf/IncidentReview.Desktop.Wpf.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
+    <ProjectReference Include="../IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
+  </ItemGroup>
+</Project>
