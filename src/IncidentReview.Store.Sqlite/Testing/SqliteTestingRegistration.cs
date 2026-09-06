@@ -53,7 +53,23 @@ public static class SqliteTestingRegistration
             options,
             SqliteTestCommitMode.Normal,
             SqliteTestCleanupMode.Normal,
-            new CancellationExecutionCheckpoint(cancellationSource),
+            new CancellationAfterOperationLookupCheckpoint(cancellationSource),
+            Array.Empty<SqliteTestMigration>());
+    }
+
+    /// <summary>Creates a store that cancels the supplied source after an incident is inserted.</summary>
+    public static SqliteTestStoreContext CreateStoreCancellingAfterIncidentInsert(
+        SqliteStoreOptions options,
+        CancellationTokenSource cancellationSource)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(cancellationSource);
+
+        return CreateStoreCore(
+            options,
+            SqliteTestCommitMode.Normal,
+            SqliteTestCleanupMode.Normal,
+            new CancellationAfterIncidentInsertCheckpoint(cancellationSource),
             Array.Empty<SqliteTestMigration>());
     }
 
@@ -91,15 +107,35 @@ public static class SqliteTestingRegistration
         return new SqliteTestStoreContext(store, initializer, store);
     }
 
-    private sealed class CancellationExecutionCheckpoint : ISqliteStoreExecutionCheckpoint
+    private sealed class CancellationAfterOperationLookupCheckpoint : ISqliteStoreExecutionCheckpoint
     {
         private readonly CancellationTokenSource _cancellationSource;
 
-        public CancellationExecutionCheckpoint(CancellationTokenSource cancellationSource)
+        public CancellationAfterOperationLookupCheckpoint(CancellationTokenSource cancellationSource)
         {
             _cancellationSource = cancellationSource;
         }
 
         public void AfterOperationLookup() => _cancellationSource.Cancel();
+
+        public void AfterIncidentInsert()
+        {
+        }
+    }
+
+    private sealed class CancellationAfterIncidentInsertCheckpoint : ISqliteStoreExecutionCheckpoint
+    {
+        private readonly CancellationTokenSource _cancellationSource;
+
+        public CancellationAfterIncidentInsertCheckpoint(CancellationTokenSource cancellationSource)
+        {
+            _cancellationSource = cancellationSource;
+        }
+
+        public void AfterOperationLookup()
+        {
+        }
+
+        public void AfterIncidentInsert() => _cancellationSource.Cancel();
     }
 }

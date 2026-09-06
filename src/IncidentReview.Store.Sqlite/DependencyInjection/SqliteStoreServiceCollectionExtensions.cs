@@ -17,16 +17,30 @@ public static class SqliteStoreServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(options);
 
         _ = services.AddSingleton(options);
+        return services.AddSqliteStore();
+    }
+
+    /// <summary>
+    /// Adds the SQLite store using a <see cref="SqliteStoreOptions"/> instance already
+    /// registered in the supplied service collection.
+    /// </summary>
+    public static IServiceCollection AddSqliteStore(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
         _ = services.AddSingleton<SqliteStoreGate>();
         _ = services.AddSingleton<ISqliteCommitBoundary>(SqliteCommitBoundary.Instance);
         _ = services.AddSingleton<ISqliteTransactionCleanup>(SqliteTransactionCleanup.Instance);
         _ = services.AddSingleton<IStore, SqliteStore>();
-        _ = services.AddSingleton<IStoreInitializer>(provider =>
-            new SqliteStoreInitializer(
+        _ = services.AddSingleton<IStoreInitializer>(static provider =>
+        {
+            var options = provider.GetRequiredService<SqliteStoreOptions>();
+            return new SqliteStoreInitializer(
                 options,
                 Array.Empty<DbUp.Engine.SqlScript>(),
                 provider.GetRequiredService<SqliteStoreGate>(),
-                provider.GetRequiredService<ILogger<SqliteStoreInitializer>>()));
+                provider.GetRequiredService<ILogger<SqliteStoreInitializer>>());
+        });
         return services;
     }
 }

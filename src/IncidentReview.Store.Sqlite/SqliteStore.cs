@@ -14,6 +14,8 @@ namespace IncidentReview.Store.Sqlite;
 internal interface ISqliteStoreExecutionCheckpoint
 {
     public void AfterOperationLookup();
+
+    public void AfterIncidentInsert();
 }
 
 internal sealed class SqliteStoreExecutionCheckpoint : ISqliteStoreExecutionCheckpoint
@@ -27,9 +29,13 @@ internal sealed class SqliteStoreExecutionCheckpoint : ISqliteStoreExecutionChec
     public void AfterOperationLookup()
     {
     }
+
+    public void AfterIncidentInsert()
+    {
+    }
 }
 
-internal sealed class SqliteStore : IStore, IAsyncDisposable
+internal sealed partial class SqliteStore : IStore, IAsyncDisposable
 {
     private const string ReadPreferencesSql =
         """
@@ -246,15 +252,33 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
             return ConvertResult<T, OperationOutcome>(ReadOperationOutcome(operationOutcome, cancellationToken));
         }
 
+        if (query is GetSession or
+            GetSessionBySimulatorKey or
+            ListSessions or
+            GetSessionDetails or
+            GetIncident or
+            GetIncidents or
+            GetIncidentCheckpoint)
+        {
+            return ReadApplicationQuery(query, cancellationToken);
+        }
+
         return Result<T>.Failure(StoreErrors.UnsupportedRequest);
     }
 
     private Result RunCommand(IStoreCommand command, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return command is UpdatePreferences update
-            ? WritePreferences(update, cancellationToken)
-            : Result.Failure(StoreErrors.UnsupportedRequest);
+        return command switch
+        {
+            UpdatePreferences update => WritePreferences(update, cancellationToken),
+            EnsureSession or
+            EstablishIncidentCheckpoint or
+            RecordDetectedIncident or
+            AnnotateIncident or
+            MarkIncidentReviewed => WriteApplicationCommand(command, cancellationToken),
+            _ => Result.Failure(StoreErrors.UnsupportedRequest),
+        };
     }
 
     private Result<UserPreferences> ReadPreferences(CancellationToken cancellationToken)
@@ -349,14 +373,20 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var operation = connection.QuerySingleOrDefault<StoreOperationRow>(
-                    ReadOperationSql,
-                    new { OperationId = command.OperationId.ToString() },
-                    transaction: transaction);
+                    CreateDapperCommand(
+                        ReadOperationSql,
+                        new { OperationId = command.OperationId.ToString() },
+                        transaction,
+                        cancellationToken));
                 _executionCheckpoint.AfterOperationLookup();
                 cancellationToken.ThrowIfCancellationRequested();
                 if (operation is not null)
                 {
-                    return IsSameOperation(operation, fingerprint)
+                    return IsSameOperation(
+                        operation,
+                        PreferencesCommandFingerprint.CommandKind,
+                        PreferencesCommandFingerprint.CommandVersion,
+                        fingerprint)
                         ? Result.Success()
                         : Result.Failure(StoreErrors.OperationIdConflict);
                 }
@@ -373,6 +403,7 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
                         UpdatedAtUnixMilliseconds = command.UpdatedAt.UnixMilliseconds,
                     },
                     transaction: transaction);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (changed != 1)
                 {
                     return Result.Failure(StoreErrors.PersistenceFailure);
@@ -390,12 +421,12 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
                         CommittedAtUnixMilliseconds = command.UpdatedAt.UnixMilliseconds,
                     },
                     transaction: transaction);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (operationInserted != 1)
                 {
                     return Result.Failure(StoreErrors.PersistenceFailure);
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     _commitBoundary.Commit(transaction);
@@ -422,14 +453,28 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
         }
     }
 
-    private static bool IsSameOperation(StoreOperationRow operation, byte[] fingerprint) =>
+    private static bool IsSameOperation(
+        StoreOperationRow operation,
+        string commandKind,
+        int commandVersion,
+        byte[] fingerprint) =>
         string.Equals(
             operation.CommandKind,
-            PreferencesCommandFingerprint.CommandKind,
+            commandKind,
             StringComparison.Ordinal) &&
-        operation.CommandVersion == PreferencesCommandFingerprint.CommandVersion &&
+        operation.CommandVersion == commandVersion &&
         operation.PayloadFingerprint.Length == fingerprint.Length &&
         CryptographicOperations.FixedTimeEquals(operation.PayloadFingerprint, fingerprint);
+
+    private static CommandDefinition CreateDapperCommand(
+        string sql,
+        object? parameters,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken) => new(
+            sql,
+            parameters,
+            transaction,
+            cancellationToken: cancellationToken);
 
     private static bool IsExpectedProviderFailure(Exception exception) =>
         exception is SqliteException or DataException or IOException or UnauthorizedAccessException;
