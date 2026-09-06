@@ -110,6 +110,9 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
         string? connectionIdentity = null;
         var announcedConnection = false;
         var reportedUnavailable = false;
+        var reportedInvalidFrame = false;
+        var recoveringInvalidConnection = false;
+        long? lastAcceptedSampleTimestamp = null;
         TelemetryTransitionState? lastTransition = null;
 
         try
@@ -126,6 +129,38 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                             _configuration.TimeProvider,
                             out connection))
                     {
+                        if (recoveringInvalidConnection)
+                        {
+                            if (announcedConnection &&
+                                !HasLogicalConnectionTimedOut(lastAcceptedSampleTimestamp))
+                            {
+                                await Task.Delay(
+                                    _configuration.Options.ReconnectInterval,
+                                    cancellationToken).ConfigureAwait(false);
+                                continue;
+                            }
+
+                            recoveringInvalidConnection = false;
+                            connectionIdentity = null;
+                            reportedInvalidFrame = false;
+                            reportedUnavailable = true;
+                            lastAcceptedSampleTimestamp = null;
+                            lastTransition = null;
+                            if (announcedConnection)
+                            {
+                                announcedConnection = false;
+                                if (!writer.TryWrite(TelemetryDisconnected.Instance))
+                                {
+                                    return IracingErrors.TelemetryBufferOverflow;
+                                }
+                            }
+
+                            await Task.Delay(
+                                _configuration.Options.ReconnectInterval,
+                                cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
                         if (!reportedUnavailable)
                         {
                             reportedUnavailable = true;
@@ -143,7 +178,8 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                     }
 
                     reportedUnavailable = false;
-                    connectionIdentity = $"connection:{Guid.CreateVersion7():D}";
+                    recoveringInvalidConnection = false;
+                    connectionIdentity ??= $"connection:{Guid.CreateVersion7():D}";
                     Volatile.Write(ref _currentConnection, connection);
                 }
 
@@ -164,18 +200,30 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                     {
                         try
                         {
-                            _connectionState.ObserveStableFrame(readResult.Snapshot!);
                             var sample = IracingFrameDecoder.Decode(
                                 readResult.Snapshot!,
                                 connectionIdentity!,
                                 _configuration.TimeProvider);
                             if (!sample.IsSuccess)
                             {
-                                CloseConnection(ref connection);
-                                connectionIdentity = null;
+                                _connectionState.SetUnavailable();
                                 lastTransition = null;
-                                if (announcedConnection)
+                                if (!reportedInvalidFrame &&
+                                    !writer.TryWrite(TelemetryUnavailable.Create(sample.Error!)))
                                 {
+                                    return IracingErrors.TelemetryBufferOverflow;
+                                }
+
+                                reportedInvalidFrame = true;
+
+                                if (announcedConnection &&
+                                    HasLogicalConnectionTimedOut(lastAcceptedSampleTimestamp))
+                                {
+                                    CloseConnection(ref connection);
+                                    connectionIdentity = null;
+                                    reportedInvalidFrame = false;
+                                    recoveringInvalidConnection = false;
+                                    lastAcceptedSampleTimestamp = null;
                                     announcedConnection = false;
                                     if (!writer.TryWrite(TelemetryDisconnected.Instance))
                                     {
@@ -183,17 +231,16 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                                     }
                                 }
 
-                                if (!writer.TryWrite(TelemetryUnavailable.Create(sample.Error!)))
-                                {
-                                    return IracingErrors.TelemetryBufferOverflow;
-                                }
-
                                 break;
                             }
 
+                            reportedInvalidFrame = false;
+                            lastAcceptedSampleTimestamp =
+                                _configuration.TimeProvider.GetTimestamp();
+                            _connectionState.ObserveStableFrame(readResult.Snapshot!);
+                            _connectionState.SetAvailable();
                             if (!announcedConnection)
                             {
-                                _connectionState.SetAvailable();
                                 if (!writer.TryWrite(TelemetryConnected.Instance))
                                 {
                                     return IracingErrors.TelemetryBufferOverflow;
@@ -221,16 +268,47 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                         break;
                     }
                     case IracingReadStatus.NoData:
+                        if (announcedConnection &&
+                            HasLogicalConnectionTimedOut(lastAcceptedSampleTimestamp))
+                        {
+                            CloseConnection(ref connection);
+                            connectionIdentity = null;
+                            reportedInvalidFrame = false;
+                            recoveringInvalidConnection = false;
+                            lastAcceptedSampleTimestamp = null;
+                            lastTransition = null;
+                            announcedConnection = false;
+                            if (!writer.TryWrite(TelemetryDisconnected.Instance))
+                            {
+                                return IracingErrors.TelemetryBufferOverflow;
+                            }
+
+                            break;
+                        }
+
                         await connection!.WaitForDataAsync(
                             _configuration.Options.DataWaitTimeout,
                             cancellationToken).ConfigureAwait(false);
                         break;
                     case IracingReadStatus.Invalid:
                         CloseConnection(ref connection);
-                        connectionIdentity = null;
+                        recoveringInvalidConnection = true;
                         lastTransition = null;
-                        if (announcedConnection)
+                        if (!reportedInvalidFrame &&
+                            !writer.TryWrite(TelemetryUnavailable.Create(
+                                IracingErrors.InvalidTelemetryFrame)))
                         {
+                            return IracingErrors.TelemetryBufferOverflow;
+                        }
+
+                        reportedInvalidFrame = true;
+                        if (announcedConnection &&
+                            HasLogicalConnectionTimedOut(lastAcceptedSampleTimestamp))
+                        {
+                            connectionIdentity = null;
+                            reportedInvalidFrame = false;
+                            recoveringInvalidConnection = false;
+                            lastAcceptedSampleTimestamp = null;
                             announcedConnection = false;
                             if (!writer.TryWrite(TelemetryDisconnected.Instance))
                             {
@@ -238,16 +316,13 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                             }
                         }
 
-                        if (!writer.TryWrite(TelemetryUnavailable.Create(
-                                IracingErrors.InvalidTelemetryFrame)))
-                        {
-                            return IracingErrors.TelemetryBufferOverflow;
-                        }
-
                         break;
                     case IracingReadStatus.Disconnected:
                         CloseConnection(ref connection);
                         connectionIdentity = null;
+                        reportedInvalidFrame = false;
+                        recoveringInvalidConnection = false;
+                        lastAcceptedSampleTimestamp = null;
                         lastTransition = null;
                         if (announcedConnection)
                         {
@@ -291,6 +366,12 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
             writer.TryComplete(completionException);
         }
     }
+
+    private bool HasLogicalConnectionTimedOut(long? lastAcceptedSampleTimestamp) =>
+        lastAcceptedSampleTimestamp is null ||
+        _configuration.TimeProvider.GetElapsedTime(
+            lastAcceptedSampleTimestamp.Value,
+            _configuration.TimeProvider.GetTimestamp()) >= IracingProtocol.ConnectionTimeout;
 
     private void CloseConnection(ref IracingSharedMemoryConnection? connection)
     {

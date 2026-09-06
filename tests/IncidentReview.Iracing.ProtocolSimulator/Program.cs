@@ -186,6 +186,13 @@ internal sealed class ProtocolSimulator : IDisposable
                 WriteMetadata();
                 Publish();
                 break;
+            case "repair-torn" when parts.Length == 1:
+                WriteMetadata();
+                _tick = checked(_tick + 1);
+                WriteInt32(CurrentBufferDescriptorOffset, _tick);
+                _view.Flush();
+                _dataEvent.Set();
+                break;
             case "disconnect" when parts.Length == 1:
                 WriteInt32(4, 0);
                 _view.Flush();

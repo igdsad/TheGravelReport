@@ -120,26 +120,165 @@ public sealed class TelemetryIntegrationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
     [TestProperty("Requirement", "QR-TST-001")]
-    [DataRow("invalid-bool")]
-    [DataRow("invalid-utf8-session")]
-    [DataRow("malformed")]
-    [DataRow("nan-time")]
-    public async Task ObserveAsyncReportsDisconnectBeforeMalformedDiagnostic(string command)
+    [DataRow("invalid-bool", "publish 6 14.0")]
+    [DataRow("invalid-utf8-session", "identity none")]
+    [DataRow("malformed", "repair")]
+    [DataRow("nan-time", "publish 6 14.0")]
+    public async Task InvalidFrameRetainsConnectionScopedSessionAcrossRecovery(
+        string invalidCommand,
+        string recoveryCommand)
     {
         using var simulator = await SimulatorProcess.StartAsync();
-        var source = CreateSource(simulator);
+        var integration = IracingTestingRegistration.CreateIntegrationContext(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            FastOptions());
+        var source = integration.Telemetry;
         using var cancellationSource = new CancellationTokenSource(EventTimeout);
         await using var observer = source.ObserveAsync(cancellationSource.Token)
             .GetAsyncEnumerator();
 
         _ = await NextAsync(observer);
         _ = await NextAsync(observer);
-        await simulator.SendAsync(command);
+        await simulator.SendAsync("identity none");
+        var before = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
 
-        Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+        await simulator.SendAsync(invalidCommand);
+
         var unavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(await NextAsync(observer));
         Assert.AreEqual(IracingErrorCodes.InvalidTelemetryFrame, unavailable.Error.Code);
+        Assert.IsFalse(integration.ContextReader.Read().IsSuccess);
+
+        await simulator.SendAsync(recoveryCommand);
+        var recovered = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(before.Session.SessionKey, recovered.Session.SessionKey);
+        Assert.AreEqual(
+            SimulatorIdentityScope.ConnectionScoped,
+            recovered.Session.IdentityScope);
+        Assert.IsTrue(integration.ContextReader.Read().IsSuccess);
+
+        await simulator.SendAsync("disconnect");
+        Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+        await simulator.SendAsync("reconnect");
+        Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
+        var reconnected = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreNotEqual(before.Session.SessionKey, reconnected.Session.SessionKey);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task PersistentInvalidFrameEndsLogicalConnectionOnlyAtStaleDeadline()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var timeProvider = new ManualTimeProvider(ObservedAt);
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            timeProvider,
+            FastOptions(eventBufferCapacity: 2));
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        await simulator.SendAsync("identity none");
+        var before = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+
+        await simulator.SendAsync("malformed");
+        var unavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
+            await NextAsync(observer));
+        Assert.AreEqual(IracingErrorCodes.InvalidTelemetryFrame, unavailable.Error.Code);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(31));
+        Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+
+        await simulator.SendAsync("repair");
+        Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
+        var reconnected = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreNotEqual(before.Session.SessionKey, reconnected.Session.SessionKey);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task NoDataAfterInvalidReopenUsesLogicalConnectionStaleDeadline()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var timeProvider = new RecoveryDeadlineTimeProvider(ObservedAt);
+        using var scopedFrameCopied = new ManualResetEventSlim(initialState: false);
+        using var releaseScopedFrame = new ManualResetEventSlim(initialState: false);
+        var copiedFrameCount = 0;
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            timeProvider,
+            FastOptions(eventBufferCapacity: 2),
+            stableFrameCopied: () =>
+            {
+                if (Interlocked.Increment(ref copiedFrameCount) == 2)
+                {
+                    scopedFrameCopied.Set();
+                    if (!releaseScopedFrame.Wait(EventTimeout))
+                    {
+                        throw new TimeoutException(
+                            "The test did not release the scoped-frame observation.");
+                    }
+                }
+            });
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        try
+        {
+            _ = await NextAsync(observer);
+            _ = await NextAsync(observer);
+            await simulator.SendAsync("identity none");
+            var scoped = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+                await NextAsync(observer)).Sample;
+            Assert.AreEqual(
+                SimulatorIdentityScope.ConnectionScoped,
+                scoped.Session.IdentityScope);
+            Assert.IsTrue(scopedFrameCopied.Wait(EventTimeout));
+
+            timeProvider.Advance(TimeSpan.FromSeconds(29));
+            timeProvider.ArmInvalidRecovery();
+            await simulator.SendAsync("malformed");
+            releaseScopedFrame.Set();
+
+            var unavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
+                await NextAsync(observer));
+            Assert.AreEqual(IracingErrorCodes.InvalidTelemetryFrame, unavailable.Error.Code);
+            Assert.IsTrue(timeProvider.WaitForInvalidDeadlineCheck(EventTimeout));
+            Assert.IsTrue(timeProvider.WaitForReopenTimestampCapture(EventTimeout));
+
+            await simulator.SendAsync("repair-torn");
+            timeProvider.Advance(TimeSpan.FromSeconds(2));
+            timeProvider.ReleaseReopenTimestamp();
+
+            Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+        }
+        finally
+        {
+            releaseScopedFrame.Set();
+            timeProvider.ReleaseReopenTimestamp();
+        }
 
         await ((IAsyncDisposable)source).DisposeAsync();
     }
@@ -480,5 +619,77 @@ public sealed class TelemetryIntegrationTests
 
         public void Advance(TimeSpan duration) =>
             Interlocked.Add(ref _timestamp, duration.Ticks);
+    }
+
+    private sealed class RecoveryDeadlineTimeProvider : TimeProvider, IDisposable
+    {
+        private readonly DateTimeOffset _utcNow;
+        private readonly ManualResetEventSlim _invalidDeadlineChecked = new(initialState: false);
+        private readonly ManualResetEventSlim _reopenTimestampCaptured = new(initialState: false);
+        private readonly ManualResetEventSlim _releaseReopenTimestamp = new(initialState: false);
+        private long _timestamp;
+        private int _isArmed;
+        private int _armedTimestampReadCount;
+
+        public RecoveryDeadlineTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow() =>
+            _utcNow.AddTicks(Volatile.Read(ref _timestamp));
+
+        public override long GetTimestamp()
+        {
+            var capturedTimestamp = Volatile.Read(ref _timestamp);
+            if (Volatile.Read(ref _isArmed) == 0)
+            {
+                return capturedTimestamp;
+            }
+
+            var readCount = Interlocked.Increment(ref _armedTimestampReadCount);
+            if (readCount == 1)
+            {
+                _invalidDeadlineChecked.Set();
+            }
+            else if (readCount == 2)
+            {
+                Volatile.Write(ref _isArmed, 0);
+                _reopenTimestampCaptured.Set();
+                if (!_releaseReopenTimestamp.Wait(EventTimeout))
+                {
+                    throw new TimeoutException(
+                        "The test did not release the reopened connection timestamp.");
+                }
+            }
+
+            return capturedTimestamp;
+        }
+
+        public void Advance(TimeSpan duration) =>
+            Interlocked.Add(ref _timestamp, duration.Ticks);
+
+        public void ArmInvalidRecovery()
+        {
+            Interlocked.Exchange(ref _armedTimestampReadCount, 0);
+            Volatile.Write(ref _isArmed, 1);
+        }
+
+        public bool WaitForInvalidDeadlineCheck(TimeSpan timeout) =>
+            _invalidDeadlineChecked.Wait(timeout);
+
+        public bool WaitForReopenTimestampCapture(TimeSpan timeout) =>
+            _reopenTimestampCaptured.Wait(timeout);
+
+        public void ReleaseReopenTimestamp() => _releaseReopenTimestamp.Set();
+
+        public void Dispose()
+        {
+            _invalidDeadlineChecked.Dispose();
+            _reopenTimestampCaptured.Dispose();
+            _releaseReopenTimestamp.Dispose();
+        }
     }
 }
