@@ -63,6 +63,7 @@ internal static class Program
                 .GetRequiredService<IOptions<HostConfiguration>>()
                 .Value;
             IncidentReviewDesktopApplication? desktopApplication = null;
+            Action? prepareDesktopApplication = null;
             using (var startupCancellation = new CancellationTokenSource(configuration.StartupTimeout))
             {
                 var bootstrap = host.Services.GetRequiredService<BootstrapCoordinator>();
@@ -80,9 +81,11 @@ internal static class Program
                             .GetPreferencesAsync(startupCancellation.Token)
                             .GetAwaiter()
                             .GetResult());
-                    desktopApplication = host.Services
+                    var applicationToPrepare = host.Services
                         .GetRequiredService<IncidentReviewDesktopApplication>();
-                    desktopApplication.PrepareForStartup(startupPreferences);
+                    desktopApplication = applicationToPrepare;
+                    prepareDesktopApplication = () =>
+                        applicationToPrepare.PrepareForStartup(startupPreferences);
                 }
             }
 
@@ -95,8 +98,12 @@ internal static class Program
 
             var application = desktopApplication ?? throw new InvalidOperationException(
                 "The desktop application was not prepared for startup.");
+            var prepareApplication = prepareDesktopApplication ?? throw new InvalidOperationException(
+                "The desktop application has no startup preparation step.");
             using var supervisor = RuntimeSupervisor.Attach(runtime, application.Dispatcher);
-            var exitCode = application.Run();
+            var exitCode = DesktopStartupSequence.Run(
+                prepareApplication,
+                application.Run);
             supervisor.BeginExpectedStop();
 
             shutdownCompleted = true;

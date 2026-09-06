@@ -36,4 +36,8 @@
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="IncidentReview.Deliverable.Tests" />
+  </ItemGroup>
 </Project>

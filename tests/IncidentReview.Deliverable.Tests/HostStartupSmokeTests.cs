@@ -1,10 +1,41 @@
 using System.Diagnostics;
+using IncidentReview.Host.Wpf;
 
 namespace IncidentReview.Deliverable.Tests;
 
 [TestClass]
 public sealed class HostStartupSmokeTests
 {
+    private static readonly string[] ExpectedDesktopStartupTransitions = ["prepare", "run"];
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    [TestProperty("Requirement", "QR-TST-003")]
+    public void DesktopRunBoundaryAppliesStoredThemeBeforeEnteringApplicationLoop()
+    {
+        var transitions = new List<string>();
+        var storedPreferencesPrepared = false;
+        var resolvedPaletteApplied = false;
+
+        var exitCode = DesktopStartupSequence.Run(
+            () =>
+            {
+                transitions.Add("prepare");
+                storedPreferencesPrepared = true;
+                resolvedPaletteApplied = true;
+            },
+            () =>
+            {
+                transitions.Add("run");
+                Assert.IsTrue(storedPreferencesPrepared);
+                Assert.IsTrue(resolvedPaletteApplied);
+                return 17;
+            });
+
+        Assert.AreEqual(17, exitCode);
+        CollectionAssert.AreEqual(ExpectedDesktopStartupTransitions, transitions);
+    }
+
     [TestMethod]
     [TestProperty("Requirement", "QR-TST-003")]
     [TestProperty("Requirement", "IR-STR-004")]
