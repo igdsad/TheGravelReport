@@ -7,13 +7,14 @@ public sealed class ReplayApiTests
     [TestProperty("Requirement", "IR-RPY-001")]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "QR-ERR-002")]
-    public void ControllerExposesOnlyCancelableSeekAndPlaybackIntents()
+    public void ControllerExposesPreflightAndSynchronousCancelableDeliveryIntents()
     {
         var methods = typeof(IReplayController).GetMethods();
-        Assert.HasCount(2, methods);
+        Assert.HasCount(3, methods);
 
-        AssertMethod(methods, nameof(IReplayController.SeekAsync), typeof(ReplayPosition));
-        AssertMethod(methods, nameof(IReplayController.SetPlaybackAsync), typeof(ReplayPlayback));
+        AssertValidationMethod(methods);
+        AssertMethod(methods, nameof(IReplayController.Seek), typeof(ReplayPosition));
+        AssertMethod(methods, nameof(IReplayController.SetPlayback), typeof(ReplayPlayback));
     }
 
     [TestMethod]
@@ -32,13 +33,25 @@ public sealed class ReplayApiTests
             exportedTypes);
     }
 
+    private static void AssertValidationMethod(
+        IEnumerable<System.Reflection.MethodInfo> methods)
+    {
+        var method = methods.Single(
+            candidate => candidate.Name == nameof(IReplayController.ValidatePlayback));
+        Assert.AreEqual(typeof(Result), method.ReturnType);
+        var parameters = method.GetParameters();
+        Assert.HasCount(1, parameters);
+        Assert.AreEqual(typeof(ReplayPlayback), parameters[0].ParameterType);
+        Assert.IsFalse(parameters[0].IsOptional);
+    }
+
     private static void AssertMethod(
         IEnumerable<System.Reflection.MethodInfo> methods,
         string methodName,
         Type intentType)
     {
         var method = methods.Single(candidate => candidate.Name == methodName);
-        Assert.AreEqual(typeof(Task<Result>), method.ReturnType);
+        Assert.AreEqual(typeof(Result), method.ReturnType);
 
         var parameters = method.GetParameters();
         Assert.HasCount(2, parameters);
