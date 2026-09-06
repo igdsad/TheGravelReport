@@ -442,6 +442,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 {
                     _activeSession = null;
                     _checkpoint = null;
+                    _currentSession = null;
                     _onTrackState = OnTrackState.Unknown;
                     _replayDescriptor = null;
                     _ownedReviewActive = false;
@@ -455,6 +456,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             case TelemetrySampleObserved observed:
                 lock (_stateLock)
                 {
+                    if (!SampleMatchesCurrentSession(observed.Sample.Session))
+                    {
+                        _currentSession = null;
+                    }
+
                     _onTrackState = observed.Sample.OnTrackState;
                     if (_onTrackState == OnTrackState.OnTrack)
                     {
@@ -476,12 +482,17 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         TelemetrySample sample,
         CancellationToken cancellationToken)
     {
+        bool suppressLiveProcessing;
         lock (_stateLock)
         {
-            if (_ownedReviewActive && sample.OnTrackState != OnTrackState.OnTrack)
-            {
-                return false;
-            }
+            suppressLiveProcessing = _ownedReviewActive &&
+                sample.OnTrackState != OnTrackState.OnTrack &&
+                sample.Session.Mode == SessionMode.Live;
+        }
+
+        if (suppressLiveProcessing)
+        {
+            return false;
         }
 
         if (!await CommitPendingTransitionAsync(cancellationToken).ConfigureAwait(false))
@@ -724,6 +735,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 _activeSession = null;
                 _checkpoint = null;
                 _currentSession = null;
+                _replayDescriptor = null;
             }
         }
 
@@ -783,9 +795,30 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         activeSession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
         replaySession.Mode == SessionMode.Replay &&
         replaySession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
-        activeSession.Simulator == replaySession.Simulator &&
-        activeSession.SessionKey == replaySession.SessionKey &&
-        activeSession.SessionNumber == replaySession.SessionNumber;
+        IsSameSimulatorSession(activeSession, replaySession);
+
+    private bool SampleMatchesCurrentSession(SimulatorSessionDescriptor sampleSession)
+    {
+        if (_currentSession is null)
+        {
+            return false;
+        }
+
+        var activeSession = _activeSession;
+        return (activeSession is not null &&
+                activeSession.Id == _currentSession &&
+                IsSameSimulatorSession(activeSession.Descriptor, sampleSession)) ||
+            (_replayDescriptor is not null &&
+                IsSameSimulatorSession(_replayDescriptor, sampleSession));
+    }
+
+    private static bool IsSameSimulatorSession(
+        SimulatorSessionDescriptor first,
+        SimulatorSessionDescriptor second) =>
+        first.IdentityScope == second.IdentityScope &&
+        first.Simulator == second.Simulator &&
+        first.SessionKey == second.SessionKey &&
+        first.SessionNumber == second.SessionNumber;
 
     private void PublishClearedSession(SessionIdentity? previousSession)
     {

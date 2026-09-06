@@ -64,6 +64,9 @@ public sealed class IncidentReviewApplicationWorkflowTests
         await WaitUntilAsync(async () =>
             (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
             ReviewServiceStatus.WaitingForSimulator);
+        var disconnectedCurrent = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsFalse(disconnectedCurrent.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.NoCurrentSession, disconnectedCurrent.Error!.Code);
         await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
         await host.Telemetry.PublishAsync(CreateSample(
             counter: 2,
@@ -971,6 +974,68 @@ public sealed class IncidentReviewApplicationWorkflowTests
             scope: SimulatorIdentityScope.Durable,
             onTrackState: OnTrackState.OnTrack));
         await WaitUntilAsync(() => store.RecordAttemptCount == 1);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public async Task OwnedReviewStillProcessesReplaySessionTransitions()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 2_000));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var incident = host.Store.LastRecord!.Incident;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_100,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+        Assert.IsTrue(
+            (await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None)).IsSuccess);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_200,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_300,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(incident.Session, current.Value.Id);
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+
+        var secondReview = await host.Service.ReviewIncidentAsync(
+            incident.Id,
+            CancellationToken.None);
+
+        Assert.IsTrue(secondReview.IsSuccess);
+        Assert.AreEqual(2, host.Replay.SeekCount);
+        Assert.AreEqual(2, host.Replay.PlaybackCount);
     }
 
     [TestMethod]
