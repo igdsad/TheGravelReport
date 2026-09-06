@@ -14,19 +14,16 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
 
     private readonly object _gate = new();
     private readonly Func<object?> _readAppsUseLightTheme;
-    private readonly Action<UserPreferenceChangedEventHandler> _unsubscribe;
-    private readonly UserPreferenceChangedEventHandler _preferenceChangedHandler;
+    private IDisposable? _subscription;
     private EventHandler<ResolvedThemeChangedEventArgs>? _themeChanged;
     private ResolvedTheme _currentTheme = ResolvedTheme.Light;
-    private bool _isSubscribed;
     private bool _isDisposed;
 
     /// <summary>Creates the production registry and SystemEvents observer.</summary>
     public WindowsDesktopThemeSource()
         : this(
             ReadAppsUseLightTheme,
-            static handler => SystemEvents.UserPreferenceChanged += handler,
-            static handler => SystemEvents.UserPreferenceChanged -= handler)
+            SubscribeToUserPreferenceChanges)
     {
     }
 
@@ -36,17 +33,13 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
     /// </summary>
     public WindowsDesktopThemeSource(
         Func<object?> readAppsUseLightTheme,
-        Action<UserPreferenceChangedEventHandler> subscribe,
-        Action<UserPreferenceChangedEventHandler> unsubscribe)
+        Func<Action, IDisposable> subscribe)
     {
         ArgumentNullException.ThrowIfNull(readAppsUseLightTheme);
         ArgumentNullException.ThrowIfNull(subscribe);
-        ArgumentNullException.ThrowIfNull(unsubscribe);
 
         _readAppsUseLightTheme = readAppsUseLightTheme;
-        _unsubscribe = unsubscribe;
-        _preferenceChangedHandler = OnUserPreferenceChanged;
-        _isSubscribed = TrySubscribe(subscribe, _preferenceChangedHandler);
+        _subscription = TrySubscribe(subscribe, OnUserPreferenceChanged);
         lock (_gate)
         {
             // SystemEvents owns a reference as soon as subscription succeeds, so the
@@ -88,7 +81,7 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
 
     public void Dispose()
     {
-        var unsubscribe = false;
+        IDisposable? subscription = null;
         lock (_gate)
         {
             if (_isDisposed)
@@ -97,21 +90,19 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
             }
 
             _isDisposed = true;
-            unsubscribe = _isSubscribed;
-            _isSubscribed = false;
+            subscription = _subscription;
+            _subscription = null;
             _themeChanged = null;
         }
 
-        if (unsubscribe)
+        if (subscription is not null)
         {
-            TryUnsubscribe(_unsubscribe, _preferenceChangedHandler);
+            TryDispose(subscription);
         }
     }
 
-    private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+    private void OnUserPreferenceChanged()
     {
-        _ = sender;
-        _ = e;
         var observed = ReadCurrentThemeSafely();
         EventHandler<ResolvedThemeChangedEventArgs>? changed;
         lock (_gate)
@@ -165,32 +156,37 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
             RegistryValueOptions.DoNotExpandEnvironmentNames);
     }
 
-    private static bool TrySubscribe(
-        Action<UserPreferenceChangedEventHandler> subscribe,
-        UserPreferenceChangedEventHandler handler)
+    private static IDisposable? TrySubscribe(
+        Func<Action, IDisposable> subscribe,
+        Action handler)
     {
         try
         {
-            subscribe(handler);
-            return true;
+            return subscribe(handler);
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return null;
         }
         catch (ExternalException)
         {
-            return false;
+            return null;
         }
     }
 
-    private static void TryUnsubscribe(
-        Action<UserPreferenceChangedEventHandler> unsubscribe,
-        UserPreferenceChangedEventHandler handler)
+    private static IDisposable SubscribeToUserPreferenceChanges(Action notify)
+    {
+        UserPreferenceChangedEventHandler handler = (_, _) => notify();
+        SystemEvents.UserPreferenceChanged += handler;
+        return new CallbackSubscription(
+            () => SystemEvents.UserPreferenceChanged -= handler);
+    }
+
+    private static void TryDispose(IDisposable subscription)
     {
         try
         {
-            unsubscribe(handler);
+            subscription.Dispose();
         }
         catch (InvalidOperationException)
         {
@@ -198,5 +194,17 @@ public sealed class WindowsDesktopThemeSource : IDesktopThemeSource
         catch (ExternalException)
         {
         }
+    }
+
+    private sealed class CallbackSubscription : IDisposable
+    {
+        private Action? _unsubscribe;
+
+        public CallbackSubscription(Action unsubscribe)
+        {
+            _unsubscribe = unsubscribe;
+        }
+
+        public void Dispose() => Interlocked.Exchange(ref _unsubscribe, null)?.Invoke();
     }
 }

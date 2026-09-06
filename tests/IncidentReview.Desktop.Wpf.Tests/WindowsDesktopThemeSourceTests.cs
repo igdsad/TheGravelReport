@@ -1,5 +1,3 @@
-using Microsoft.Win32;
-
 namespace IncidentReview.Desktop.Wpf.Tests;
 
 [TestClass]
@@ -13,8 +11,7 @@ public sealed class WindowsDesktopThemeSourceTests
         object? value = "0";
         using var source = new WindowsDesktopThemeSource(
             () => value,
-            events.Subscribe,
-            events.Unsubscribe);
+            events.Subscribe);
 
         Assert.AreEqual(ResolvedTheme.Light, source.CurrentTheme);
 
@@ -34,8 +31,7 @@ public sealed class WindowsDesktopThemeSourceTests
         var events = new FakePreferenceEvents();
         using var source = new WindowsDesktopThemeSource(
             static () => throw new UnauthorizedAccessException("Test failure."),
-            events.Subscribe,
-            events.Unsubscribe);
+            events.Subscribe);
 
         Assert.AreEqual(ResolvedTheme.Light, source.CurrentTheme);
     }
@@ -48,8 +44,7 @@ public sealed class WindowsDesktopThemeSourceTests
         object? value = 1;
         using var source = new WindowsDesktopThemeSource(
             () => value,
-            events.Subscribe,
-            events.Unsubscribe);
+            events.Subscribe);
         var observed = new List<ResolvedTheme>();
         source.ThemeChanged += (_, args) => observed.Add(args.Theme);
 
@@ -74,8 +69,7 @@ public sealed class WindowsDesktopThemeSourceTests
         object? value = 1;
         var source = new WindowsDesktopThemeSource(
             () => value,
-            events.Subscribe,
-            events.Unsubscribe);
+            events.Subscribe);
         var changeCount = 0;
         source.ThemeChanged += (_, _) => changeCount++;
 
@@ -92,27 +86,40 @@ public sealed class WindowsDesktopThemeSourceTests
 
     private sealed class FakePreferenceEvents
     {
-        private readonly List<UserPreferenceChangedEventHandler> _handlers = [];
+        private readonly List<Action> _handlers = [];
 
         public int SubscriptionCount => _handlers.Count;
 
         public int UnsubscribeCount { get; private set; }
 
-        public void Subscribe(UserPreferenceChangedEventHandler handler) => _handlers.Add(handler);
-
-        public void Unsubscribe(UserPreferenceChangedEventHandler handler)
+        public IDisposable Subscribe(Action handler)
         {
-            _ = _handlers.Remove(handler);
-            UnsubscribeCount++;
+            _handlers.Add(handler);
+            return new FakeSubscription(() =>
+            {
+                _ = _handlers.Remove(handler);
+                UnsubscribeCount++;
+            });
         }
 
         public void Raise()
         {
-            var args = new UserPreferenceChangedEventArgs(UserPreferenceCategory.General);
             foreach (var handler in _handlers.ToArray())
             {
-                handler(this, args);
+                handler();
             }
+        }
+
+        private sealed class FakeSubscription : IDisposable
+        {
+            private Action? _unsubscribe;
+
+            public FakeSubscription(Action unsubscribe)
+            {
+                _unsubscribe = unsubscribe;
+            }
+
+            public void Dispose() => Interlocked.Exchange(ref _unsubscribe, null)?.Invoke();
         }
     }
 }
