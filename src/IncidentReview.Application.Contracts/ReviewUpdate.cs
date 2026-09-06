@@ -56,4 +56,13 @@ public abstract class ReviewUpdate
         public SessionIdentity Session { get; }
         public IncidentId Incident { get; }
     }
+
+    /// <summary>Indicates that durable user preferences changed.</summary>
+    public sealed class PreferencesChanged : ReviewUpdate
+    {
+        /// <summary>Initializes a preference-change notification.</summary>
+        public PreferencesChanged()
+        {
+        }
+    }
 }

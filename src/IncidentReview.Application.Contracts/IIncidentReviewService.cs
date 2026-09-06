@@ -8,6 +8,8 @@ public interface IIncidentReviewService
 {
     public Task<Result<ReviewServiceStatus>> GetStatusAsync(CancellationToken cancellationToken);
 
+    public Task<Result<ReviewSnapshot>> GetSnapshotAsync(CancellationToken cancellationToken);
+
     public Task<Result<ReviewSession>> GetCurrentSessionAsync(CancellationToken cancellationToken);
 
     public Task<Result<IReadOnlyList<SessionSummary>>> ListSessionsAsync(
@@ -16,6 +18,11 @@ public interface IIncidentReviewService
 
     public Task<Result<ReviewSession>> GetSessionAsync(
         SessionIdentity session,
+        CancellationToken cancellationToken);
+
+    public Task<Result> ReviewIncidentAsync(
+        IncidentId incidentId,
+        ReplayOffset offset,
         CancellationToken cancellationToken);
 
     public Task<Result> ReviewIncidentAsync(IncidentId incidentId, CancellationToken cancellationToken);

@@ -13,9 +13,12 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 {
     private static readonly TimeSpan InitialPersistenceRetryDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaximumPersistenceRetryDelay = TimeSpan.FromSeconds(2);
+    private static readonly ReplayContext EmptyReplayContext =
+        ReplayContext.TryCreate(null, [], null).Value;
 
     private readonly ITelemetrySource _telemetrySource;
     private readonly IReplayController _replayController;
+    private readonly IReplayContextReader _replayContextReader;
     private readonly IStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly object _stateLock = new();
@@ -34,6 +37,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private bool _stopRequested;
     private bool _reviewCommandInProgress;
     private bool _ownedReviewActive;
+    private long _snapshotRevision;
     private ReviewServiceStatus _status = ReviewServiceStatus.Stopped;
     private OnTrackState _onTrackState = OnTrackState.Unknown;
     private Error? _lastUnavailableError;
@@ -46,11 +50,13 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     public IncidentReviewApplication(
         ITelemetrySource telemetrySource,
         IReplayController replayController,
+        IReplayContextReader replayContextReader,
         IStore store,
         TimeProvider timeProvider)
     {
         _telemetrySource = telemetrySource;
         _replayController = replayController;
+        _replayContextReader = replayContextReader;
         _store = store;
         _timeProvider = timeProvider;
     }
@@ -124,6 +130,81 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         }
     }
 
+    public async Task<Result<ReviewSnapshot>> GetSnapshotAsync(
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var anchor = CaptureSnapshotAnchor();
+
+            ReviewSession? activeSession = null;
+            if (anchor.CurrentSession is not null)
+            {
+                var sessionResult = await _store.QueryAsync(
+                    new GetSessionDetails(anchor.CurrentSession),
+                    cancellationToken).ConfigureAwait(false);
+                if (!sessionResult.IsSuccess)
+                {
+                    if (!IsSnapshotAnchorCurrent(anchor))
+                    {
+                        continue;
+                    }
+
+                    return Result<ReviewSnapshot>.Failure(sessionResult.Error!);
+                }
+
+                if (!sessionResult.Value.IsFound)
+                {
+                    if (!IsSnapshotAnchorCurrent(anchor))
+                    {
+                        continue;
+                    }
+
+                    return Result<ReviewSnapshot>.Failure(ApplicationErrors.SessionNotFound);
+                }
+
+                activeSession = MapSession(sessionResult.Value.Value!);
+            }
+
+            var preferences = await _store.QueryAsync(GetPreferences.Instance, cancellationToken)
+                .ConfigureAwait(false);
+            if (!preferences.IsSuccess)
+            {
+                if (!IsSnapshotAnchorCurrent(anchor))
+                {
+                    continue;
+                }
+
+                return Result<ReviewSnapshot>.Failure(preferences.Error!);
+            }
+
+            var exposeReplayContext = anchor.Status is
+                ReviewServiceStatus.Connected or ReviewServiceStatus.Unavailable;
+            var replayContextResult = exposeReplayContext
+                ? _replayContextReader.Read()
+                : Result<ReplayContext>.Success(EmptyReplayContext);
+
+            if (!IsSnapshotAnchorCurrent(anchor))
+            {
+                continue;
+            }
+
+            var context = replayContextResult.IsSuccess
+                ? replayContextResult.Value
+                : EmptyReplayContext;
+            return Result<ReviewSnapshot>.Success(ReviewSnapshot.Create(
+                anchor.Revision,
+                anchor.Status,
+                anchor.StatusError,
+                activeSession,
+                preferences.Value,
+                context.DriverDisplayName,
+                context.CameraGroups,
+                context.CurrentCameraGroup));
+        }
+    }
+
     public async Task<Result<ReviewSession>> GetCurrentSessionAsync(
         CancellationToken cancellationToken)
     {
@@ -181,9 +262,27 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
     public async Task<Result> ReviewIncidentAsync(
         IncidentId incidentId,
+        ReplayOffset offset,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(incidentId);
+        ArgumentNullException.ThrowIfNull(offset);
+        return await ReviewIncidentCoreAsync(incidentId, offset, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<Result> ReviewIncidentAsync(
+        IncidentId incidentId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(incidentId);
+        return ReviewIncidentCoreAsync(incidentId, offset: null, cancellationToken);
+    }
+
+    private async Task<Result> ReviewIncidentCoreAsync(
+        IncidentId incidentId,
+        ReplayOffset? offset,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         var reviewArmed = false;
         var seekAccepted = false;
@@ -225,11 +324,17 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
 
             var stored = incident.Value.Value!;
-            var targetMilliseconds = Math.Max(
-                0,
-                stored.Position.SessionTime.Milliseconds - preferences.Value.ReplayLeadInMilliseconds);
-            var targetTime = SessionTime.TryCreateMilliseconds(targetMilliseconds).Value;
-            var target = ReplayPosition.TryCreate(stored.Position.SessionNumber, targetTime).Value;
+            var effectiveOffset = offset ?? ReplayOffset.TryCreateMilliseconds(
+                -preferences.Value.ReplayLeadInMilliseconds).Value;
+            var targetTime = effectiveOffset.ApplyTo(stored.Position.SessionTime);
+            if (!targetTime.IsSuccess)
+            {
+                return Result.Failure(targetTime.Error!);
+            }
+
+            var target = ReplayPosition.TryCreate(
+                stored.Position.SessionNumber,
+                targetTime.Value).Value;
             var playback = preferences.Value.AutoPause
                 ? ReplayPlayback.Paused
                 : ReplayPlayback.TryCreatePlaying(preferences.Value.PlaybackSpeed).Value;
@@ -375,9 +480,15 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
         }
 
-        return await ExecuteWithReconciliationAsync(
+        var result = await ExecuteWithReconciliationAsync(
             UpdatePreferences.Create(preferences, Now()),
             cancellationToken).ConfigureAwait(false);
+        if (result.IsSuccess)
+        {
+            Publish(new ReviewUpdate.PreferencesChanged());
+        }
+
+        return result;
     }
 
     public IAsyncEnumerable<ReviewUpdate> ObserveUpdatesAsync(CancellationToken cancellationToken) =>
@@ -1000,7 +1111,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         lock (_stateLock)
         {
             if (_status != ReviewServiceStatus.Unavailable ||
-                _lastUnavailableError?.Code != error.Code)
+                _lastUnavailableError != error)
             {
                 _status = ReviewServiceStatus.Unavailable;
                 _lastUnavailableError = error;
@@ -1016,15 +1127,37 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
     private void Publish(ReviewUpdate update)
     {
-        if (!_updates.Writer.TryWrite(update))
+        lock (_stateLock)
         {
-            lock (_stateLock)
+            _snapshotRevision = checked(_snapshotRevision + 1);
+            if (!_updates.Writer.TryWrite(update) && !_stopRequested)
             {
-                if (!_stopRequested)
-                {
-                    throw new InvalidOperationException("The review-update stream is closed.");
-                }
+                throw new InvalidOperationException("The review-update stream is closed.");
             }
+        }
+    }
+
+    private SnapshotAnchor CaptureSnapshotAnchor()
+    {
+        lock (_stateLock)
+        {
+            return new SnapshotAnchor(
+                _snapshotRevision,
+                _status,
+                _lastUnavailableError,
+                _currentSession);
+        }
+    }
+
+    private bool IsSnapshotAnchorCurrent(SnapshotAnchor anchor)
+    {
+        lock (_stateLock)
+        {
+            return anchor == new SnapshotAnchor(
+                _snapshotRevision,
+                _status,
+                _lastUnavailableError,
+                _currentSession);
         }
     }
 
@@ -1036,9 +1169,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             _lastUnavailableError = null;
             _ownedReviewActive = false;
             _replayDescriptor = null;
+            _snapshotRevision = checked(_snapshotRevision + 1);
+            _ = _updates.Writer.TryWrite(
+                ReviewUpdate.StatusChanged.Create(ReviewServiceStatus.Stopped));
         }
 
-        _ = _updates.Writer.TryWrite(ReviewUpdate.StatusChanged.Create(ReviewServiceStatus.Stopped));
         _updates.Writer.TryComplete();
         _completion.TrySetResult();
     }
@@ -1047,4 +1182,10 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         IStoreCommand Command,
         IncidentCheckpoint NextCheckpoint,
         StoredIncident? Incident);
+
+    private sealed record SnapshotAnchor(
+        long Revision,
+        ReviewServiceStatus Status,
+        Error? StatusError,
+        SessionIdentity? CurrentSession);
 }

@@ -18,6 +18,144 @@ public sealed class IncidentReviewApplicationWorkflowTests
         ["seek", "focus-player", "set-playback"];
     private static readonly string[] SeekOnlyCommandOrder = ["seek"];
     private static readonly string[] SeekAndFocusCommandOrder = ["seek", "focus-player"];
+    private static readonly string[] ReplayCameraGroups = ["Cockpit", "TV1"];
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    public async Task SnapshotRetainsExactUnavailableErrorWithoutAnUpdateSubscription()
+    {
+        var context = new RecordingReplayContextReader
+        {
+            ContextResult = Result<ReplayContext>.Failure(TestError),
+        };
+        await using var host = new TestHost(replayContext: context);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var snapshot = await host.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.AreEqual(ReviewServiceStatus.Unavailable, snapshot.Value.Status);
+        Assert.AreEqual(TestError, snapshot.Value.StatusError);
+        Assert.AreEqual(TestError.Message, snapshot.Value.StatusError!.Message);
+        Assert.IsNull(snapshot.Value.DriverDisplayName);
+        Assert.IsEmpty(snapshot.Value.CameraGroups);
+        Assert.AreEqual(1, context.ReadCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    public async Task SnapshotLoadsCurrentSessionPreferencesAndTransientReplayContextTogether()
+    {
+        var preferences = UserPreferences.TryCreateMilliseconds(
+            replayLeadInMilliseconds: 4_000,
+            playbackSpeed: 0.5,
+            autoPause: false,
+            preferredCamera: "TV1").Value;
+        var store = new StatefulStore { Preferences = preferences };
+        var context = new RecordingReplayContextReader
+        {
+            ContextResult = Result<ReplayContext>.Success(
+                ReplayContext.TryCreate("Eric Sigurdson", ["Cockpit", "TV1"], "TV1").Value),
+        };
+        await using var host = new TestHost(store, replayContext: context);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => store.BaselineCount == 1);
+
+        var snapshot = await host.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.IsGreaterThan(0, snapshot.Value.Revision);
+        Assert.AreEqual(ReviewServiceStatus.Connected, snapshot.Value.Status);
+        Assert.IsNull(snapshot.Value.StatusError);
+        Assert.AreEqual(store.Session!.Id, snapshot.Value.ActiveSession!.Id);
+        Assert.AreSame(preferences, snapshot.Value.Preferences);
+        Assert.AreEqual("Eric Sigurdson", snapshot.Value.DriverDisplayName);
+        CollectionAssert.AreEqual(
+            ReplayCameraGroups,
+            snapshot.Value.CameraGroups.ToArray());
+        Assert.AreEqual("TV1", snapshot.Value.CurrentCameraGroup);
+        Assert.AreEqual(1, context.ReadCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task SnapshotClearsTransientReplayContextWhenDisconnected()
+    {
+        var context = new RecordingReplayContextReader
+        {
+            ContextResult = Result<ReplayContext>.Success(
+                ReplayContext.TryCreate("Eric Sigurdson", ["TV1"], "TV1").Value),
+        };
+        await using var host = new TestHost(replayContext: context);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(TelemetryDisconnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.WaitingForSimulator);
+
+        var snapshot = await host.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.AreEqual(ReviewServiceStatus.WaitingForSimulator, snapshot.Value.Status);
+        Assert.IsNull(snapshot.Value.DriverDisplayName);
+        Assert.IsEmpty(snapshot.Value.CameraGroups);
+        Assert.IsNull(snapshot.Value.CurrentCameraGroup);
+        Assert.AreEqual(0, context.ReadCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task SnapshotRetriesWhenApplicationStateChangesDuringItsStoreRead()
+    {
+        var store = new StatefulStore { BlockPreferencesQuery = true };
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+
+        var pendingSnapshot = host.Service.GetSnapshotAsync(CancellationToken.None);
+        await store.PreferencesQueryEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(SecondTestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+        store.ReleasePreferencesQuery();
+
+        var snapshot = await pendingSnapshot;
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.AreEqual(ReviewServiceStatus.Unavailable, snapshot.Value.Status);
+        Assert.AreEqual(SecondTestError, snapshot.Value.StatusError);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task SuccessfulPreferenceUpdateAdvancesTheCompleteSnapshot()
+    {
+        await using var host = new TestHost();
+        var before = await host.Service.GetSnapshotAsync(CancellationToken.None);
+        var updated = UserPreferences.TryCreateMilliseconds(
+            replayLeadInMilliseconds: 2_000,
+            playbackSpeed: 0.5,
+            autoPause: false,
+            preferredCamera: "TV1").Value;
+
+        var update = await host.Service.UpdatePreferencesAsync(updated, CancellationToken.None);
+        var after = await host.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(update.IsSuccess);
+        Assert.IsTrue(before.IsSuccess);
+        Assert.IsTrue(after.IsSuccess);
+        Assert.IsGreaterThan(before.Value.Revision, after.Value.Revision);
+        Assert.AreSame(updated, after.Value.Preferences);
+    }
 
     [TestMethod]
     [TestProperty("Requirement", "IR-INC-001")]
@@ -564,6 +702,47 @@ public sealed class IncidentReviewApplicationWorkflowTests
             host.Replay.DeliveredCommands.ToArray());
         Assert.IsNull(store.LastMarkedReviewed);
         Assert.AreEqual(IncidentReviewStatus.Pending, store.GetIncidentStatus(incident.Id));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-002")]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [DataRow(1_000L, -2_000L, 0L)]
+    [DataRow(5_000L, -2_000L, 3_000L)]
+    [DataRow(5_000L, 0L, 5_000L)]
+    [DataRow(5_000L, 2_000L, 7_000L)]
+    public async Task ExplicitReplayOffsetTargetsTheRequestedMoment(
+        long incidentMilliseconds,
+        long offsetMilliseconds,
+        long expectedMilliseconds)
+    {
+        var incident = CreateStoredIncident(incidentMilliseconds);
+        var store = new StatefulStore
+        {
+            Preferences = UserPreferences.TryCreateMilliseconds(
+                replayLeadInMilliseconds: 9_000,
+                playbackSpeed: 0.5,
+                autoPause: false,
+                preferredCamera: "TV1").Value,
+        };
+        SeedReviewIncident(store, incident);
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await MakeReplayAvailableAsync(host);
+
+        var result = await host.Service.ReviewIncidentAsync(
+            incident.Id,
+            ReplayOffset.TryCreateMilliseconds(offsetMilliseconds).Value,
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(expectedMilliseconds, host.Replay.LastSeek!.SessionTime.Milliseconds);
+        Assert.AreEqual("TV1", host.Replay.LastPreferredCamera);
+        Assert.IsFalse(host.Replay.LastPlayback!.IsPaused);
+        Assert.AreEqual(0.5, host.Replay.LastPlayback.PlaybackRate);
+        CollectionAssert.AreEqual(
+            SuccessfulReplayCommandOrder,
+            host.Replay.DeliveredCommands.ToArray());
     }
 
     [TestMethod]
@@ -1309,14 +1488,17 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public TestHost(
             StatefulStore? store = null,
             RecordingReplayController? replay = null,
+            RecordingReplayContextReader? replayContext = null,
             TimeProvider? timeProvider = null)
         {
             Store = store ?? new StatefulStore();
             Replay = replay ?? new RecordingReplayController();
+            ReplayContext = replayContext ?? new RecordingReplayContextReader();
             Telemetry = new ControllableTelemetrySource();
             var services = new ServiceCollection();
             _ = services.AddSingleton<ITelemetrySource>(Telemetry);
             _ = services.AddSingleton<IReplayController>(Replay);
+            _ = services.AddSingleton<IReplayContextReader>(ReplayContext);
             _ = services.AddSingleton<IStore>(Store);
             _ = services.AddSingleton(timeProvider ?? new FixedTimeProvider(FixedNow));
             _ = services.AddIncidentReviewApplication();
@@ -1329,6 +1511,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             DateTimeOffset.FromUnixTimeMilliseconds(20_000);
         public StatefulStore Store { get; }
         public RecordingReplayController Replay { get; }
+        public RecordingReplayContextReader ReplayContext { get; }
         public ControllableTelemetrySource Telemetry { get; }
         public IApplicationRuntime Runtime { get; }
         public IIncidentReviewService Service { get; }
@@ -1452,6 +1635,20 @@ public sealed class IncidentReviewApplicationWorkflowTests
         }
     }
 
+    private sealed class RecordingReplayContextReader : IReplayContextReader
+    {
+        public Result<ReplayContext> ContextResult { get; init; } =
+            Result<ReplayContext>.Success(ReplayContext.TryCreate(null, [], null).Value);
+
+        public int ReadCount { get; private set; }
+
+        public Result<ReplayContext> Read()
+        {
+            ReadCount++;
+            return ContextResult;
+        }
+    }
+
     private sealed class StatefulStore : IStore
     {
         private readonly object _lock = new();
@@ -1464,12 +1661,17 @@ public sealed class IncidentReviewApplicationWorkflowTests
         private int _sessionLookupCount;
         private int _operationOutcomeQueryCount;
         private int _preferencesExecuteCount;
-
-        public UserPreferences Preferences { get; init; } = UserPreferences.TryCreateMilliseconds(
+        private UserPreferences _preferences = UserPreferences.TryCreateMilliseconds(
             replayLeadInMilliseconds: 3_000,
             playbackSpeed: 1,
             autoPause: true,
             preferredCamera: null).Value;
+
+        public UserPreferences Preferences
+        {
+            get => _preferences;
+            init => _preferences = value;
+        }
         public IndeterminateRecordBehavior RecordBehavior { get; init; }
         public int TransientRecordFailures { get; init; }
         public bool ReportPreferencesIndeterminate { get; init; }
@@ -1851,6 +2053,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
             Interlocked.Increment(ref _preferencesExecuteCount);
             if (!ReportPreferencesIndeterminate)
             {
+                _preferences = command.Preferences;
+                _committedOperations.Add(command.OperationId);
                 return Result.Success();
             }
 
