@@ -1,0 +1,54 @@
+# .NET build and package output
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+*.nupkg
+*.snupkg
+
+# Test and coverage output
+*.trx
+*.coverage
+*.coveragexml
+*.cobertura.xml
+coverage/
+
+# IDE and user-specific state
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Local application data and diagnostics
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+logs/
+*.log
+
+# Reviewed binary database fixtures are source-controlled test inputs.
+!test-assets/databases/
+!test-assets/databases/**
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.snk
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Codex workspace scratch/output
+outputs/
+work/

@@ -1,0 +1,32 @@
+* text=auto
+
+# Normalize source and repository policy files across Windows and CI.
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.slnx text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.json text eol=lf
+*.config text eol=lf
+*.editorconfig text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.sql text eol=lf
+*.xml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary test fixtures and artifacts must never be line-ending transformed.
+*.bmp binary
+*.db binary
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.pdf binary
+*.png binary
+*.sqlite binary
+*.sqlite3 binary
+*.zip binary
