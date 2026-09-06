@@ -33,19 +33,28 @@ public static class SqliteTestingRegistration
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(migrations);
 
-        var gate = new SqliteStoreGate();
-        var store = new SqliteStore(
+        return CreateStoreCore(
             options,
-            gate,
-            new SqliteTestCommitBoundary(commitMode),
-            new SqliteTestTransactionCleanup(cleanupMode),
-            NullLogger<SqliteStore>.Instance);
-        var initializer = new SqliteStoreInitializer(
+            commitMode,
+            cleanupMode,
+            SqliteStoreExecutionCheckpoint.Instance,
+            migrations);
+    }
+
+    /// <summary>Creates a store that cancels the supplied source immediately after operation lookup.</summary>
+    public static SqliteTestStoreContext CreateStoreCancellingAfterOperationLookup(
+        SqliteStoreOptions options,
+        CancellationTokenSource cancellationSource)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(cancellationSource);
+
+        return CreateStoreCore(
             options,
-            CreateScripts(migrations),
-            gate,
-            NullLogger<SqliteStoreInitializer>.Instance);
-        return new SqliteTestStoreContext(store, initializer, store);
+            SqliteTestCommitMode.Normal,
+            SqliteTestCleanupMode.Normal,
+            new CancellationExecutionCheckpoint(cancellationSource),
+            Array.Empty<SqliteTestMigration>());
     }
 
     private static SqlScript[] CreateScripts(SqliteTestMigration[] migrations)
@@ -57,5 +66,40 @@ public static class SqliteTestingRegistration
         }).ToArray();
 
         return scripts;
+    }
+
+    private static SqliteTestStoreContext CreateStoreCore(
+        SqliteStoreOptions options,
+        SqliteTestCommitMode commitMode,
+        SqliteTestCleanupMode cleanupMode,
+        ISqliteStoreExecutionCheckpoint executionCheckpoint,
+        SqliteTestMigration[] migrations)
+    {
+        var gate = new SqliteStoreGate();
+        var store = new SqliteStore(
+            options,
+            gate,
+            new SqliteTestCommitBoundary(commitMode),
+            new SqliteTestTransactionCleanup(cleanupMode),
+            executionCheckpoint,
+            NullLogger<SqliteStore>.Instance);
+        var initializer = new SqliteStoreInitializer(
+            options,
+            CreateScripts(migrations),
+            gate,
+            NullLogger<SqliteStoreInitializer>.Instance);
+        return new SqliteTestStoreContext(store, initializer, store);
+    }
+
+    private sealed class CancellationExecutionCheckpoint : ISqliteStoreExecutionCheckpoint
+    {
+        private readonly CancellationTokenSource _cancellationSource;
+
+        public CancellationExecutionCheckpoint(CancellationTokenSource cancellationSource)
+        {
+            _cancellationSource = cancellationSource;
+        }
+
+        public void AfterOperationLookup() => _cancellationSource.Cancel();
     }
 }

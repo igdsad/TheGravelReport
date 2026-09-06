@@ -20,9 +20,7 @@ public static class SqliteStoreServiceCollectionExtensions
         _ = services.AddSingleton<SqliteStoreGate>();
         _ = services.AddSingleton<ISqliteCommitBoundary>(SqliteCommitBoundary.Instance);
         _ = services.AddSingleton<ISqliteTransactionCleanup>(SqliteTransactionCleanup.Instance);
-        _ = services.AddSingleton<SqliteStore>();
-        _ = services.AddSingleton<IStore>(static provider =>
-            provider.GetRequiredService<SqliteStore>());
+        _ = services.AddSingleton<IStore, SqliteStore>();
         _ = services.AddSingleton<IStoreInitializer>(provider =>
             new SqliteStoreInitializer(
                 options,

@@ -11,6 +11,24 @@ using Microsoft.Extensions.Logging;
 
 namespace IncidentReview.Store.Sqlite;
 
+internal interface ISqliteStoreExecutionCheckpoint
+{
+    public void AfterOperationLookup();
+}
+
+internal sealed class SqliteStoreExecutionCheckpoint : ISqliteStoreExecutionCheckpoint
+{
+    public static SqliteStoreExecutionCheckpoint Instance { get; } = new();
+
+    private SqliteStoreExecutionCheckpoint()
+    {
+    }
+
+    public void AfterOperationLookup()
+    {
+    }
+}
+
 internal sealed class SqliteStore : IStore, IAsyncDisposable
 {
     private const string ReadPreferencesSql =
@@ -71,6 +89,7 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
     private readonly SqliteStoreGate _gate;
     private readonly ISqliteCommitBoundary _commitBoundary;
     private readonly ISqliteTransactionCleanup _transactionCleanup;
+    private readonly ISqliteStoreExecutionCheckpoint _executionCheckpoint;
     private readonly ILogger _logger;
     private readonly Channel<StoreWorkItem> _channel;
     private readonly Task _worker;
@@ -82,11 +101,29 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
         ISqliteCommitBoundary commitBoundary,
         ISqliteTransactionCleanup transactionCleanup,
         ILogger<SqliteStore> logger)
+        : this(
+            options,
+            gate,
+            commitBoundary,
+            transactionCleanup,
+            SqliteStoreExecutionCheckpoint.Instance,
+            logger)
+    {
+    }
+
+    internal SqliteStore(
+        SqliteStoreOptions options,
+        SqliteStoreGate gate,
+        ISqliteCommitBoundary commitBoundary,
+        ISqliteTransactionCleanup transactionCleanup,
+        ISqliteStoreExecutionCheckpoint executionCheckpoint,
+        ILogger<SqliteStore> logger)
     {
         _connectionFactory = new SqliteConnectionFactory(options);
         _gate = gate;
         _commitBoundary = commitBoundary;
         _transactionCleanup = transactionCleanup;
+        _executionCheckpoint = executionCheckpoint;
         _logger = logger;
         _channel = Channel.CreateBounded<StoreWorkItem>(new BoundedChannelOptions(options.ExecutorCapacity)
         {
@@ -315,6 +352,8 @@ internal sealed class SqliteStore : IStore, IAsyncDisposable
                     ReadOperationSql,
                     new { OperationId = command.OperationId.ToString() },
                     transaction: transaction);
+                _executionCheckpoint.AfterOperationLookup();
+                cancellationToken.ThrowIfCancellationRequested();
                 if (operation is not null)
                 {
                     return IsSameOperation(operation, fingerprint)

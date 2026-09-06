@@ -5,6 +5,8 @@ using IncidentReview.Store.Sqlite.DependencyInjection;
 using IncidentReview.Store.Sqlite.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace IncidentReview.Store.Sqlite.Tests;
@@ -14,19 +16,45 @@ public sealed class SqlitePreferencesStoreTests
 {
     [TestMethod]
     [TestProperty("Requirement", "QR-ARC-002")]
-    public void DependencyInjectionRegistersStoreAndInitializerAsSingletonContracts()
+    public async Task DependencyInjectionOwnsOneStoreSingletonAndDrainsItOnAsyncDisposal()
     {
         using var database = new TemporarySqliteDatabase();
         IServiceCollection services = new ServiceCollection();
+        _ = services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
 
         _ = services.AddSqliteStore(database.Options);
 
+        var storeDescriptor = services.Single(descriptor => descriptor.ServiceType == typeof(IStore));
+        Assert.AreEqual(ServiceLifetime.Singleton, storeDescriptor.Lifetime);
         Assert.AreEqual(
-            ServiceLifetime.Singleton,
-            services.Single(descriptor => descriptor.ServiceType == typeof(IStore)).Lifetime);
+            "IncidentReview.Store.Sqlite.SqliteStore",
+            storeDescriptor.ImplementationType?.FullName);
+        Assert.IsFalse(services.Any(descriptor =>
+            string.Equals(
+                descriptor.ServiceType.FullName,
+                "IncidentReview.Store.Sqlite.SqliteStore",
+                StringComparison.Ordinal)));
         Assert.AreEqual(
             ServiceLifetime.Singleton,
             services.Single(descriptor => descriptor.ServiceType == typeof(IStoreInitializer)).Lifetime);
+
+        var providerFactory = new DefaultServiceProviderFactory(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        IStore store;
+        await using (var provider = (ServiceProvider)providerFactory.CreateServiceProvider(
+                         providerFactory.CreateBuilder(services)))
+        {
+            store = provider.GetRequiredService<IStore>();
+            Assert.AreSame(store, provider.GetRequiredService<IStore>());
+            var initializer = provider.GetRequiredService<IStoreInitializer>();
+            Assert.IsTrue((await initializer.InitializeAsync(CancellationToken.None)).IsSuccess);
+        }
+
+        var afterDispose = await store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
+        AssertFailure(afterDispose, StoreErrorCodes.NotInitialized, ErrorKind.Unavailable);
     }
 
     [TestMethod]
@@ -149,6 +177,37 @@ public sealed class SqlitePreferencesStoreTests
         using var connection = database.OpenConnection();
         Assert.AreEqual(0L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM StoreOperation;"));
         Assert.AreEqual(5_000L, ExecuteScalarInt64(
+            connection,
+            "SELECT replay_lead_in_ms FROM ApplicationPreferences WHERE preferences_id = 1;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-ERR-002")]
+    [TestProperty("Requirement", "IR-STR-005")]
+    public async Task CancellationAfterOperationLookupPropagatesForAnIdenticalRetry()
+    {
+        using var database = new TemporarySqliteDatabase();
+        var command = CreateUpdate(
+            CreatePreferences(1_500, 0.5, autoPause: false, "Cockpit"),
+            4_500);
+        await using (var seedContext = await CreateInitializedStore(database))
+        {
+            Assert.IsTrue((await seedContext.Store.ExecuteAsync(command, CancellationToken.None)).IsSuccess);
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        await using var context = SqliteTestingRegistration.CreateStoreCancellingAfterOperationLookup(
+            database.Options,
+            cancellation);
+        Assert.IsTrue((await context.Initializer.InitializeAsync(CancellationToken.None)).IsSuccess);
+
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(() =>
+            context.Store.ExecuteAsync(command, cancellation.Token));
+
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        using var connection = database.OpenConnection();
+        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM StoreOperation;"));
+        Assert.AreEqual(1_500L, ExecuteScalarInt64(
             connection,
             "SELECT replay_lead_in_ms FROM ApplicationPreferences WHERE preferences_id = 1;"));
     }
