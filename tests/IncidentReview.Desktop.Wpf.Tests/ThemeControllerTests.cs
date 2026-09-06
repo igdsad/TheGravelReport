@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using IncidentReview.Domain;
 
 namespace IncidentReview.Desktop.Wpf.Tests;
@@ -89,11 +90,113 @@ public sealed class ThemeControllerTests
             () => controller.Apply(new ResourceDictionary(), ResolvedTheme.Light));
     }
 
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-003")]
+    public void PalettesExposeMatchingKeysAndAccessibleCoreContrast()
+    {
+        using var source = new FakeDesktopThemeSource(ResolvedTheme.Light);
+        using var controller = new ThemeController(source);
+        var light = LoadPalette(controller, ResolvedTheme.Light);
+        var dark = LoadPalette(controller, ResolvedTheme.Dark);
+
+        CollectionAssert.AreEqual(
+            light.Keys.Cast<object>().Select(static key => key.ToString()).Order().ToArray(),
+            dark.Keys.Cast<object>().Select(static key => key.ToString()).Order().ToArray());
+        foreach (var requiredKey in new[]
+                 {
+                     "WindowBackgroundBrush",
+                     "SurfaceBrush",
+                     "RaisedSurfaceBrush",
+                     "BorderBrush",
+                     "PrimaryTextBrush",
+                     "SecondaryTextBrush",
+                     "AccentBrush",
+                     "DangerBrush",
+                     "SelectionBrush",
+                 })
+        {
+            Assert.IsTrue(light.Contains(requiredKey), $"Light palette is missing {requiredKey}.");
+            Assert.IsTrue(dark.Contains(requiredKey), $"Dark palette is missing {requiredKey}.");
+        }
+
+        foreach (var retiredDuplicateKey in new[]
+                 {
+                     "App.Window.Background",
+                     "App.Surface.Card",
+                     "App.Surface.Raised",
+                     "App.Border.Subtle",
+                     "App.Text.Primary",
+                     "App.Text.Secondary",
+                     "App.Accent.Primary",
+                     "App.Error.Text",
+                     "App.Surface.Selected",
+                 })
+        {
+            Assert.IsFalse(light.Contains(retiredDuplicateKey), $"Light palette still exposes {retiredDuplicateKey}.");
+            Assert.IsFalse(dark.Contains(retiredDuplicateKey), $"Dark palette still exposes {retiredDuplicateKey}.");
+        }
+
+        AssertPaletteContrast(light);
+        AssertPaletteContrast(dark);
+    }
+
     private static bool IsPalette(ResourceDictionary dictionary)
     {
         var source = dictionary.Source?.OriginalString;
         return source?.EndsWith("Themes/Light.xaml", StringComparison.OrdinalIgnoreCase) == true ||
             source?.EndsWith("Themes/Dark.xaml", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static ResourceDictionary LoadPalette(
+        ThemeController controller,
+        ResolvedTheme theme)
+    {
+        var root = new ResourceDictionary();
+        controller.Apply(root, theme);
+        return root.MergedDictionaries.Single();
+    }
+
+    private static void AssertPaletteContrast(ResourceDictionary palette)
+    {
+        var surface = GetColor(palette, "SurfaceBrush");
+        Assert.IsGreaterThanOrEqualTo(
+            4.5,
+            ContrastRatio(GetColor(palette, "PrimaryTextBrush"), surface));
+        Assert.IsGreaterThanOrEqualTo(
+            4.5,
+            ContrastRatio(GetColor(palette, "SecondaryTextBrush"), surface));
+        Assert.IsGreaterThanOrEqualTo(
+            4.5,
+            ContrastRatio(GetColor(palette, "App.Text.Muted"), surface));
+        Assert.IsGreaterThanOrEqualTo(
+            3,
+            ContrastRatio(
+                GetColor(palette, "App.ScrollBar.Thumb"),
+                GetColor(palette, "App.ScrollBar.Track")));
+    }
+
+    private static Color GetColor(ResourceDictionary palette, string key) =>
+        ((SolidColorBrush)palette[key]).Color;
+
+    private static double ContrastRatio(Color first, Color second)
+    {
+        var firstLuminance = RelativeLuminance(first);
+        var secondLuminance = RelativeLuminance(second);
+        return (Math.Max(firstLuminance, secondLuminance) + 0.05) /
+            (Math.Min(firstLuminance, secondLuminance) + 0.05);
+    }
+
+    private static double RelativeLuminance(Color color) =>
+        (0.2126 * Linearize(color.R)) +
+        (0.7152 * Linearize(color.G)) +
+        (0.0722 * Linearize(color.B));
+
+    private static double Linearize(byte component)
+    {
+        var value = component / 255d;
+        return value <= 0.04045
+            ? value / 12.92
+            : Math.Pow((value + 0.055) / 1.055, 2.4);
     }
 
     private sealed class FakeDesktopThemeSource : IDesktopThemeSource

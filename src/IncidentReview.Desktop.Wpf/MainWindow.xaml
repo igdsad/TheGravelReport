@@ -5,10 +5,19 @@
         Width="1120"
         Height="720"
         MinWidth="800"
-        MinHeight="520"
+        MinHeight="620"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryTextBrush}"
         AutomationProperties.AutomationId="IncidentReview.MainWindow">
     <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/IncidentReview.Desktop.Wpf;component/Themes/Base.xaml" />
+                <!-- ThemeController replaces only this palette dictionary at runtime. -->
+                <ResourceDictionary Source="pack://application:,,,/IncidentReview.Desktop.Wpf;component/Themes/Light.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        </ResourceDictionary>
     </Window.Resources>
 
     <Grid>
@@ -19,39 +28,90 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" Margin="16,14,16,0" LastChildFill="False">
-            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock FontSize="24" FontWeight="SemiBold" Text="GravelReview" />
-                <TextBlock Margin="12,0,0,0"
-                           VerticalAlignment="Center"
-                           FontSize="16"
-                           Foreground="#555555"
-                           Text="{Binding State.ActiveDriverName}"
-                           Visibility="{Binding State.HasActiveDriver, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            </StackPanel>
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button Margin="0,0,8,0" Padding="12,6"
-                        AutomationProperties.AutomationId="IncidentReview.Refresh"
-                        AutomationProperties.Name="Refresh incident log"
-                        Command="{Binding RefreshCommand}"
-                        Content="Refresh" />
-                <Button Margin="0,0,8,0" Padding="12,6"
-                        AutomationProperties.AutomationId="IncidentReview.ToggleMonitoring"
-                        AutomationProperties.Name="Start or stop live incident updates"
-                        Command="{Binding ToggleMonitoringCommand}"
-                        Content="{Binding State.MonitorActionText}" />
-                <Button Padding="12,6"
-                        AutomationProperties.AutomationId="IncidentReview.Cancel"
-                        AutomationProperties.Name="Cancel current operation"
-                        Command="{Binding CancelCommand}"
-                        Content="Cancel" />
-            </StackPanel>
-        </DockPanel>
+        <Border Grid.Row="0"
+                Margin="12,12,12,0"
+                Padding="12,8"
+                Style="{StaticResource AppToolbarCardStyle}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-        <Border Grid.Row="1" Margin="16,12,16,10"
-                BorderBrush="#B8B8B8" BorderThickness="1" CornerRadius="4">
+                <StackPanel Grid.Column="0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Image Width="43"
+                           Height="43"
+                           Margin="0,0,10,0"
+                           AutomationProperties.Name="GravelReview logo"
+                           IsHitTestVisible="False"
+                           SnapsToDevicePixels="True"
+                           Source="pack://application:,,,/IncidentReview.Desktop.Wpf;component/Assets/GravelReviewLogo.png"
+                           Stretch="Uniform" />
+                    <StackPanel VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource AppTitleTextStyle}"
+                                       Text="GravelReview" />
+                            <Border Margin="9,3,0,2"
+                                    Padding="6,1"
+                                    VerticalAlignment="Center"
+                                    Background="{DynamicResource App.Accent.Soft}"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="3">
+                                <TextBlock FontSize="10"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           Text="iRacing" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Margin="1,1,0,0"
+                                    Orientation="Horizontal"
+                                    Visibility="{Binding State.HasActiveDriver, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Style="{StaticResource AppMutedTextStyle}"
+                                       FontSize="11"
+                                       Text="Active driver" />
+                            <TextBlock Margin="5,0,0,0"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="{Binding State.ActiveDriverName}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Margin="0,0,7,0"
+                            AutomationProperties.AutomationId="IncidentReview.Refresh"
+                            AutomationProperties.Name="Refresh incident log"
+                            Command="{Binding RefreshCommand}"
+                            Content="Refresh"
+                            Style="{StaticResource AppToolbarButtonStyle}" />
+                    <Button Margin="0,0,7,0"
+                            AutomationProperties.AutomationId="IncidentReview.ToggleMonitoring"
+                            AutomationProperties.Name="Start or stop live incident updates"
+                            Command="{Binding ToggleMonitoringCommand}"
+                            Content="{Binding State.MonitorActionText}"
+                            Style="{StaticResource AppToolbarButtonStyle}" />
+                    <Button AutomationProperties.AutomationId="IncidentReview.Cancel"
+                            AutomationProperties.Name="Cancel current operation"
+                            Command="{Binding CancelCommand}"
+                            Content="Cancel"
+                            Style="{StaticResource AppToolbarButtonStyle}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1"
+                Margin="12,10,12,8"
+                ClipToBounds="True"
+                Style="{StaticResource AppCardStyle}">
             <Grid>
                 <DataGrid x:Name="IncidentGrid"
+                          AlternationCount="2"
                           AutomationProperties.AutomationId="IncidentReview.Incidents"
                           AutomationProperties.Name="Chronological incident log"
                           AutoGenerateColumns="False"
@@ -65,39 +125,52 @@
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                           MouseDoubleClick="OnIncidentActivated">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Recorded" Binding="{Binding ObservedAtText}" Width="145" />
-                        <DataGridTemplateColumn Header="Incident ID" Width="105">
+                        <DataGridTextColumn Header="Recorded"
+                                            Binding="{Binding ObservedAtText}"
+                                            Width="142" />
+                        <DataGridTemplateColumn Header="Incident ID" Width="100">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Margin="4,0"
-                                               Text="{Binding IncidentIdText}"
+                                    <TextBlock Text="{Binding IncidentIdText}"
                                                ToolTip="{Binding FullIncidentIdText}" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Replay time" Binding="{Binding ReplayTime}" Width="105" />
-                        <DataGridTextColumn Header="Points" Binding="{Binding Points}" Width="135" />
-                        <DataGridTextColumn Header="Lap" Binding="{Binding Lap}" Width="60" />
-                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90" />
+                        <DataGridTextColumn Header="Replay time"
+                                            Binding="{Binding ReplayTime}"
+                                            Width="102" />
+                        <DataGridTextColumn Header="Points"
+                                            Binding="{Binding Points}"
+                                            Width="125" />
+                        <DataGridTextColumn Header="Lap"
+                                            Binding="{Binding Lap}"
+                                            Width="56" />
+                        <DataGridTextColumn Header="Status"
+                                            Binding="{Binding Status}"
+                                            Width="90" />
                         <DataGridTemplateColumn Header="Review" Width="*" MinWidth="225">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                        <Button Margin="3,2" Padding="9,3"
+                                    <StackPanel HorizontalAlignment="Right"
+                                                Orientation="Horizontal">
+                                        <Button Margin="3,2"
                                                 AutomationProperties.Name="Review two seconds before this incident"
                                                 Command="{Binding DataContext.ReviewBeforeCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
                                                 CommandParameter="{Binding}"
-                                                Content="-2 sec" />
-                                        <Button Margin="3,2" Padding="9,3"
+                                                Content="-2 sec"
+                                                Style="{StaticResource AppCompactButtonStyle}" />
+                                        <Button Margin="3,2"
                                                 AutomationProperties.Name="Review at this incident"
                                                 Command="{Binding DataContext.ReviewAtCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
                                                 CommandParameter="{Binding}"
-                                                Content="0 sec" />
-                                        <Button Margin="3,2" Padding="9,3"
+                                                Content="0 sec"
+                                                Style="{StaticResource AppCompactAccentButtonStyle}" />
+                                        <Button Margin="3,2"
                                                 AutomationProperties.Name="Review two seconds after this incident"
                                                 Command="{Binding DataContext.ReviewAfterCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
                                                 CommandParameter="{Binding}"
-                                                Content="+2 sec" />
+                                                Content="+2 sec"
+                                                Style="{StaticResource AppCompactButtonStyle}" />
                                     </StackPanel>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
@@ -105,21 +178,39 @@
                     </DataGrid.Columns>
                 </DataGrid>
 
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                           AutomationProperties.AutomationId="IncidentReview.EmptyState"
-                           AutomationProperties.Name="Incident log status"
-                           FontSize="16" Foreground="#666666"
-                           Text="{Binding State.EmptyMessage}"
-                           Visibility="{Binding State.ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <StackPanel HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            AutomationProperties.AutomationId="IncidentReview.EmptyState"
+                            AutomationProperties.Name="Incident log status"
+                            IsHitTestVisible="False"
+                            Visibility="{Binding State.ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Path Width="23"
+                          Height="23"
+                          Margin="0,0,0,8"
+                          Data="M 2,3 L 14,3 L 14,15 L 2,15 Z M 5,7 L 11,7 M 5,10 L 10,10"
+                          Stroke="{DynamicResource App.Text.Muted}"
+                          StrokeLineJoin="Round"
+                          StrokeThickness="1.4"
+                          Stretch="Uniform" />
+                    <TextBlock MaxWidth="430"
+                               HorizontalAlignment="Center"
+                               Style="{StaticResource AppSecondaryTextStyle}"
+                               FontSize="14"
+                               Text="{Binding State.EmptyMessage}"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap" />
+                </StackPanel>
             </Grid>
         </Border>
 
-        <Expander Grid.Row="2" Margin="16,0,16,8"
+        <Expander Grid.Row="2"
+                  Margin="12,0,12,8"
                   AutomationProperties.AutomationId="IncidentReview.Advanced"
                   Header="Advanced"
                   IsExpanded="False">
-            <Border Margin="0,7,0,0" Padding="10"
-                    Background="#F7F7F7" BorderBrush="#D3D3D3" BorderThickness="1">
+            <Border Margin="0,6,0,0"
+                    Padding="10"
+                    Style="{StaticResource AppCardStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -128,27 +219,34 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Margin="0,0,0,5"
-                               FontWeight="SemiBold" Text="Event stream" />
+                    <TextBlock Grid.Row="0"
+                               Margin="1,0,0,6"
+                               Style="{StaticResource AppSectionTitleTextStyle}"
+                               Text="Event stream" />
                     <ListBox x:Name="EventLogList"
                              Grid.Row="1"
                              AutomationProperties.AutomationId="IncidentReview.EventLog"
                              AutomationProperties.Name="Application event stream"
                              ItemsSource="{Binding State.EventLog}"
+                             ScrollViewer.CanContentScroll="False"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <DockPanel Margin="2">
-                                    <TextBlock DockPanel.Dock="Left" Width="160"
-                                               Foreground="#666666" Text="{Binding Timestamp}" />
-                                    <TextBlock Text="{Binding Message}">
+                                <DockPanel MinWidth="520" LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Width="150"
+                                               Style="{StaticResource AppMutedTextStyle}"
+                                               FontFamily="Cascadia Mono, Consolas"
+                                               FontSize="11"
+                                               Text="{Binding Timestamp}" />
+                                    <TextBlock Text="{Binding Message}" TextWrapping="NoWrap">
                                         <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground" Value="#222222" />
+                                            <Style TargetType="{x:Type TextBlock}">
+                                                <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsError}" Value="True">
-                                                        <Setter Property="Foreground" Value="#A31515" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
                                                         <Setter Property="FontWeight" Value="SemiBold" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
@@ -163,25 +261,29 @@
                     <Separator Grid.Row="2" Margin="0,10" />
 
                     <WrapPanel Grid.Row="3" VerticalAlignment="Center">
-                        <TextBlock Margin="0,0,8,0" VerticalAlignment="Center"
-                                   FontWeight="SemiBold" Text="Camera" />
-                        <ComboBox Width="220" Margin="0,0,12,0"
+                        <TextBlock Margin="1,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource AppSectionTitleTextStyle}"
+                                   Text="Replay camera" />
+                        <ComboBox Width="220"
+                                  Margin="0,0,8,0"
                                   AutomationProperties.AutomationId="IncidentReview.Camera"
                                   AutomationProperties.Name="Preferred replay camera"
                                   DisplayMemberPath="DisplayName"
                                   ItemsSource="{Binding State.CameraChoices}"
                                   SelectedItem="{Binding SelectedCameraChoice, Mode=TwoWay}" />
-                        <Button Padding="12,4"
-                                AutomationProperties.AutomationId="IncidentReview.SavePreferences"
+                        <Button AutomationProperties.AutomationId="IncidentReview.SavePreferences"
                                 AutomationProperties.Name="Save preferred replay camera"
                                 Command="{Binding SavePreferencesCommand}"
-                                Content="Save" />
+                                Content="Save"
+                                Style="{StaticResource AppToolbarButtonStyle}" />
                     </WrapPanel>
                 </Grid>
             </Border>
         </Expander>
 
-        <StatusBar Grid.Row="3" AutomationProperties.AutomationId="IncidentReview.StatusBar">
+        <StatusBar Grid.Row="3"
+                   AutomationProperties.AutomationId="IncidentReview.StatusBar">
             <StatusBarItem Padding="0" HorizontalContentAlignment="Stretch">
                 <Grid Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type StatusBar}}}">
                     <Grid.ColumnDefinitions>
@@ -190,30 +292,102 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Margin="6,0"
+                    <TextBlock Grid.Column="0"
+                               Margin="3,0"
+                               VerticalAlignment="Center"
                                AutomationProperties.AutomationId="IncidentReview.ConnectionStatus"
                                AutomationProperties.Name="Simulator connection status"
-                               FontWeight="SemiBold" Text="{Binding State.ConnectionStatus}" />
-                    <Separator Grid.Column="1" />
-                    <TextBlock Grid.Column="2" Margin="8,0"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="{Binding State.ConnectionStatus}" />
+                    <Separator Grid.Column="1" Style="{StaticResource AppVerticalSeparatorStyle}" />
+                    <TextBlock Grid.Column="2"
+                               Margin="3,0"
+                               VerticalAlignment="Center"
                                Text="{Binding State.StatusDetail}"
-                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding State.StatusDetail}">
                         <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#333333" />
+                            <Style TargetType="{x:Type TextBlock}">
+                                <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding State.HasError}" Value="True">
-                                        <Setter Property="Foreground" Value="#A31515" />
+                                        <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
                                         <Setter Property="FontWeight" Value="SemiBold" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
-                    <Separator Grid.Column="3" />
-                    <TextBlock Grid.Column="4" Margin="8,0" Text="{Binding State.MonitoringStatus}" />
+                    <Separator Grid.Column="3" Style="{StaticResource AppVerticalSeparatorStyle}" />
+                    <TextBlock Grid.Column="4"
+                               Margin="3,0"
+                               VerticalAlignment="Center"
+                               Text="{Binding State.MonitoringStatus}" />
+                    <Separator Grid.Column="5" Style="{StaticResource AppVerticalSeparatorStyle}" />
+                    <Button Grid.Column="6"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.AutomationId="IncidentReview.CycleTheme"
+                            AutomationProperties.HelpText="{Binding State.ThemeToolTip}"
+                            AutomationProperties.Name="{Binding State.ThemeToolTip}"
+                            Command="{Binding CycleThemeCommand}"
+                            Style="{StaticResource AppIconButtonStyle}"
+                            ToolTip="{Binding State.ThemeToolTip}">
+                        <Grid Width="16" Height="16" IsHitTestVisible="False">
+                            <Path Data="M 1,2 L 15,2 L 15,11 L 1,11 Z M 5,14 L 11,14 M 8,11 L 8,14"
+                                  Stretch="Uniform"
+                                  Stroke="{DynamicResource PrimaryTextBrush}"
+                                  StrokeLineJoin="Round"
+                                  StrokeThickness="1.4">
+                                <Path.Style>
+                                    <Style TargetType="{x:Type Path}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding State.FollowsDesktopTheme}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Path Data="M 8,3 A 5,5 0 1 1 7.99,13 A 5,5 0 1 1 8,3 M 8,0 L 8,2 M 8,14 L 8,16 M 0,8 L 2,8 M 14,8 L 16,8 M 2.3,2.3 L 3.7,3.7 M 12.3,12.3 L 13.7,13.7 M 13.7,2.3 L 12.3,3.7 M 3.7,12.3 L 2.3,13.7"
+                                  Stretch="Uniform"
+                                  Stroke="{DynamicResource PrimaryTextBrush}"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  StrokeThickness="1.35">
+                                <Path.Style>
+                                    <Style TargetType="{x:Type Path}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding State.UsesLightThemePreference}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Path Data="M 11.7,1 C 7.1,1.8 4.6,6.9 6.8,10.9 C 8.5,14 12.4,15 15.1,12.7 C 12.1,12.9 9.4,10.9 8.8,8 C 8.2,5.4 9.4,2.8 11.7,1 Z"
+                                  Fill="{DynamicResource PrimaryTextBrush}"
+                                  Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="{x:Type Path}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding State.UsesDarkThemePreference}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
                 </Grid>
             </StatusBarItem>
         </StatusBar>

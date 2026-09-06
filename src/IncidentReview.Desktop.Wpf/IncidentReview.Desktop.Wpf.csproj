@@ -12,4 +12,9 @@
     <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
     <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="../../assets/branding/logo.png"
+              Link="Assets/GravelReviewLogo.png" />
+  </ItemGroup>
 </Project>
