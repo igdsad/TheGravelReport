@@ -8,6 +8,7 @@ public sealed class UserPreferencesTests
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-002")]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-TST-001")]
     [DataRow(0L)]
     [DataRow(1L)]
@@ -157,6 +158,7 @@ public sealed class UserPreferencesTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-TST-001")]
     [DataRow(ThemePreference.FollowDesktop)]
     [DataRow(ThemePreference.Light)]
@@ -182,6 +184,7 @@ public sealed class UserPreferencesTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-ERR-001")]
     [TestProperty("Requirement", "QR-TST-001")]
     public void ThemeRejectsUndefinedPersistentValues()
@@ -206,6 +209,7 @@ public sealed class UserPreferencesTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-TST-001")]
     public void ThemePersistenceCodesAreStableAndExistingFactoriesDefaultToDesktop()
     {
@@ -224,6 +228,7 @@ public sealed class UserPreferencesTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-TST-001")]
     public void EqualNormalizedPreferencesHaveValueEquality()
     {

@@ -1,7 +1,7 @@
 # GravelReview — System Design
 
-- **Status:** Accepted architecture; runnable MVP implemented, distribution and live-simulator acceptance pending
-- **Document version:** 1.4
+- **Status:** Accepted architecture; adaptive-themed runnable MVP implemented, distribution and live-simulator acceptance pending
+- **Document version:** 1.5
 - **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
@@ -17,6 +17,8 @@ The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A depar
 ## 1. Executive summary
 
 GravelReview is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents the active session through a review UI, and lets the user review an incident at two seconds before, exactly at, or two seconds after its recorded time while focusing the local player and applying the stored playback state.
+
+The WPF experience has three durable theme modes: follow the live Windows application theme, force Light, or force Dark. Native WPF semantic resource dictionaries provide the visual system; the configured preference and concrete resolved palette remain separate values in the same immutable presentation state as the rest of the screen.
 
 The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
 
@@ -56,11 +58,12 @@ Implemented at this revision:
 - validated domain values plus shared `Result`/`Result<T>` failure primitives;
 - simulator-neutral telemetry, replay, store, and application contract assemblies;
 - cumulative local-member incident detection, durable checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
-- the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and an embedded checksum-pinned DbUp migration;
+- the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and embedded checksum-pinned DbUp migrations, including the additive theme-preference upgrade;
 - a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, narrow session/driver/camera metadata extraction, and confirmed replay seek/camera/playback control;
 - one coherent `ReviewSnapshot` application read containing revisioned status, the active session and its incidents, stored preferences, and transient driver/camera context;
-- a WPF screen centered on the active session's chronological incident log, with `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, and a bottom status bar;
-- a single immutable `MainWindowState` reduced from explicit UI actions and replaced atomically for top-down WPF rendering; its bounded tail-follow event stream and current status share the exact same event object;
+- a WPF screen centered on the active session's chronological incident log, with `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, GravelReview branding, and a quiet bottom status bar;
+- native light/dark WPF palettes plus a status-bar control for durable `FollowDesktop`, `Light`, and `Dark` selection, with live Windows-theme observation and pre-show application of the stored mode;
+- a single immutable `MainWindowState` reduced from explicit UI actions and replaced atomically for top-down WPF rendering; it owns the configured and resolved theme values, and its bounded tail-follow event stream and current status share the exact same event object;
 - a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
 - automated domain, contract, application, SQLite, architecture, adapter/protocol-simulator, view-model, and Release-host-startup tests.
 
@@ -104,6 +107,7 @@ Classification, notes, explicit reviewed/dismissed actions, and export remain fo
 - Detect and persist incident-count increases for the local member.
 - Preserve the iRacing session number and session time required for exact replay seeking.
 - Present a fast, accessible Windows UI whose primary log contains only the active session's incidents and whose complete visible state arrives and renders as one coherent top-down value.
+- Render a consistent native WPF visual system in Follow desktop, Light, and Dark modes without introducing a third-party theme framework.
 - Show the transient active driver and live iRacing camera-group catalog without persisting simulator-owned display metadata.
 - Seek iRacing replay through the official local SDK broadcast mechanism.
 - Focus the replay on the local player through an optional named camera-group preference.
@@ -154,8 +158,10 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 | IR-STR-006 | An indeterminate commit can be reconciled by operation identifier before retry. |
 | IR-HIS-001 | Past sessions and incidents remain durably queryable through application/store contracts after restart; the primary WPF UI deliberately displays only the active session and does not expose session-history navigation. |
 | IR-SET-001 | Mutable durable user preferences, including preferred camera and hidden lead-in/playback compatibility values, are stored through `IStore`; removing controls from the primary UI does not silently discard existing values. |
+| IR-SET-002 | The durable theme preference is exactly `FollowDesktop`, `Light`, or `Dark`, defaults to `FollowDesktop` for new and upgraded databases, and is updated atomically with the existing replay preferences through `IStore`. A failed update preserves every previously stored preference. |
 | IR-UI-001 | One coherent revisioned `ReviewSnapshot` supplies the active session, chronological incidents, connection/error state, stored preferences, transient active driver, and live camera groups. WPF renders one immutable top-level `MainWindowState`; stale revisions cannot replace newer state and an automatic refresh preserves a dirty camera draft. |
 | IR-UI-002 | Every safe actionable UI message is one immutable event appended to the bounded event stream and assigned by reference as `CurrentStatusEvent`. Except while a transient busy label obscures it, the status bar displays that exact event object's message; busy state MUST NOT create or replace a competing status event. |
+| IR-UI-003 | The status-bar theme control cycles `FollowDesktop → Light → Dark → FollowDesktop`, applies the newly resolved palette immediately, and persists it. `FollowDesktop` reacts live to Windows application-theme changes; forced modes ignore those changes. Persistence failure restores the complete prior preference and its current resolved palette before publishing one specific error event/status. The stored preference is applied before the main window is shown. |
 
 Deferred requirement: `DR-EXP-001` — a future export operation can serialize selected session data without exposing the SQLite schema.
 
@@ -548,7 +554,7 @@ public interface IApplicationRuntime
 
 `GetSnapshotAsync` is the primary presentation read. It captures a revisioned application anchor, reads the active session and stored preferences, reads transient replay context through `IReplayContextReader`, and verifies that the anchor is still current before constructing one immutable `ReviewSnapshot`. If application state changes during those reads it retries instead of returning a torn mixture. The snapshot validates that `Unavailable` has exactly one structured status error and that the current camera belongs to the bounded camera catalog. The active session—not an independently selected historical session—is the sole source for the primary incident log. Existing granular session/status/query methods remain application capabilities for non-primary consumers and compatibility; WPF MUST NOT assemble its visible root by calling them independently.
 
-Every in-memory application-anchor change advances a monotonically increasing snapshot revision. A presentation MUST ignore a snapshot older than the revision it has already rendered. Equal revisions MAY be reapplied for manual-refresh messaging, a separately persisted preference update, or refreshed transient context, but cannot regress application-owned state. Transient driver/camera context is not written to SQLite. Stored lead-in, playback speed, and pause remain durable compatibility inputs even though the current primary WPF surface exposes only the camera preference and explicit row offsets.
+Every in-memory application-anchor change advances a monotonically increasing snapshot revision. A presentation MUST ignore a snapshot older than the revision it has already rendered. Equal revisions MAY be reapplied for manual-refresh messaging, a separately persisted preference update, or refreshed transient context, but cannot regress application-owned state. Transient driver/camera context is not written to SQLite. Stored lead-in, playback speed, and pause remain durable compatibility inputs even though the current primary WPF surface exposes only the camera preference and explicit row offsets. The stored `ThemePreference` also travels through this same preference value and coherent snapshot; it is not loaded through an independent UI configuration source.
 
 `ReviewUpdate` is an application-owned notification that tells the UI to obtain a fresh coherent snapshot; it does not expose telemetry frames, store commands, threads, dispatchers, or infrastructure events. `IApplicationRuntime` gives the composition root an explicit lifecycle for the telemetry/processing loop without exposing its implementation. `Completion` remains incomplete while the runtime is healthy, completes normally only after requested stop, and faults on an unexpected worker defect; an unrequested normal completion is also treated as a runtime failure. `StopAsync` is idempotent, cancels and awaits all owned workers, always observes their completion, and rethrows a worker fault that occurred before expected stop rather than converting it into successful shutdown. View models do not coordinate stores, replay-context readers, or replay controllers themselves. They invoke application use cases and marshal returned data/actions through a presentation-owned dispatcher abstraction.
 
@@ -566,7 +572,7 @@ Initial concepts:
 - `IncidentClassification`: optional user classification.
 - `IncidentReviewStatus`: pending, reviewed, or dismissed.
 - `IncidentAnnotation`: user notes and classification changes.
-- `UserPreferences`: validated durable review behavior such as lead-in, playback, and optional camera preference.
+- `UserPreferences`: validated durable review behavior such as lead-in, playback, optional camera preference, and the configured `ThemePreference` policy.
 
 Domain values validate themselves at creation through private constructors and `TryCreate`/factory methods returning `Result<T>`. This applies at every untrusted boundary: SDK decoding, database mapping, command-line/configuration input, and future wire decoding. Invalid session times, negative counters, NaN/out-of-range percentages, non-UTC instants, invalid lap numbers, and empty identities do not circulate through the system. Optional SDK data is represented explicitly—such as `LapNumber?` and `LapDistance?`—rather than by magic sentinel values.
 
@@ -776,12 +782,13 @@ ApplicationPreferences
   auto_pause                 integer
   playback_speed             real
   preferred_camera           text/null
+  theme_preference           integer, constrained FollowDesktop/Light/Dark
   updated_at_utc_ms          integer
 ```
 
 Identifiers use canonical lowercase UUID text initially; timestamps use UTC Unix milliseconds in `INTEGER` columns; booleans use constrained `0`/`1`; enums use explicitly assigned stable integer codes. Each command has a stable `command_kind` and positive schema version. The operation fingerprint is SHA-256 over that kind/version plus a handler-owned canonical, length-delimited binary encoding of the persisted fields—it does not introduce JSON into the store path. Encoding, field order, normalization, and version are release contracts protected by golden vectors. Existing command versions remain readable/reconcilable for every supported database upgrade; changing their encoding in place is forbidden, and a new shape receives a new version. `Incident` has a unique constraint on `(session_id, counter_epoch, incident_points_total)` in addition to its primary key. Check constraints enforce non-negative counters/times, positive deltas, valid percentages, and known status/preference values. Foreign keys specify deliberate delete behavior rather than relying on provider defaults.
 
-Client-generated identifiers, operation identifiers, and explicit timestamps preserve a credible path to remote synchronization. Application records remain separate from SQLite row models and future wire DTOs. Mutable user preferences are durable application state and go through `IStore`; host/deployment settings such as database path, logging level, and diagnostic switches remain validated startup configuration and are not mixed with user preferences.
+Client-generated identifiers, operation identifiers, and explicit timestamps preserve a credible path to remote synchronization. Application records remain separate from SQLite row models and future wire DTOs. Mutable user preferences—including theme policy—are durable application state and go through `IStore`; host/deployment settings such as database path, logging level, and diagnostic switches remain validated startup configuration and are not mixed with user preferences. A theme change rebuilds the complete validated `UserPreferences` value and executes one `UpdatePreferences` command, so replay lead-in, pause, speed, and camera cannot be lost by a partial preference write.
 
 ### 11.4 Transaction guarantee
 
@@ -842,7 +849,7 @@ DbUp runs before the store is available to application use cases. The store may 
 
 DbUp is the deliberate migration path outside normal `IStore.ExecuteAsync`; it runs before application writes and owns its own transaction semantics.
 
-The current manifest contains `001_InitialSchema.sql` and pins its SHA-256 in `MigrationManifest.cs`. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
+The current manifest contains checksum-pinned `001_InitialSchema.sql` and `002_AddThemePreference.sql`. Migration `002` adds the constrained, non-null `theme_preference` column with numeric default `0` (`FollowDesktop`) and advances `PRAGMA user_version` to 2. It does not rewrite migration `001`; applying it to a version-1 database preserves every existing replay-preference field. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
 
 ### 11.7 Export
 
@@ -1000,6 +1007,17 @@ public static int Main(string[] args)
             runtime = host.Services.GetRequiredService<IApplicationRuntime>();
             RequireSuccess(runtime.StartAsync(startup.Token).GetAwaiter().GetResult());
             // Start the supervised telemetry/application worker only after the store gate opens.
+
+            if (!VerifyStartupWasRequested(args))
+            {
+                var preferences = RequireSuccess(
+                    host.Services.GetRequiredService<IIncidentReviewService>()
+                        .GetPreferencesAsync(startup.Token).GetAwaiter().GetResult());
+                var preparedApp = host.Services
+                    .GetRequiredService<IncidentReviewDesktopApplication>();
+                preparedApp.PrepareForStartup(preferences);
+                // Resolve and apply the stored theme while the window is still hidden.
+            }
         }
 
         if (VerifyStartupWasRequested(args))
@@ -1024,7 +1042,7 @@ public static int Main(string[] args)
 }
 ```
 
-The code is condensed pseudocode matching the implemented phase order; detailed failure preservation is omitted. The single-instance guard is acquired before any database open or migration. `Host.StartAsync` starts only the deliberately registered framework services; no application service observes telemetry, opens the database, or mutates state during that call. `BootstrapCoordinator` owns ordered store initialization and is the only gate to `IApplicationRuntime.StartAsync`.
+The code is condensed pseudocode matching the implemented phase order; detailed failure preservation is omitted. The single-instance guard is acquired before any database open or migration. `Host.StartAsync` starts only the deliberately registered framework services; no application service observes telemetry, opens the database, or mutates state during that call. `BootstrapCoordinator` owns ordered store initialization and is the only gate to `IApplicationRuntime.StartAsync`. For an interactive start, the host reads the complete stored `UserPreferences` through `IIncidentReviewService` after store initialization and passes it into the desktop startup surface before `Application.Run` can show the main window. Headless `--verify-startup` does not construct the UI. This composition-root-only synchronous bridge occurs before a WPF synchronization context exists and prevents a default-palette flash without allowing WPF to query `IStore`.
 
 The validated startup timeout defaults to 30 seconds and permits 1 through 120 seconds. It bounds the cancellable phase as a whole and is checked between native migration/schema operations. It cannot forcibly preempt a synchronous native call that is already in progress. Process-wide Ctrl+C/session-ending cancellation is not currently wired into WPF startup and remains lifecycle hardening work.
 
@@ -1045,20 +1063,20 @@ disable/close UI
     → dispose host
 ```
 
-JSON configuration is not used in the current application. Deployment settings use code defaults, the compatibility-stable `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. The product-facing host assembly metadata is `GravelReview`, while its assembly/namespace identity remains `IncidentReview.Host.Wpf`. The existing database location, environment prefix, `Local\IncidentReview.Host.Wpf` mutex, and `IncidentReview.*` Automation IDs MUST remain unchanged during this rebrand. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
+JSON configuration is not used in the current application. Deployment settings use code defaults, the compatibility-stable `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. The product-facing host assembly metadata is `GravelReview`, while its assembly/namespace identity remains `IncidentReview.Host.Wpf`. The existing database location, environment prefix, `Local\IncidentReview.Host.Wpf` mutex, and `IncidentReview.*` Automation IDs MUST remain unchanged during this rebrand. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences—including theme policy—belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
 
 ## 14. UI design boundary
 
 The implemented GravelReview UI contains:
 
-- the `GravelReview` product name and transient active-driver display name in the header;
+- the `assets/branding/logo.png` GravelReview mark, product name, and transient active-driver display name in a compact raised header/toolbar; the host executable/window uses `assets/branding/favicon.ico`;
 - one primary chronological incident log derived only from `ReviewSnapshot.ActiveSession`, with its own horizontal and vertical scrolling and no historical-session selector;
 - recorded time, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and review status for each incident; the full stable incident ID remains the command identity and is available as a tooltip;
 - `-2 sec`, `0 sec`, and `+2 sec` actions on each incident row; double-click dispatches the `0 sec` action;
 - no Notes column and no annotation/classification controls in the primary UI, while those durable domain/store capabilities remain intact for future workflows;
 - a collapsed-by-default **Advanced** panel containing a timestamped bounded event stream with horizontal/vertical scrolling and tail-follow behavior, plus a live iRacing camera-group dropdown and Save action;
 - no visible lead-in, playback-speed, or pause fields; those stored values remain compatibility behavior for playback and the legacy review overload rather than being silently deleted;
-- a bottom status bar containing iRacing connection state, current event/work state, and live-update state;
+- a quiet bottom status bar containing iRacing connection state, current event/work state, live-update state, and a far-right icon-only theme control;
 - explicit unavailable state when replay control cannot be used.
 
 The camera dropdown is populated from the simulator-neutral camera names in `ReviewSnapshot`. It always offers “current iRacing camera” as the null preference. The selected or saved name is retained as an unavailable choice when it is absent from a later live catalog; only a successful explicit Save writes the preference. Driver and current-camera display values are transient and disappear when the application snapshot no longer supplies them. WPF MUST NOT parse SDK session information or invent a second default-camera catalog.
@@ -1073,7 +1091,7 @@ ReviewSnapshot + local UiAction (implemented as MainWindowAction)
     → XAML binds State.* from the window root
 ```
 
-`MainWindowState` is the sole owner of UI-visible data: snapshot revision/status/error, active session, incidents, selected incident identity, saved preferences, transient driver/current-camera context, camera choices and dirty draft, busy/monitoring state, event log, and current status event. The view model MUST NOT maintain independent visible fields or mutable observable collections that can disagree with this root. It may own effect machinery—commands, cancellation sources, gates, worker tasks, and the dispatcher—but effects occur outside the reducer. Service calls and update observation produce data-only actions; time needed by an action is captured before reduction. `MainWindowReducer.Reduce` performs no I/O, reads no clock/service/control, mutates no prior value, and returns either the unchanged instance for an ignored action or a complete replacement state.
+`MainWindowState` is the sole owner of UI-visible data: snapshot revision/status/error, active session, incidents, selected incident identity, saved preferences, configured theme preference, resolved palette, transient driver/current-camera context, camera choices and dirty draft, busy/monitoring state, event log, and current status event. The view model MUST NOT maintain independent visible fields or mutable observable collections that can disagree with this root. It may own effect machinery—commands, cancellation sources, gates, worker tasks, and the dispatcher—but effects occur outside the reducer. Service calls and update observation produce data-only actions; time needed by an action is captured before reduction. `MainWindowReducer.Reduce` performs no I/O, reads no clock/service/control, mutates no prior value, and returns either the unchanged instance for an ignored action or a complete replacement state.
 
 Applying a snapshot is atomic. The reducer derives the incident list from the active session, retains selection only while its full ID remains present, builds camera choices, and then replaces the root. A snapshot with a revision lower than the rendered revision is stale and MUST return the existing state instance. During an automatic refresh, an unsaved camera draft MUST survive application preference/context updates; a manual refresh may deliberately accept the stored preference. Busy and monitoring transitions also flow through actions instead of separate bindable properties.
 
@@ -1081,9 +1099,45 @@ Every actionable notice is constructed once as an immutable `EventLogItem`. Appe
 
 View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry/replay context, or encode replay commands. UI event handlers contain presentation mechanics only. Use-case decisions live in `Application`, pure business rules live in `Domain`, and pure presentation transitions live in the reducer.
 
-The presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, read-only snapshots, and accessibility automation peers directly. No MVVM framework, mediator, event-bus, immutable-collection package, or reactive package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; replacement state is published only on the dispatcher through the presentation abstraction.
+The presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, read-only snapshots, resource dictionaries, and accessibility automation peers directly. No MVVM framework, theme framework, mediator, event-bus, immutable-collection package, or reactive package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; replacement state is published only on the dispatcher through the presentation abstraction.
 
-User-visible state and interactive elements have stable, documented Windows UI Automation names/`AutomationId` values. Keyboard navigation, focus order, screen-reader names, scaling, high contrast, scrolling/tail-follow, all three row offsets, and selection/review behavior are acceptance-tested; automation identifiers remain the compatibility-stable `IncidentReview.*` contracts and do not depend on product branding or localized display text.
+User-visible state and interactive elements have stable, documented Windows UI Automation names/`AutomationId` values. Keyboard navigation, focus order, screen-reader names, scaling, high contrast, scrolling/tail-follow, all three row offsets, and selection/review behavior MUST be acceptance-tested; automation identifiers remain the compatibility-stable `IncidentReview.*` contracts and do not depend on product branding or localized display text.
+
+### 14.1 Native WPF theme system
+
+Theme structure and palette are deliberately separated:
+
+```text
+Themes/Base.xaml       structural control styles using DynamicResource
+Themes/Light.xaml      complete light semantic brush set
+Themes/Dark.xaml       matching complete dark semantic brush set
+
+ThemePreference        FollowDesktop | Light | Dark (durable policy)
+ResolvedTheme          Light | Dark (concrete palette in MainWindowState)
+```
+
+`Base.xaml` defines shared typography, spacing, focus visuals, raised surfaces, button hierarchy, `DataGrid` header/alternate/hover/selection states, input/list styling, separators, scrollbars, the Advanced disclosure, tooltips, and the status bar. The palette dictionaries contain no behavior and expose matching semantic resources, including `WindowBackgroundBrush`, `SurfaceBrush`, `RaisedSurfaceBrush`, `BorderBrush`, `PrimaryTextBrush`, `SecondaryTextBrush`, `AccentBrush`, `DangerBrush`, and `SelectionBrush`. Additional `App.*` semantic keys MAY refine component states, but control XAML MUST use semantic `DynamicResource` references and MUST NOT duplicate light/dark literal colors. Palette replacement changes only the active Light/Dark dictionary and preserves `Base.xaml` plus unrelated resources.
+
+This native resource-dictionary design keeps palette policy explicit, inspectable, testable, and dependency-free while retaining normal WPF dynamic-resource propagation and accessibility behavior. The visual direction is compact and information-first: layered surfaces, quiet separators, clear focus/selection, restrained GravelReview orange accent, and dense controls without obscuring the incident log.
+
+The durable `ThemePreference` and presentation-only `ResolvedTheme` are intentionally different types. Selecting Follow desktop does not persist “Light” or “Dark”; it persists `FollowDesktop`, resolves the current Windows application palette, and can therefore continue responding to later desktop changes. `IDesktopThemeSource` is the only surface that interprets Windows' `AppsUseLightTheme` value and owns the `Microsoft.Win32.SystemEvents` subscription. `IThemeController` maps policy to a concrete palette and replaces WPF resources. Registry and static-event details do not enter domain, application, reducer, or XAML code. A missing/inaccessible registry value or unavailable event subscription degrades safely to Light. Both operating-system surfaces are already provided by the Microsoft desktop framework; this feature adds no package dependency.
+
+The theme button is an accessible icon-only control at the far right of the status bar. Monitor, sun, and moon vector glyphs represent Follow desktop, Light, and Dark; the Automation name/tooltip always states the configured mode and the next click's result. Keyboard activation and the exact cycle `FollowDesktop → Light → Dark → FollowDesktop` are public interaction behavior. A desktop-theme event becomes a typed presentation action; the reducer updates `ResolvedTheme` only when `ThemePreference` is `FollowDesktop`, so forced Light or Dark cannot be overwritten by an operating-system event. The window applies exactly `State.ResolvedTheme`; it MUST NOT independently resolve Windows state and create a second source of truth.
+
+Theme selection is an optimistic presentation effect with explicit compensation:
+
+```text
+capture prior complete UserPreferences
+    → reduce next ThemePreference + resolved palette immediately
+    → rebuild UserPreferences while preserving replay/camera fields
+    → IIncidentReviewService.UpdatePreferencesAsync
+    → typed UpdatePreferences command
+    → one IStore-owned transaction
+        ├─ success: keep selected state and refresh the coherent snapshot
+        └─ failure: restore prior preferences/current resolution, then append one exact error event
+```
+
+The rollback action occurs before the error notice is reduced, so status and event history cannot claim a palette that was not durably accepted. If Windows changes while a failed save temporarily previews a forced mode, restoring `FollowDesktop` resolves the newest desktop palette instead of reviving a stale one. Startup follows the same ownership boundary: after migration/store initialization, the host obtains `UserPreferences` through `IIncidentReviewService`, seeds the desktop state, resolves/applies the palette while the window is hidden, and only then runs WPF. Subsequent snapshots remain authoritative. Neither the host nor the view reads or writes the preference row directly.
 
 ## 15. Testing philosophy and strategy
 
@@ -1146,23 +1200,23 @@ Traceability does not replace assertions. A test must fail for a meaningful viol
 Production behavior is tested through the same contracts used by consumers where the current suite provides that coverage.
 
 - `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
-- The SQLite suite validates observable on-disk behavior against real temporary databases.
+- The SQLite suite validates observable on-disk behavior against real temporary databases, including fresh schema version 2, version-1-to-version-2 theme migration, default `FollowDesktop`, invalid persisted enum rejection, preference round-trip, command fingerprints, and preservation of all replay preferences.
 - The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed input, moving and paused-session-screen replay classification, replay suppression, and bounded-buffer behavior against an independent process.
 - Replay tests exercise intent validation, representability, availability, bounded/validated transient driver and camera context, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Contract-shape tests require `IReplayContextReader` to remain a command-free simulator-neutral read boundary. Independently authored packed-message vectors cover seek, camera focus, and playback.
 - Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, explicit negative/zero/positive offsets, coherent snapshot anchor retry, transient-context degradation, monotonically increasing revisions, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
-- Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, selection retention, dirty camera-draft preservation across automatic refresh, bounded eviction, and reference identity between `CurrentStatusEvent` and the event-log tail. View-model tests verify that effects dispatch actions without constructing a second visible state.
+- Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, selection retention, dirty camera-draft preservation across automatic refresh, bounded eviction, reference identity between `CurrentStatusEvent` and the event-log tail, all theme mappings/cycle transitions, live desktop changes in Follow desktop, and ignored desktop changes in forced modes. Theme-controller/source tests independently cover registry interpretation, safe fallback, subscription disposal, resolution, and single-palette resource replacement. View-model/desktop-startup tests verify that stored policy seeds state before display, successful persistence preserves replay preferences, and persistence failure restores the prior state before emitting its exact error, without constructing a second visible state.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
 
 ### 15.5 Deterministic test implementations
 
-The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, `IReplayContextReader`, dispatcher, and service fakes. Reducer tests need no fake, dispatcher, window, or clock because every input—including occurrence time—is action data. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
+The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, `IReplayContextReader`, `IDesktopThemeSource`, dispatcher, and service fakes. Reducer tests need no fake, dispatcher, window, or clock because every input—including occurrence time and a resolved palette—is action data. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
 
 `IncidentReview.TestKit` currently establishes only the permitted public-contract dependency direction; it does not yet contain shared implementations. Reusable `ScriptedTelemetrySource`, `RecordingReplayController`, `InMemoryStore`, manual time/identity helpers, scheduler controls, and a general occurrence-based fault injector remain planned. When duplication or a second adapter/store makes them useful, they move into `TestKit` without privileged implementation access.
 
 Randomized, property, and fuzz-style tests must record the seed and minimized input required to reproduce a failure. Those campaigns are not implemented yet. Existing concurrency tests prefer deterministic barriers and bounded outer timeouts over sleep-based assertions.
 
-Current lifecycle tests cover application start/stop/completion, early telemetry completion/faults, cancellation, WPF monitoring, stale-snapshot rejection, dirty camera-draft/incident-selection preservation, serialized effect dispatch, and view-model disposal while an operation is active. The complete host/UI race matrix—faulting between UI return, expected-stop marking, runtime stop, host stop, and disposal—remains release-hardening work.
+Current lifecycle tests cover application start/stop/completion, early telemetry completion/faults, cancellation, WPF monitoring, stale-snapshot rejection, dirty camera-draft/incident-selection preservation, live desktop-theme dispatch, static-event unsubscription, serialized effect dispatch, and view-model disposal while an operation is active. The complete host/UI race matrix—faulting between UI return, expected-stop marking, runtime stop, host stop, and disposal—remains release-hardening work.
 
 ### 15.6 Fault injection
 
@@ -1203,6 +1257,7 @@ Critical hand-written logic requires complete decision/branch coverage:
 - iRacing frame/metadata decoding, replay command encoding, and applied-state confirmation;
 - startup phase success/failure decisions.
 - runtime worker completion/fault supervision and WPF shutdown routing.
+- configured/resolved theme mapping, forced/follow mode decisions, and persistence compensation.
 
 Compound conditions receive decision-table tests showing that each condition can independently affect the outcome. A line percentage alone is insufficient. Generated WPF code and trivial generated boilerplate are excluded transparently; exclusions cannot hide application decisions.
 
@@ -1226,6 +1281,7 @@ SQLite integration tests include at least:
 - deterministic rejection of queries/commands before successful store initialization;
 - process restart/reopen following unsuccessful work;
 - migration from every supported historical schema;
+- version-1 preferences migrating to `FollowDesktop` without changing lead-in, pause, speed, or camera;
 - deliberately failing migration;
 - repeated migration execution;
 - rollback failure while preserving both primary and cleanup diagnostics;
@@ -1275,7 +1331,7 @@ The current deliverable tests launch the Release host executable with `--verify-
 
 `IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process, including a coalesced telemetry frame that confirms an outstanding seek. Separately, replay tests verify packing through the implementation's recording-sender testing facade and independent golden vectors, and a Windows-only test sends the production broadcast to a hidden native top-level receiver and asserts the exact delivered `wParam`/`lParam`. The protocol simulator and native receiver are not yet combined into one packaged end-to-end peer.
 
-The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use compatibility-stable WPF `IncidentReview.*` Automation IDs to invoke each of the `-2 sec`, `0 sec`, and `+2 sec` actions; independently validate the corresponding seek offset plus camera/playback broadcasts; and publish later confirming telemetry for each stage. It must also verify the active-session-only incident log, compact/full incident identity pair, transient driver header, live camera dropdown, collapsed Advanced panel, tail-follow behavior, and same-object event-tail/current-status invariant. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
+The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use compatibility-stable WPF `IncidentReview.*` Automation IDs to invoke each of the `-2 sec`, `0 sec`, and `+2 sec` actions; independently validate the corresponding seek offset plus camera/playback broadcasts; and publish later confirming telemetry for each stage. It must also verify the active-session-only incident log, compact/full incident identity pair, transient driver header, live camera dropdown, collapsed Advanced panel, tail-follow behavior, and same-object event-tail/current-status invariant. Theme acceptance MUST cover keyboard activation and automation naming, all three persisted modes across restart, both palettes and interaction states, live desktop switching only in Follow desktop, persistence-failure rollback, common Windows scaling levels, and high-contrast behavior. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
 
 Real iRacing acceptance follows a versioned checklist with captured Windows, simulator, SDK-baseline, and app versions. It supplements automated protocol tests; it does not replace them, and it has not yet been completed for this revision.
 
@@ -1308,6 +1364,7 @@ Assertions are executable statements of programmer invariants, not substitutes f
 |---|---|---|
 | Runtime/language | .NET 10 LTS / C# 14 | Current Microsoft LTS baseline installed on the development machine |
 | Desktop UI | WPF | Windows-native, mature, Microsoft-supported |
+| Desktop theming | Native WPF `ResourceDictionary`/`DynamicResource` plus `Microsoft.Win32.SystemEvents` | Semantic light/dark palettes and live Windows application-theme observation without a theme framework or added package |
 | Hosting/DI | `Microsoft.Extensions.Hosting` 10.0.11 and built-in container | Standard composition, logging, options, and lifetime model |
 | Testing | `MSTest.Sdk` 4.4.0, Microsoft Testing Platform, explicit Microsoft coverage extension | Microsoft-supported test stack with no implicit extension profile |
 | SQL mapping | Dapper 2.1.79 | Explicit parameterized SQL and lightweight mapping |
@@ -1321,7 +1378,7 @@ Assertions are executable statements of programmer invariants, not substitutes f
 
 ### 16.2 Approved exceptions and review
 
-The default is Microsoft platform/framework dependencies plus the official iRacing protocol. Dapper and DbUp are explicitly approved third-party exceptions. SQLite itself and SQLitePCLRaw are also third-party code and must be acknowledged, pinned, licensed, and audited rather than described as Microsoft-only. This stack therefore cannot truthfully be called “Microsoft-only.” The control objective is a minimal, explicit, locked, reviewed graph—not reliance on publisher identity alone.
+The default is Microsoft platform/framework dependencies plus the official iRacing protocol. Theme dictionaries, WPF resource lookup, Windows registry access, and user-preference notifications use framework-provided WPF/BCL/Microsoft desktop APIs; the adaptive theme feature adds no package. Dapper and DbUp are explicitly approved third-party exceptions. SQLite itself and SQLitePCLRaw are also third-party code and must be acknowledged, pinned, licensed, and audited rather than described as Microsoft-only. This stack therefore cannot truthfully be called “Microsoft-only.” The control objective is a minimal, explicit, locked, reviewed graph—not reliance on publisher identity alone.
 
 The Roslyn analysis packages and code-coverage extension are Microsoft-published and prefix-reserved. The coverage extension is closed-source under Microsoft's free-to-use .NET library license; it satisfies an official-Microsoft-publisher policy but not an all-source-auditable policy. That distinction is recorded in the dependency inventory rather than hidden.
 
@@ -1648,7 +1705,7 @@ Simulator-neutral telemetry/replay contracts permit another adapter only if its 
 
 ## 20. Delivery plan
 
-Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices, including coherent revisioned presentation snapshots and explicit replay offsets, with remaining reliability-matrix work; Milestone 3 has the official SDK adapter, transient replay-context reader, and independent-process tests but not real-simulator acceptance for this revision; Milestone 4 has the runnable GravelReview WPF workflow and immutable reducer-driven state but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
+Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices, including coherent revisioned presentation snapshots and explicit replay offsets, with remaining reliability-matrix work; Milestone 3 has the official SDK adapter, transient replay-context reader, and independent-process tests but not real-simulator acceptance for this revision; Milestone 4 has the runnable GravelReview WPF workflow, immutable reducer-driven state, semantic light/dark visual system, persisted three-mode theme policy, and pre-show/live Windows theme integration, but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
 
 ### Milestone 0 — Repository foundation
 
@@ -1691,7 +1748,9 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 - Provide the collapsed Advanced panel with bounded tail-follow events and the live iRacing camera selector; derive current status from the exact event-log-tail object.
 - Preserve dirty camera drafts across automatic snapshots, reject stale revisions, and retain hidden playback/pause/lead-in compatibility values.
 - Keep session history and Notes out of the primary UI while retaining their lower-layer contracts and durable records.
-- Add reducer, accessibility, scrolling, dispatcher, and lifetime tests.
+- Use native `Base`/`Light`/`Dark` semantic resource dictionaries and GravelReview branding; keep configured `ThemePreference` and concrete `ResolvedTheme` separate in `MainWindowState`.
+- Provide the status-bar `FollowDesktop → Light → Dark` cycle, live Windows changes only while following, pre-show stored-theme application, and transactional save with exact presentation rollback on failure.
+- Add reducer, theme source/controller, migration/round-trip, persistence compensation, accessibility, scrolling, dispatcher, and lifetime tests.
 - Package and UI-automation-test the Release deliverable; the current host-startup smoke is necessary but not sufficient.
 
 ### Milestone 5 — Reliability hardening
@@ -1719,6 +1778,7 @@ A feature is not done until:
 12. User-visible behavior is validated in the packaged artifact or documented acceptance environment.
 13. The work is recorded in one or more small green Conventional Commits and their hashes are reported.
 14. A UI feature has one immutable visible-state owner, pure reducer coverage, stale-update behavior, and proof that each displayed status/event derives from its documented source object.
+15. A palette-aware UI change uses semantic resources in both Light and Dark, preserves the configured/resolved theme distinction, and is checked for keyboard, automation, scaling, and high-contrast behavior.
 
 ### 21.1 Database-change checklist
 
@@ -1774,6 +1834,7 @@ A feature is not done until:
 | ADR-0013 | Accepted | `GravelReview` is the product-facing name and assembly metadata; `IncidentReview.*` code/assembly identity plus the legacy database path, environment prefix, mutex, and Automation IDs remain compatibility-stable. |
 | ADR-0014 | Accepted | `IReplayContextReader` exposes only a bounded immutable simulator-neutral projection of active driver and camera context; `ReviewSnapshot` is the coherent revisioned application read for presentation. |
 | ADR-0015 | Accepted | WPF follows a top-down immutable-state model: data-only UI action → pure reducer → replacement `MainWindowState`; effects stay outside the reducer and current status references the event-log tail object. |
+| ADR-0016 | Accepted | WPF theming uses native semantic `Base`/`Light`/`Dark` resource dictionaries. Durable `ThemePreference` remains distinct from `ResolvedTheme`; Windows observation is isolated behind `IDesktopThemeSource`, and theme changes persist through the existing transactional preference command with reducer compensation on failure. |
 
 ## 23. Open questions requiring evidence or product decisions
 
@@ -1798,6 +1859,7 @@ Open questions are resolved with experiments, fixtures, or ADRs—not assumption
 
 - Richard Hipp, [*Reliability Lessons From SQLite* — SSW 2026](https://www.youtube.com/watch?v=V_qzqY1bb7I)
 - Replicant, [*Simpler, more testable UIs with pure functions and data*](https://replicant.fun/) — architectural inspiration for top-down immutable UI state only; GravelReview does not depend on Clojure, ClojureScript, or Replicant
+- [GravelReview WPF theme design brief](https://chatgpt.com/s/cx_6a9d90b776808191af847f296ebcbe0d) — product-design objectives adapted to this repository's immutable-state, interface, and persistence boundaries
 - iRacing Support, [distinction between the local simulator SDK and remote Data API](https://support.iracing.com/support/solutions/articles/31000177790-oauth-client-credentials)
 - iRacing, [official member SDK discussion and distribution](https://forums.iracing.com/discussion/62/iracing-sdk/p1)
 - Repository evidence gate, [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md)

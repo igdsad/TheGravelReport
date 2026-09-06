@@ -51,6 +51,16 @@ GravelReview uses a reducer-style, top-down presentation architecture inspired b
 - Keep the event log bounded and tail-following. It is presentation state, not a durable diagnostic sink.
 - Busy state may temporarily overlay the status text, but it must not destroy the underlying current notice.
 
+## Desktop theming and branding
+
+- WPF styling uses native resource dictionaries only. `Themes/Base.xaml` owns structure and control styles; `Themes/Light.xaml` and `Themes/Dark.xaml` own matching semantic color-resource sets. Controls consume semantic `DynamicResource` keys rather than literal palette colors.
+- The durable `ThemePreference` (`FollowDesktop`, `Light`, or `Dark`) is policy, while `ResolvedTheme` is the concrete palette currently rendered. Never collapse these into one value: following Windows must remain distinguishable from forcing whichever palette Windows currently uses.
+- Windows theme detection stays behind `IDesktopThemeSource`; palette resolution/application stays behind `IThemeController`. Ordinary view-model, reducer, application, and domain code must not read the registry or subscribe to static operating-system events.
+- `MainWindowState` owns both the configured preference and resolved palette. The window applies the palette represented by that state; it does not resolve an independent theme. `FollowDesktop` reacts to live Windows changes, while forced Light and Dark modes ignore them.
+- The status-bar theme control cycles `FollowDesktop → Light → Dark → FollowDesktop`. A selection is rendered immediately, then persisted with all other preferences through the transactional `IStore` path. On persistence failure, restore the complete prior preference and resolve its current palette before publishing the one exact error event/status.
+- Apply the stored preference before the main window becomes visible. New and version-1 databases default to `FollowDesktop` through append-only migration `002`; never edit migration `001` or discard existing replay preferences during a theme update.
+- Use `assets/branding/logo.png` for in-app GravelReview branding and `assets/branding/favicon.ico` for the executable/window icon. Keep the compatibility-stable internal `IncidentReview.*` identities unchanged.
+
 ## iRacing boundary
 
 - Only `IncidentReview.Iracing` knows shared-memory layouts, session YAML shape, SDK numeric identifiers, or Windows replay broadcast encoding.

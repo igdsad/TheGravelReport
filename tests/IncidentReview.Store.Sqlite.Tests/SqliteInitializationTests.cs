@@ -46,6 +46,7 @@ public sealed class SqliteInitializationTests
     ];
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task NewDatabaseAppliesExactManifestAndRequiredPragmas()
     {
@@ -71,6 +72,7 @@ public sealed class SqliteInitializationTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task ReinitializationDoesNotReapplyJournaledMigration()
     {
@@ -96,6 +98,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task VersionOneDatabaseUpgradesWithoutLosingReplayPreferences()
     {
@@ -528,6 +531,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task SchemaValidationRejectsAnInvalidPersistedTheme()
     {
@@ -586,6 +590,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task PreferencesEnforceSingletonBooleanPlaybackAndThemeValues()
     {
         using var database = new TemporarySqliteDatabase();
@@ -615,6 +620,7 @@ public sealed class SqliteInitializationTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task SchemaAcceptsFinalizedDomainCodesAndBoundaryValues()
     {
@@ -673,6 +679,7 @@ public sealed class SqliteInitializationTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task SchemaRejectsValuesOutsideFinalizedDomainSets()
     {

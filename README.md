@@ -23,6 +23,8 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **-2 sec**, **0 sec**, or **+2 sec** on that incident's row. The workflow preflights the active session, seeks relative to the stored event time, focuses the local player with the selected camera group, and applies the stored playback behavior. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
 
+The far-right status-bar button cycles the appearance through **Follow desktop → Light → Dark → Follow desktop**. Its monitor, sun, or moon icon shows the configured mode, and its tooltip states both the current mode and what the next click will select. Follow desktop reacts to Windows theme changes while the app is running; forced Light and Dark do not. The choice is applied immediately and saved to SQLite. If saving fails, GravelReview restores the previous appearance and reports that exact failure in the shared status/event stream.
+
 Only one app instance may run in the Windows user session.
 
 ## Data and configuration
@@ -44,7 +46,11 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The database path must be an absolute local file path. Startup timeout accepts 1 through 120 seconds. The equivalent environment variables are `INCIDENTREVIEW_DatabasePath` and `INCIDENTREVIEW_StartupTimeoutSeconds`; command-line values take precedence. There is no JSON configuration file in the current runtime.
 
-Replay pause/playback behavior and the preferred camera group are durable user preferences stored through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while still focusing the local player.
+Replay pause/playback behavior, preferred camera group, and theme mode are durable user preferences stored together through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while still focusing the local player. Existing databases migrate to **Follow desktop** without changing any replay preference, and the stored mode is applied before the main window becomes visible.
+
+## Appearance and branding
+
+GravelReview's light and dark visual system uses only native WPF resources. [`Base.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Base.xaml) owns shared control structure, while [`Light.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Light.xaml) and [`Dark.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Dark.xaml) provide matching semantic palettes. The UI includes [`logo.png`](assets/branding/logo.png), and the Windows executable/window uses [`favicon.ico`](assets/branding/favicon.ico). Product-facing surfaces say GravelReview; compatibility-stable `IncidentReview.*` projects, namespaces, database paths, environment variables, mutex, and Automation IDs intentionally retain their existing names.
 
 ## Build, test, and publish
 
@@ -85,10 +91,10 @@ The application is split by behavioral boundary:
 - `Application` orchestrates use cases through those contracts; it has no SQLite, Dapper, DbUp, WPF, or Windows interop reference.
 - `Store.Sqlite` is one `IStore` implementation. It owns Dapper SQL, connections, transactions, row mapping, DbUp, and schema validation.
 - `Iracing` is the only production assembly that knows the SDK ABI or replay broadcast protocol.
-- `Desktop.Wpf` talks only to `Application.Contracts` plus domain/result values. It renders one immutable root presentation state; UI events are reduced into a replacement state and external effects remain outside the reducer.
+- `Desktop.Wpf` talks only to `Application.Contracts` plus domain/result values. It renders one immutable root presentation state; UI events are reduced into a replacement state and external effects remain outside the reducer. That root also keeps configured theme policy separate from the resolved Light/Dark palette. Windows detection and palette application are isolated behind desktop interfaces.
 - `Host.Wpf` is the sole composition root and selects the concrete adapters using Microsoft Generic Host and its built-in DI container.
 
-Every store mutation is an immutable typed `IStoreCommand` with an `OperationId`. The SQLite adapter executes it in one owned transaction, writes its operation fingerprint in the same transaction, and supports reconciliation after an indeterminate commit. Runtime values are Dapper parameters; raw SQL is private to the adapter. DbUp applies the checksum-pinned embedded migration before the store gate opens.
+Every store mutation is an immutable typed `IStoreCommand` with an `OperationId`. The SQLite adapter executes it in one owned transaction, writes its operation fingerprint in the same transaction, and supports reconciliation after an indeterminate commit. Runtime values are Dapper parameters; raw SQL is private to the adapter. DbUp applies the checksum-pinned embedded migrations before the store gate opens.
 
 Boundary rules are defined once in [`eng/ArchitecturePolicy.props`](eng/ArchitecturePolicy.props), enforced during MSBuild, inspected again in compiled-assembly architecture tests, and supplemented by repository analyzers for non-constant Dapper SQL, missing Dapper mutation transactions (including `CommandDefinition`), and nested service-provider construction.
 
@@ -120,6 +126,7 @@ JSON is not part of storage, internal messaging, or current configuration. A fut
 - Capture a permitted redacted session-information fixture and expand variable-header mutation coverage.
 - Validate paused-replay classification through `CamCameraState.IsSessionScreen`, camera-group selection, and all replay confirmations across the supported session types in a recorded current-iRacing acceptance run.
 - Add package-level WPF UI Automation that combines the independent shared-memory protocol simulator with the existing hidden native Windows broadcast receiver; those mechanisms are currently tested separately.
+- Complete packaged visual acceptance for both palettes, all interaction states, common scaling levels, Windows high contrast, live Follow-desktop switching, and restart persistence.
 - Complete crash/full/locked/corrupt-database campaigns, coverage enforcement, fuzz/mutation/stress jobs, dependency/license inventory, and SBOM generation.
 - Add WPF editing for annotations/classification and explicit reviewed/dismissed actions; add export only as a separate capability.
 

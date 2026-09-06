@@ -78,6 +78,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task InitializedStoreReturnsDefaultsAndRoundTripsAnUpdate()
     {
         using var database = new TemporarySqliteDatabase();
@@ -117,6 +118,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [DataRow(ThemePreference.FollowDesktop)]
     [DataRow(ThemePreference.Light)]
     [DataRow(ThemePreference.Dark)]
@@ -165,6 +167,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-005")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task ReusedOperationIdentityWithDifferentFingerprintReturnsConflict()
     {
         using var database = new TemporarySqliteDatabase();
@@ -311,6 +314,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-006")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [DataRow(SqliteTestCommitMode.IndeterminateBeforeCommit, false)]
     [DataRow(SqliteTestCommitMode.IndeterminateAfterCommit, true)]
     public async Task IndeterminateCommitCanBeReconciled(
@@ -346,6 +350,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-006")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task CleanupFailuresDoNotReplaceThePrimaryIndeterminateOutcome()
     {
         using var database = new TemporarySqliteDatabase();
@@ -370,6 +375,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-005")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task PreferencesFingerprintMatchesVersionedGoldenVector()
     {
         using var database = new TemporarySqliteDatabase();
@@ -400,6 +406,7 @@ public sealed class SqlitePreferencesStoreTests
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-005")]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     public async Task ThemeIsPartOfTheVersionedOperationFingerprint()
     {
         using var database = new TemporarySqliteDatabase();
@@ -422,6 +429,7 @@ public sealed class SqlitePreferencesStoreTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-ERR-001")]
     public async Task QueryRejectsAnInvalidPersistedThemeWithoutExposingProviderDetails()
     {
@@ -465,6 +473,7 @@ public sealed class SqlitePreferencesStoreTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-002")]
     [TestProperty("Requirement", "QR-ERR-001")]
     public async Task UnexpectedExecutorDefectFaultsCallerAndWorkerRemainsObserved()
     {
