@@ -37,6 +37,16 @@ logs/
 # a directory named IncidentReview.Store.Sqlite on case-insensitive systems.
 !src/IncidentReview.Store.Sqlite/
 !src/IncidentReview.Store.Sqlite/**
+src/IncidentReview.Store.Sqlite/**/bin/
+src/IncidentReview.Store.Sqlite/**/obj/
+src/IncidentReview.Store.Sqlite/**/*.db
+src/IncidentReview.Store.Sqlite/**/*.db-shm
+src/IncidentReview.Store.Sqlite/**/*.db-wal
+src/IncidentReview.Store.Sqlite/**/*.sqlite
+src/IncidentReview.Store.Sqlite/**/*.sqlite-shm
+src/IncidentReview.Store.Sqlite/**/*.sqlite-wal
+src/IncidentReview.Store.Sqlite/**/*.sqlite3
+src/IncidentReview.Store.Sqlite/**/*.log
 
 # Reviewed binary database fixtures are source-controlled test inputs.
 !test-assets/databases/
