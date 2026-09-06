@@ -265,6 +265,7 @@
 
     <PackageOwner Include="Microsoft.CodeAnalysis.CSharp"><Project>IncidentReview.Analyzers</Project></PackageOwner>
     <PackageOwner Include="Microsoft.CodeAnalysis.Analyzers"><Project>IncidentReview.Analyzers</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.CodeAnalysis.CSharp"><Project>IncidentReview.Analyzers.Tests</Project></PackageOwner>
 
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Architecture.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Results.Tests</Project></PackageOwner>
