@@ -6,7 +6,7 @@
           BeforeTargets="CollectPackageReferences">
     <ItemGroup>
       <_VersionedPackageReference Include="@(PackageReference)"
-                                  Condition="'%(PackageReference.Version)' != '' or '%(PackageReference.VersionOverride)' != ''" />
+                                  Condition="'%(PackageReference.IsImplicitlyDefined)' != 'true' and ('%(PackageReference.Version)' != '' or '%(PackageReference.VersionOverride)' != '')" />
     </ItemGroup>
 
     <Error Condition="'@(_VersionedPackageReference)' != ''"

@@ -33,6 +33,11 @@ coverage/
 logs/
 *.log
 
+# Keep the SQLite adapter source tree; the extension pattern above also matches
+# a directory named IncidentReview.Store.Sqlite on case-insensitive systems.
+!src/IncidentReview.Store.Sqlite/
+!src/IncidentReview.Store.Sqlite/**
+
 # Reviewed binary database fixtures are source-controlled test inputs.
 !test-assets/databases/
 !test-assets/databases/**
