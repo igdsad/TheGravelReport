@@ -46,7 +46,7 @@ public static class IracingTestingRegistration
                 "The test delivery mode is undefined.");
         }
 
-        var connectionState = new IracingConnectionState(telemetryAvailable);
+        var connectionState = new IracingConnectionState();
         var initialFrame = CreateTestFrame(
             new IracingTestReplayState(
                 ReplaySessionNumber: 0,
@@ -58,7 +58,10 @@ public static class IracingTestingRegistration
                 CameraGroupNumber: 1,
                 CameraNumber: 10,
                 SessionInfo: sessionInfo ?? DefaultReplaySessionInfo));
-        connectionState.ObserveTestFrame(initialFrame);
+        if (telemetryAvailable)
+        {
+            connectionState.PublishAvailable(initialFrame);
+        }
 
         var sender = new RecordingReplayMessageSender(
             deliveryMode,
@@ -82,7 +85,24 @@ public static class IracingTestingRegistration
         string memoryMapName,
         string dataValidEventName,
         IracingOptions? options = null,
-        TimeSpan? confirmationTimeout = null)
+        TimeSpan? confirmationTimeout = null) => CreateIntegrationContext(
+            memoryMapName,
+            dataValidEventName,
+            options,
+            confirmationTimeout,
+            TimeProvider.System,
+            stableFrameCopied: null);
+
+    /// <summary>
+    /// Creates telemetry and replay adapters with deterministic time and frame-copy seams.
+    /// </summary>
+    public static IracingTestIntegrationContext CreateIntegrationContext(
+        string memoryMapName,
+        string dataValidEventName,
+        IracingOptions? options,
+        TimeSpan? confirmationTimeout,
+        TimeProvider? timeProvider,
+        Action? stableFrameCopied)
     {
         ValidateObjectName(memoryMapName, nameof(memoryMapName));
         ValidateObjectName(dataValidEventName, nameof(dataValidEventName));
@@ -93,7 +113,8 @@ public static class IracingTestingRegistration
                 memoryMapName,
                 dataValidEventName,
                 options ?? IracingOptions.Default,
-                TimeProvider.System),
+                timeProvider ?? TimeProvider.System,
+                stableFrameCopied),
             connectionState);
         return new IracingTestIntegrationContext(
             source,
@@ -230,11 +251,12 @@ public static class IracingTestingRegistration
         ReplayBroadcastCommand command)
     {
         var observation = state.Read();
-        if (observation.Frame is not { } current)
+        if (observation is not ReplayFrameObservation.Available available)
         {
             return;
         }
 
+        var current = available.Frame;
         var next = command.Message switch
         {
             IracingBroadcastMessage.ReplaySearchSessionTime => current with
@@ -252,7 +274,7 @@ public static class IracingTestingRegistration
                 command),
             _ => current,
         };
-        state.ObserveTestFrame(next);
+        state.PublishAvailable(next);
     }
 
     private static ReplayFrameState ApplyTestCameraCommand(
@@ -337,11 +359,11 @@ public sealed class IracingTestReplayContext
     public void ObserveFrame(IracingTestReplayState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        _connectionState.ObserveTestFrame(CreateFrame(state));
+        _connectionState.PublishAvailable(CreateFrame(state));
     }
 
     /// <summary>Marks the deterministic SDK connection unavailable.</summary>
-    public void Disconnect() => _connectionState.SetUnavailable();
+    public void Disconnect() => _connectionState.PublishUnavailable();
 
     private static ReplayFrameState CreateFrame(IracingTestReplayState state)
     {
@@ -455,12 +477,12 @@ public sealed class IracingTestFrameProbe : IDisposable
     public IracingTestFrameOutcome Read()
     {
         ObjectDisposedException.ThrowIf(_isDisposed != 0, this);
-        return _connection.TryRead().Status switch
+        return _connection.TryRead() switch
         {
-            IracingReadStatus.NoData => IracingTestFrameOutcome.NoData,
-            IracingReadStatus.Disconnected => IracingTestFrameOutcome.Disconnected,
-            IracingReadStatus.Snapshot => IracingTestFrameOutcome.Snapshot,
-            IracingReadStatus.Invalid => IracingTestFrameOutcome.Invalid,
+            IracingReadResult.NoData => IracingTestFrameOutcome.NoData,
+            IracingReadResult.Disconnected => IracingTestFrameOutcome.Disconnected,
+            IracingReadResult.Snapshot => IracingTestFrameOutcome.Snapshot,
+            IracingReadResult.Invalid => IracingTestFrameOutcome.Invalid,
             _ => throw new InvalidOperationException("The iRacing read status is undefined."),
         };
     }

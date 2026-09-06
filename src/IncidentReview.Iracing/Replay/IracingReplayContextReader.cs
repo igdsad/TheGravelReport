@@ -15,13 +15,13 @@ internal sealed class IracingReplayContextReader : IReplayContextReader
     public Result<ReplayContext> Read()
     {
         var observation = _connectionState.Read();
-        if (!observation.IsAvailable)
+        if (observation is not ReplayFrameObservation.Available available)
         {
             return Result<ReplayContext>.Failure(IracingErrors.ReplayUnavailable);
         }
 
-        var frame = observation.Frame;
-        var metadata = frame?.Metadata ?? Protocol.IracingReplayContextMetadata.Empty;
+        var frame = available.Frame;
+        var metadata = frame.Metadata;
         var driverContext = ReplayContext.TryCreate(
             metadata.Player?.DriverDisplayName,
             [],
@@ -30,7 +30,7 @@ internal sealed class IracingReplayContextReader : IReplayContextReader
             ? driverContext.Value.DriverDisplayName
             : null;
 
-        var currentCameraGroup = frame?.CameraGroupNumber is { } currentGroupNumber
+        var currentCameraGroup = frame.CameraGroupNumber is { } currentGroupNumber
             ? metadata.CameraGroups.SingleOrDefault(group => group.Number == currentGroupNumber)?.Name
             : null;
         var cameraContext = ReplayContext.TryCreate(

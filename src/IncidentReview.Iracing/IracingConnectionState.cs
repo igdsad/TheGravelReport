@@ -6,37 +6,19 @@ internal sealed class IracingConnectionState
 {
     private readonly Lock _lock = new();
     private TaskCompletionSource _changed = CreateSignal();
-    private ReplayFrameState? _latestFrame;
+    private ReplayFrameObservation _observation = new ReplayFrameObservation.Unavailable(0);
     private string? _metadataSource;
     private IracingReplayContextMetadata _metadata = IracingReplayContextMetadata.Empty;
-    private long _version;
-    private bool _isAvailable;
-
-    public IracingConnectionState(bool isAvailable = false)
-    {
-        _isAvailable = isAvailable;
-    }
-
-    public bool IsAvailable
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _isAvailable;
-            }
-        }
-    }
 
     public ReplayFrameObservation Read()
     {
         lock (_lock)
         {
-            return new ReplayFrameObservation(_version, _isAvailable, _latestFrame);
+            return _observation;
         }
     }
 
-    public void ObserveStableFrame(IracingFrameSnapshot snapshot)
+    public void PublishAvailable(IracingFrameSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -50,23 +32,25 @@ internal sealed class IracingConnectionState
                     snapshot.SessionInfo);
             }
 
-            _latestFrame = DecodeReplayFrame(snapshot, _metadata);
-            _version++;
+            _observation = new ReplayFrameObservation.Available(
+                checked(_observation.Version + 1),
+                DecodeReplayFrame(snapshot, _metadata));
             signal = RotateSignal();
         }
 
         signal.TrySetResult();
     }
 
-    public void ObserveTestFrame(ReplayFrameState frame)
+    public void PublishAvailable(ReplayFrameState frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
 
         TaskCompletionSource signal;
         lock (_lock)
         {
-            _latestFrame = frame;
-            _version++;
+            _observation = new ReplayFrameObservation.Available(
+                checked(_observation.Version + 1),
+                frame);
             signal = RotateSignal();
         }
 
@@ -80,7 +64,7 @@ internal sealed class IracingConnectionState
         Task wait;
         lock (_lock)
         {
-            if (_version != observedVersion)
+            if (_observation.Version != observedVersion)
             {
                 return;
             }
@@ -91,34 +75,17 @@ internal sealed class IracingConnectionState
         await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public void SetAvailable()
+    public void PublishUnavailable()
     {
         TaskCompletionSource? signal = null;
         lock (_lock)
         {
-            if (!_isAvailable)
+            if (_observation is ReplayFrameObservation.Available)
             {
-                _isAvailable = true;
-                _version++;
-                signal = RotateSignal();
-            }
-        }
-
-        signal?.TrySetResult();
-    }
-
-    public void SetUnavailable()
-    {
-        TaskCompletionSource? signal = null;
-        lock (_lock)
-        {
-            if (_isAvailable || _latestFrame is not null)
-            {
-                _isAvailable = false;
-                _latestFrame = null;
+                _observation = new ReplayFrameObservation.Unavailable(
+                    checked(_observation.Version + 1));
                 _metadataSource = null;
                 _metadata = IracingReplayContextMetadata.Empty;
-                _version++;
                 signal = RotateSignal();
             }
         }
@@ -205,10 +172,34 @@ internal sealed class IracingConnectionState
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
-internal sealed record ReplayFrameObservation(
-    long Version,
-    bool IsAvailable,
-    ReplayFrameState? Frame);
+internal abstract record ReplayFrameObservation
+{
+    private ReplayFrameObservation(long version)
+    {
+        Version = version;
+    }
+
+    public long Version { get; }
+
+    internal sealed record Unavailable : ReplayFrameObservation
+    {
+        public Unavailable(long version)
+            : base(version)
+        {
+        }
+    }
+
+    internal sealed record Available : ReplayFrameObservation
+    {
+        public Available(long version, ReplayFrameState frame)
+            : base(version)
+        {
+            Frame = frame;
+        }
+
+        public ReplayFrameState Frame { get; }
+    }
+}
 
 internal sealed record ReplayFrameState(
     int? ReplaySessionNumber,

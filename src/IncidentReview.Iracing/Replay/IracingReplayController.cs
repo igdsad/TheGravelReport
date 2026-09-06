@@ -67,12 +67,12 @@ internal sealed class IracingReplayController : IReplayController
     {
         cancellationToken.ThrowIfCancellationRequested();
         var observation = _connectionState.Read();
-        if (!observation.IsAvailable)
+        if (observation is not ReplayFrameObservation.Available available)
         {
             return Result.Failure(IracingErrors.ReplayUnavailable);
         }
 
-        if (observation.Frame?.Metadata is not { Player: { } player } metadata ||
+        if (available.Frame.Metadata is not { Player: { } player } metadata ||
             metadata.CameraGroups.Count == 0)
         {
             return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
@@ -82,8 +82,8 @@ internal sealed class IracingReplayController : IReplayController
         int cameraNumber;
         if (preferredCamera is null)
         {
-            if (observation.Frame.CameraGroupNumber is not { } currentGroup ||
-                observation.Frame.CameraNumber is not { } currentCamera)
+            if (available.Frame.CameraGroupNumber is not { } currentGroup ||
+                available.Frame.CameraNumber is not { } currentCamera)
             {
                 return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
             }
@@ -175,14 +175,13 @@ internal sealed class IracingReplayController : IReplayController
             while (true)
             {
                 var observation = _connectionState.Read();
-                if (!observation.IsAvailable)
+                if (observation is not ReplayFrameObservation.Available available)
                 {
                     return Result.Failure(IracingErrors.ReplayUnavailable);
                 }
 
                 if (observation.Version > baselineVersion &&
-                    observation.Frame is { } frame &&
-                    isApplied(frame))
+                    isApplied(available.Frame))
                 {
                     return Result.Success();
                 }
@@ -210,7 +209,7 @@ internal sealed class IracingReplayController : IReplayController
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_connectionState.IsAvailable)
+        if (_connectionState.Read() is not ReplayFrameObservation.Available)
         {
             return Result.Failure(IracingErrors.ReplayUnavailable);
         }

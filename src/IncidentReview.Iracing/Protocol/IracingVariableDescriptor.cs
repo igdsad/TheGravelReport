@@ -12,24 +12,47 @@ internal sealed record IracingFrameSnapshot(
     string SessionInfo,
     IReadOnlyDictionary<string, IracingVariableDescriptor> Variables);
 
-internal enum IracingReadStatus
+internal abstract record IracingReadResult
 {
-    NoData,
-    Disconnected,
-    Snapshot,
-    Invalid,
-}
+    private IracingReadResult()
+    {
+    }
 
-internal sealed record IracingReadResult(
-    IracingReadStatus Status,
-    IracingFrameSnapshot? Snapshot = null)
-{
-    public static IracingReadResult NoData { get; } = new(IracingReadStatus.NoData);
+    internal sealed record NoData : IracingReadResult
+    {
+        public static NoData Instance { get; } = new();
 
-    public static IracingReadResult Disconnected { get; } = new(IracingReadStatus.Disconnected);
+        private NoData()
+        {
+        }
+    }
 
-    public static IracingReadResult Invalid { get; } = new(IracingReadStatus.Invalid);
+    internal sealed record Disconnected : IracingReadResult
+    {
+        public static Disconnected Instance { get; } = new();
 
-    public static IracingReadResult FromSnapshot(IracingFrameSnapshot snapshot) =>
-        new(IracingReadStatus.Snapshot, snapshot);
+        private Disconnected()
+        {
+        }
+    }
+
+    internal sealed record Invalid : IracingReadResult
+    {
+        public static Invalid Instance { get; } = new();
+
+        private Invalid()
+        {
+        }
+    }
+
+    internal sealed record Snapshot : IracingReadResult
+    {
+        public Snapshot(IracingFrameSnapshot frame)
+        {
+            ArgumentNullException.ThrowIfNull(frame);
+            Frame = frame;
+        }
+
+        public IracingFrameSnapshot Frame { get; }
+    }
 }

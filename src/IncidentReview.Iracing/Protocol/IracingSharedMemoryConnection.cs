@@ -90,15 +90,15 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         for (var attempt = 0; attempt < 2; attempt++)
         {
             var result = TryReadOnce();
-            if (result.Status != IracingReadStatus.NoData)
+            if (result is not IracingReadResult.NoData)
             {
                 return result;
             }
         }
 
         return HasTimedOut()
-            ? IracingReadResult.Disconnected
-            : IracingReadResult.NoData;
+            ? IracingReadResult.Disconnected.Instance
+            : IracingReadResult.NoData.Instance;
     }
 
     public async ValueTask WaitForDataAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -159,19 +159,19 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
     {
         if (_view.Capacity < IracingProtocol.HeaderSize)
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         var header = ReadBytes(0, IracingProtocol.HeaderSize);
         if (header is null)
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         var status = ReadInt32(header, 4);
         if ((status & IracingProtocol.ConnectedStatus) == 0)
         {
-            return IracingReadResult.Disconnected;
+            return IracingReadResult.Disconnected.Instance;
         }
 
         var version = ReadInt32(header, 0);
@@ -194,7 +194,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             !TryMultiply(numberOfVariables, IracingProtocol.VariableHeaderSize, out var headersLength) ||
             !IsRangeValid(variableHeaderOffset, headersLength))
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         var bufferDescriptorOffset = checked(
@@ -205,18 +205,18 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
 
         if (!IsRangeValid(bufferOffset, bufferLength))
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         if (_lastTick == tickCount)
         {
-            return IracingReadResult.NoData;
+            return IracingReadResult.NoData.Instance;
         }
 
         if (_lastTick is not null && tickCount < _lastTick)
         {
             _lastTick = tickCount;
-            return IracingReadResult.NoData;
+            return IracingReadResult.NoData.Instance;
         }
 
         Thread.MemoryBarrier();
@@ -233,19 +233,19 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             variableHeaders = ReadBytes(variableHeaderOffset, headersLength);
             if (variableHeaders is null)
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             Thread.MemoryBarrier();
             var confirmation = ReadBytes(variableHeaderOffset, headersLength);
             if (confirmation is null)
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             if (!variableHeaders.AsSpan().SequenceEqual(confirmation))
             {
-                return IracingReadResult.NoData;
+                return IracingReadResult.NoData.Instance;
             }
 
             variableHeaders = confirmation;
@@ -262,7 +262,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             sessionInfoBytes = ReadBytes(sessionInfoOffset, sessionInfoLength);
             if (sessionInfoBytes is null)
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             _betweenSessionInformationCopies?.Invoke();
@@ -270,12 +270,12 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             var confirmation = ReadBytes(sessionInfoOffset, sessionInfoLength);
             if (confirmation is null)
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             if (!sessionInfoBytes.AsSpan().SequenceEqual(confirmation))
             {
-                return IracingReadResult.NoData;
+                return IracingReadResult.NoData.Instance;
             }
 
             sessionInfoBytes = confirmation;
@@ -286,7 +286,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             (!sessionInformationCacheHit && sessionInfoBytes is null) ||
             frame is null)
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         Thread.MemoryBarrier();
@@ -318,7 +318,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
             sessionInfoUpdate != sessionUpdateAfterCopy ||
             currentBuffer != currentBufferAfterCopy)
         {
-            return IracingReadResult.NoData;
+            return IracingReadResult.NoData.Instance;
         }
 
         IReadOnlyDictionary<string, IracingVariableDescriptor> variables;
@@ -326,7 +326,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         {
             if (!TryDecodeVariableHeaders(variableHeaders, bufferLength, out variables))
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             _variableMetadata = new VariableMetadataCache(
@@ -351,7 +351,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
                     out subSessionId,
                     out sessionInfo))
             {
-                return IracingReadResult.Invalid;
+                return IracingReadResult.Invalid.Instance;
             }
 
             _sessionInformation = new SessionInformationCache(
@@ -370,12 +370,12 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
 
         if (variables.Count != numberOfVariables)
         {
-            return IracingReadResult.Invalid;
+            return IracingReadResult.Invalid.Instance;
         }
 
         _lastTick = tickCount;
         _lastValidTimestamp = _timeProvider.GetTimestamp();
-        return IracingReadResult.FromSnapshot(
+        return new IracingReadResult.Snapshot(
             new IracingFrameSnapshot(frame, subSessionId, sessionInfo, variables));
     }
 
