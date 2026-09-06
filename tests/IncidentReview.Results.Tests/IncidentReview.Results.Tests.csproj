@@ -1,0 +1,11 @@
+<Project Sdk="MSTest.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Results.Tests</AssemblyName>
+    <RootNamespace>IncidentReview.Results.Tests</RootNamespace>
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
+    <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

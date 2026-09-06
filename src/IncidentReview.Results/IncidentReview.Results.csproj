@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Results</AssemblyName>
+    <RootNamespace>IncidentReview.Results</RootNamespace>
+  </PropertyGroup>
+</Project>
