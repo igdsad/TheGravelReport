@@ -17,6 +17,8 @@
     <Project Path="tests/IncidentReview.Architecture.Tests/IncidentReview.Architecture.Tests.csproj" />
     <Project Path="tests/IncidentReview.Results.Tests/IncidentReview.Results.Tests.csproj" />
     <Project Path="tests/IncidentReview.Domain.Tests/IncidentReview.Domain.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Telemetry.Contracts.Tests/IncidentReview.Telemetry.Contracts.Tests.csproj" />
+    <Project Path="tests/IncidentReview.Replay.Contracts.Tests/IncidentReview.Replay.Contracts.Tests.csproj" />
     <Project Path="tests/IncidentReview.Application.Tests/IncidentReview.Application.Tests.csproj" />
     <Project Path="tests/IncidentReview.Store.ContractTests/IncidentReview.Store.ContractTests.csproj" />
     <Project Path="tests/IncidentReview.Store.Sqlite.Tests/IncidentReview.Store.Sqlite.Tests.csproj" />

@@ -88,6 +88,14 @@
       <Kind>Test</Kind>
       <RootNamespace>IncidentReview.Domain.Tests</RootNamespace>
     </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Telemetry.Contracts.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Telemetry.Contracts.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Replay.Contracts.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Replay.Contracts.Tests</RootNamespace>
+    </ArchitectureProject>
     <ArchitectureProject Include="IncidentReview.Application.Tests">
       <Kind>Test</Kind>
       <RootNamespace>IncidentReview.Application.Tests</RootNamespace>
@@ -201,6 +209,14 @@
     <AllowedProjectReference Include="IncidentReview.Domain.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Domain.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
 
+    <AllowedProjectReference Include="IncidentReview.Telemetry.Contracts.Tests"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Telemetry.Contracts.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Telemetry.Contracts.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Replay.Contracts.Tests"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Replay.Contracts.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Replay.Contracts.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
@@ -271,6 +287,8 @@
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Architecture.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Results.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Domain.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Telemetry.Contracts.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Replay.Contracts.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Application.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.ContractTests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>

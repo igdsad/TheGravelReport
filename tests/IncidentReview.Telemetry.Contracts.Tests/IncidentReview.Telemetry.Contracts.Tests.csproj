@@ -1,0 +1,15 @@
+<Project Sdk="MSTest.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.Telemetry.Contracts.Tests</AssemblyName>
+    <RootNamespace>IncidentReview.Telemetry.Contracts.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
+    <ProjectReference Include="../../src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>
