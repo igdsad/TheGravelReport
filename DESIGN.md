@@ -981,15 +981,16 @@ JSON configuration is not used in the current application. Deployment settings u
 
 The implemented MVP UI contains:
 
-- global iRacing connection indicator;
-- current and historical session selection;
-- chronological incident list showing time, lap, delta, total, and review status;
-- Review action for the selected incident;
-- editable durable lead-in, pause/playback-speed, and preferred-camera preference fields;
-- nonblocking status/error surface;
+- a single primary, chronological incident log with its own horizontal and vertical scrolling;
+- recorded time, incident identity, replay time, lap, delta, total, review status, and stored notes for each incident;
+- Review actions on each incident row, plus double-click review;
+- a collapsed-by-default power-user section containing bounded, timestamped diagnostic events and its own scrolling;
+- current and historical session selection inside the power-user section rather than as a competing primary pane;
+- editable durable lead-in, pause/playback-speed, and preferred-camera preference fields inside that section;
+- a bottom status bar containing iRacing connection state, live-update state, work/incident state, and exact safe error text;
 - explicit unavailable state when replay control cannot be used.
 
-The incident grid displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. Preferred camera is persisted for forward compatibility but is not applied by the current replay adapter. These controls must not be described as implemented until the application contract, WPF interaction, and adapter behavior are connected and tested.
+The event stream is presentation-only, is capped at 200 entries by evicting the oldest entry, and is not a substitute for a future durable diagnostic log. The incident grid deliberately does not display driver name or car number: those values are not yet captured by the telemetry/domain/store contracts and the UI must not invent them. It displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. Preferred camera is persisted for forward compatibility but is not applied by the current replay adapter. These controls must not be described as implemented until the application contract, WPF interaction, and adapter behavior are connected and tested.
 
 View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry, or encode replay commands.
 
