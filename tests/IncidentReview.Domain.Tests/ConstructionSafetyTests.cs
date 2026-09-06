@@ -21,6 +21,17 @@ public sealed class ConstructionSafetyTests
             typeof(IncidentCounter),
             typeof(LapNumber),
             typeof(LapDistance),
+            typeof(IncidentPoints),
+            typeof(CounterEpoch),
+            typeof(IncidentReviewStatus),
+            typeof(IncidentClassification),
+            typeof(IncidentAnnotation),
+            typeof(UserPreferences),
+            typeof(SimulatorCode),
+            typeof(SimulatorSessionKey),
+            typeof(SessionMode),
+            typeof(SimulatorIdentityScope),
+            typeof(SimulatorSessionDescriptor),
         };
 
         foreach (var type in domainValueTypes)
