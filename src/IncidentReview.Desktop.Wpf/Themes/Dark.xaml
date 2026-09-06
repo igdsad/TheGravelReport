@@ -1,0 +1,52 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Palette only. Keep this key set identical to Light.xaml. -->
+    <SolidColorBrush x:Key="App.Window.Background" Color="#FF0D1013" />
+
+    <SolidColorBrush x:Key="App.Surface.Toolbar" Color="#FF11151A" />
+    <SolidColorBrush x:Key="App.Surface.Card" Color="#FF151A1F" />
+    <SolidColorBrush x:Key="App.Surface.Raised" Color="#FF1B2127" />
+    <SolidColorBrush x:Key="App.Surface.Input" Color="#FF101419" />
+    <SolidColorBrush x:Key="App.Surface.Hover" Color="#FF222A32" />
+    <SolidColorBrush x:Key="App.Surface.Pressed" Color="#FF2B353F" />
+    <SolidColorBrush x:Key="App.Surface.Selected" Color="#FF402719" />
+    <SolidColorBrush x:Key="App.Surface.SelectedStrong" Color="#FF60321C" />
+    <SolidColorBrush x:Key="App.Surface.Disabled" Color="#FF1B2025" />
+
+    <SolidColorBrush x:Key="App.Text.Primary" Color="#FFF2F4F5" />
+    <SolidColorBrush x:Key="App.Text.Secondary" Color="#FFBEC5CB" />
+    <SolidColorBrush x:Key="App.Text.Muted" Color="#FF87919A" />
+    <SolidColorBrush x:Key="App.Text.Inverse" Color="#FF0D1013" />
+    <SolidColorBrush x:Key="App.Text.Disabled" Color="#FF626B73" />
+    <SolidColorBrush x:Key="App.Text.OnAccent" Color="#FF111315" />
+
+    <SolidColorBrush x:Key="App.Border.Subtle" Color="#FF2B333A" />
+    <SolidColorBrush x:Key="App.Border.Strong" Color="#FF46515B" />
+    <SolidColorBrush x:Key="App.Border.Focus" Color="#FFFF7A32" />
+
+    <SolidColorBrush x:Key="App.Accent.Primary" Color="#FFFF6A1A" />
+    <SolidColorBrush x:Key="App.Accent.Hover" Color="#FFFF7E3C" />
+    <SolidColorBrush x:Key="App.Accent.Pressed" Color="#FFE8560E" />
+    <SolidColorBrush x:Key="App.Accent.Soft" Color="#FF382419" />
+
+    <SolidColorBrush x:Key="App.Error.Text" Color="#FFFF7168" />
+    <SolidColorBrush x:Key="App.Error.Surface" Color="#FF3C1D1E" />
+    <SolidColorBrush x:Key="App.Success.Text" Color="#FF67D99E" />
+    <SolidColorBrush x:Key="App.Success.Surface" Color="#FF173629" />
+
+    <SolidColorBrush x:Key="App.ScrollBar.Track" Color="#FF171C21" />
+    <SolidColorBrush x:Key="App.ScrollBar.Thumb" Color="#FF48535D" />
+    <SolidColorBrush x:Key="App.ScrollBar.ThumbHover" Color="#FF64717C" />
+    <SolidColorBrush x:Key="App.ScrollBar.ThumbPressed" Color="#FF87939D" />
+
+    <!-- Stable public semantic keys used by the theme contract. -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FF0D1013" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#FF151A1F" />
+    <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#FF1B2127" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#FF2B333A" />
+    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#FFF2F4F5" />
+    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#FFBEC5CB" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#FFFF6A1A" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#FFFF7168" />
+    <SolidColorBrush x:Key="SelectionBrush" Color="#FF402719" />
+</ResourceDictionary>

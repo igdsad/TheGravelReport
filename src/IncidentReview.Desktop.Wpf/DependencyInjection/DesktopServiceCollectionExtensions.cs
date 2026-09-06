@@ -14,6 +14,8 @@ public static class DesktopServiceCollectionExtensions
 
         services.TryAddSingleton<IUiDispatcher>(
             static _ => new WpfUiDispatcher(Dispatcher.CurrentDispatcher));
+        services.TryAddSingleton<IDesktopThemeSource, WindowsDesktopThemeSource>();
+        services.TryAddSingleton<IThemeController, ThemeController>();
         services.TryAddSingleton<MainWindowViewModel>();
         services.TryAddSingleton<MainWindow>();
         services.TryAddSingleton<IncidentReviewDesktopApplication>();

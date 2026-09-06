@@ -17,6 +17,10 @@ public sealed class DesktopRegistrationTests
 
         Assert.AreSame(services, returned);
         Assert.HasCount(1, services.Where(static item => item.ServiceType == typeof(IUiDispatcher)));
+        Assert.HasCount(1, services.Where(
+            static item => item.ServiceType == typeof(IDesktopThemeSource)));
+        Assert.HasCount(1, services.Where(
+            static item => item.ServiceType == typeof(IThemeController)));
         Assert.HasCount(1, services.Where(static item => item.ServiceType == typeof(MainWindowViewModel)));
         Assert.HasCount(1, services.Where(static item => item.ServiceType == typeof(MainWindow)));
         Assert.HasCount(1, services.Where(
