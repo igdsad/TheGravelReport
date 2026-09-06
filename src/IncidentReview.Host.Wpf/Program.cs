@@ -63,7 +63,7 @@ internal static class Program
                 .GetRequiredService<IOptions<HostConfiguration>>()
                 .Value;
             IncidentReviewDesktopApplication? desktopApplication = null;
-            Action? prepareDesktopApplication = null;
+            PreparedDesktopRun? preparedDesktopRun = null;
             using (var startupCancellation = new CancellationTokenSource(configuration.StartupTimeout))
             {
                 var bootstrap = host.Services.GetRequiredService<BootstrapCoordinator>();
@@ -75,17 +75,11 @@ internal static class Program
                     runtime.StartAsync(startupCancellation.Token).GetAwaiter().GetResult());
                 if (!verifyStartup)
                 {
-                    var startupPreferences = RequireSuccess(
-                        host.Services
-                            .GetRequiredService<IIncidentReviewService>()
-                            .GetPreferencesAsync(startupCancellation.Token)
-                            .GetAwaiter()
-                            .GetResult());
                     var applicationToPrepare = host.Services
                         .GetRequiredService<IncidentReviewDesktopApplication>();
                     desktopApplication = applicationToPrepare;
-                    prepareDesktopApplication = () =>
-                        applicationToPrepare.PrepareForStartup(startupPreferences);
+                    preparedDesktopRun = RequireSuccess(
+                        applicationToPrepare.PrepareForStartup(startupCancellation.Token));
                 }
             }
 
@@ -98,12 +92,10 @@ internal static class Program
 
             var application = desktopApplication ?? throw new InvalidOperationException(
                 "The desktop application was not prepared for startup.");
-            var prepareApplication = prepareDesktopApplication ?? throw new InvalidOperationException(
-                "The desktop application has no startup preparation step.");
+            var preparedRun = preparedDesktopRun ?? throw new InvalidOperationException(
+                "The desktop application has no prepared run boundary.");
             using var supervisor = RuntimeSupervisor.Attach(runtime, application.Dispatcher);
-            var exitCode = DesktopStartupSequence.Run(
-                prepareApplication,
-                application.Run);
+            var exitCode = preparedRun.Run();
             supervisor.BeginExpectedStop();
 
             shutdownCompleted = true;

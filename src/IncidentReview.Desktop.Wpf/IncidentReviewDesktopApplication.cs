@@ -1,5 +1,5 @@
 using System.Windows;
-using IncidentReview.Domain;
+using IncidentReview.Results;
 
 namespace IncidentReview.Desktop.Wpf;
 
@@ -22,11 +22,14 @@ public sealed class IncidentReviewDesktopApplication : System.Windows.Applicatio
         _mainWindow.Show();
     }
 
-    /// <summary>Applies stored preferences while the window is still hidden.</summary>
-    public void PrepareForStartup(UserPreferences preferences)
+    /// <summary>Loads and applies stored preferences before exposing the application run boundary.</summary>
+    public Result<PreparedDesktopRun> PrepareForStartup(CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(preferences);
-        _mainWindow.ViewModel.PrepareForStartup(preferences);
+        var preparation = _mainWindow.ViewModel.PrepareStoredPreferencesForStartup(
+            cancellationToken);
+        return preparation.IsSuccess
+            ? Result<PreparedDesktopRun>.Success(new PreparedDesktopRun(this))
+            : Result<PreparedDesktopRun>.Failure(preparation.Error!);
     }
 
     private async void OnMainWindowClosed(object? sender, EventArgs e)
@@ -34,4 +37,18 @@ public sealed class IncidentReviewDesktopApplication : System.Windows.Applicatio
         await _mainWindow.ViewModel.DisposeAsync().ConfigureAwait(true);
         Shutdown();
     }
+}
+
+/// <summary>Represents a desktop application whose startup state is ready to display.</summary>
+public sealed class PreparedDesktopRun
+{
+    private readonly IncidentReviewDesktopApplication _application;
+
+    internal PreparedDesktopRun(IncidentReviewDesktopApplication application)
+    {
+        _application = application;
+    }
+
+    /// <summary>Enters the prepared application's message loop.</summary>
+    public int Run() => _application.Run();
 }

@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
     <ProjectReference Include="../IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
-    <ProjectReference Include="../../src/IncidentReview.Host.Wpf/IncidentReview.Host.Wpf.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Host.Wpf/IncidentReview.Host.Wpf.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

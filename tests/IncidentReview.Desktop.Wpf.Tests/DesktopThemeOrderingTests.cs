@@ -42,7 +42,7 @@ public sealed class DesktopThemeOrderingTests
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-003")]
     [TestProperty("Requirement", "QR-TST-001")]
-    public void StartupPreferenceAppliesResolvedPaletteWhileWindowIsStillHidden()
+    public void StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary()
     {
         ExceptionDispatchInfo? failure = null;
         var thread = new Thread(() =>
@@ -51,17 +51,23 @@ public sealed class DesktopThemeOrderingTests
             MainWindowViewModel? viewModel = null;
             try
             {
-                var service = new FakeIncidentReviewService();
+                var service = new FakeIncidentReviewService
+                {
+                    PreferencesResult = Result<UserPreferences>.Success(
+                        TestModelFactory.Preferences(theme: ThemePreference.Light)),
+                };
                 var themeController = new FakeThemeController(ResolvedTheme.Dark);
                 viewModel = new MainWindowViewModel(
                     service,
                     new RecordingDispatcher(hasAccess: true),
                     themeController);
                 window = new MainWindow(viewModel, themeController);
+                var application = new IncidentReviewDesktopApplication(window);
 
-                viewModel.PrepareForStartup(TestModelFactory.Preferences(
-                    theme: ThemePreference.Light));
+                var prepared = application.PrepareForStartup(CancellationToken.None);
 
+                Assert.IsTrue(prepared.IsSuccess);
+                Assert.IsInstanceOfType<PreparedDesktopRun>(prepared.Value);
                 Assert.IsFalse(window.IsVisible);
                 Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
                 Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);

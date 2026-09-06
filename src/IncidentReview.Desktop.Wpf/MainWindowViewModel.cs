@@ -112,6 +112,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _themeController.Resolve(preferences.Theme)));
     }
 
+    /// <summary>Loads and applies durable preferences before the WPF message loop starts.</summary>
+    internal Result PrepareStoredPreferencesForStartup(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        if (!_dispatcher.CheckAccess())
+        {
+            throw new InvalidOperationException(
+                "Startup preferences must be applied on the WPF dispatcher thread.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var preferences = _service
+            .GetPreferencesAsync(cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (!preferences.IsSuccess)
+        {
+            return Result.Failure(preferences.Error!);
+        }
+
+        PrepareForStartup(preferences.Value);
+        return Result.Success();
+    }
+
     /// <summary>Loads the first coherent snapshot, then observes application changes.</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
