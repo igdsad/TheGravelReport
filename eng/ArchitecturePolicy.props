@@ -263,6 +263,7 @@
     <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="SQLitePCLRaw.bundle_winsqlite3"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
 
     <PackageOwner Include="Microsoft.Extensions.Hosting"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Configuration.Binder"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
