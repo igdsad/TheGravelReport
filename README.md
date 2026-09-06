@@ -1,6 +1,6 @@
 # iRacing Incident Review
 
-A local Windows companion that watches iRacing's local telemetry, records increases in the local member's incident counter, keeps the resulting review points in SQLite, and lets the user select an incident and seek iRacing replay to it.
+A local Windows companion that watches iRacing's local telemetry, records increases in the local member's incident counter, keeps the resulting review points in SQLite, and lets the user review an incident by seeking iRacing replay, focusing the local player, and applying the requested playback state.
 
 The repository contains a runnable MVP. Automated Release startup and protocol-simulator coverage exist, but acceptance against a recorded current real iRacing build is still required before treating it as a public release.
 
@@ -21,7 +21,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
     --configuration Release --no-restore --no-build
 ```
 
-The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, select the session and incident. Exit the car so telemetry reports `NotOnTrack`, then choose **Review selected incident**. Review seeks to the stored session time minus the configured lead-in and applies the configured pause/playback setting. It deliberately does not mark the incident reviewed automatically.
+The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **Review** on that incident's row. The workflow preflights the selected session and playback preference, seeks to the stored session time minus the configured lead-in, focuses the local player with the preferred camera group (for example, `TV1`), and applies the configured pause/playback setting. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
 
 Only one app instance may run in the Windows user session.
 
@@ -44,7 +44,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The database path must be an absolute local file path. Startup timeout accepts 1 through 120 seconds. The equivalent environment variables are `INCIDENTREVIEW_DatabasePath` and `INCIDENTREVIEW_StartupTimeoutSeconds`; command-line values take precedence. There is no JSON configuration file in the current runtime.
 
-Replay lead-in, pause/playback speed, and preferred camera are durable user preferences stored through `IStore`. Preferred camera is retained for forward compatibility but is not yet applied to iRacing.
+Replay lead-in, pause/playback speed, and preferred camera group are durable user preferences stored through `IStore`. A named camera preference is matched case-insensitively against the groups in the current iRacing session; no preference preserves the currently reported camera group while still focusing the local player.
 
 ## Build, test, and publish
 
@@ -118,8 +118,8 @@ JSON is not part of storage, internal messaging, or current configuration. A fut
 
 - Run and record the real-iRacing acceptance checklist against a current simulator build.
 - Capture a permitted redacted session-information fixture and expand variable-header mutation coverage.
-- Determine whether an authoritative SDK signal exists for a replay manually entered and paused outside the app-owned workflow.
-- Add package-level WPF UI Automation and an independent replay broadcast receiver to the protocol simulator.
+- Validate paused-replay classification through `CamCameraState.IsSessionScreen`, camera-group selection, and all replay confirmations across the supported session types in a recorded current-iRacing acceptance run.
+- Add package-level WPF UI Automation that combines the independent shared-memory protocol simulator with the existing hidden native Windows broadcast receiver; those mechanisms are currently tested separately.
 - Complete crash/full/locked/corrupt-database campaigns, coverage enforcement, fuzz/mutation/stress jobs, dependency/license inventory, and SBOM generation.
 - Add WPF editing for annotations/classification and explicit reviewed/dismissed actions; add export only as a separate capability.
 

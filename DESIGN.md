@@ -1,7 +1,7 @@
 # iRacing Incident Review — System Design
 
 - **Status:** Accepted architecture; runnable MVP implemented, distribution and live-simulator acceptance pending
-- **Document version:** 1.2
+- **Document version:** 1.3
 - **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
@@ -12,7 +12,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A depar
 
 ## 1. Executive summary
 
-The application is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents them in a review UI, and lets the user select an incident to seek the iRacing replay to the relevant session time.
+The application is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents them in a review UI, and lets the user review an incident by seeking the iRacing replay to the relevant session time, focusing the local player, and applying a requested playback state.
 
 The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
 
@@ -38,7 +38,8 @@ iRacing shared memory/event
 WPF UI
     → IIncidentReviewService
     → IReplayController
-    → official iRacing replay broadcast message
+    → official iRacing replay broadcast messages
+    ← later stable iRacing telemetry confirmation
 ```
 
 Implemented at this revision:
@@ -47,8 +48,8 @@ Implemented at this revision:
 - simulator-neutral telemetry, replay, store, and application contract assemblies;
 - cumulative local-member incident detection, durable checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
 - the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and an embedded checksum-pinned DbUp migration;
-- a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, session-information extraction, and replay seek/playback broadcasts;
-- a WPF screen for connection state, session history, incident selection, Review, and durable replay preferences;
+- a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, narrow session/driver/camera metadata extraction, and confirmed replay seek/camera/playback control;
+- a WPF screen centered on a chronological incident log with a Review action on each row, a collapsed power-user section, status, and durable replay preferences;
 - a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
 - automated domain, contract, application, SQLite, architecture, adapter/protocol-simulator, view-model, and Release-host-startup tests.
 
@@ -57,10 +58,9 @@ The official archive is evidence, not a linked native or managed runtime depende
 Not yet complete or accepted for a public release:
 
 - acceptance against a recorded current real iRacing build, including a permitted redacted session-information fixture;
-- authoritative handling of a replay that the user entered and paused manually outside the app-owned review workflow;
 - packaged UI Automation through the independent protocol simulator, broad frame-mutation coverage, crash/power-loss campaigns, mutation/fuzz/stress runs, dependency inventory/SBOM automation, an installer/updater, and a persistent Release log sink;
 - WPF controls for annotations, classification, and explicit reviewed/dismissed state, even though annotation application support and reviewed-state store support already exist;
-- JSON export, remote storage, synchronization, and camera selection behavior.
+- JSON export, remote storage, and synchronization.
 
 No test result or live-simulator acceptance is implied by this document alone. The exact commands in the root `README.md` produce the evidence for the current checkout.
 
@@ -68,7 +68,7 @@ No test result or live-simulator acceptance is implied by this document alone. T
 
 ### 2.1 Primary user outcome
 
-After completing or pausing an iRacing session, a driver can see the incidents observed during that session, select one, and have iRacing move its replay to a configurable lead-in before the event.
+After completing or pausing an iRacing session, a driver can see the incidents observed during that session, choose Review on one row, and have iRacing move its replay to a configurable lead-in before the event with the local player and preferred—or current—camera group selected.
 
 ### 2.2 Primary workflow
 
@@ -80,8 +80,11 @@ After completing or pausing an iRacing session, a driver can see the incidents o
 6. A counter increase creates a durable incident record containing its replay position and useful session context.
 7. The UI updates to show the incident.
 8. The user exits the car; the current policy requires an authoritative `NotOnTrack` sample before replay control.
-9. The user selects an incident and chooses Review.
-10. The application asks the replay controller to seek to the incident time minus the configured lead-in.
+9. The user chooses Review on an incident row.
+10. The application preflights the current simulator/session state and the configured playback representation before sending an external command.
+11. The replay controller seeks to the incident time minus the configured lead-in and waits for a later stable telemetry frame to confirm the requested session/time.
+12. The controller focuses the local player with the configured camera group, or preserves the current group when no preference is set, and waits for camera confirmation.
+13. The controller applies pause or playback speed and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
 
 Classification, notes, explicit reviewed/dismissed actions, and export remain follow-on UI capabilities; they are not steps in the current WPF workflow.
 
@@ -91,6 +94,8 @@ Classification, notes, explicit reviewed/dismissed actions, and export remain fo
 - Preserve the iRacing session number and session time required for exact replay seeking.
 - Present a fast, accessible Windows UI with connection, session-history, incident, and replay-preference state.
 - Seek iRacing replay through the official local SDK broadcast mechanism.
+- Focus the replay on the local player through an optional named camera-group preference.
+- Report external replay control as successful only after stable telemetry confirms the requested state.
 - Preserve session and incident records across application restarts.
 - Make every behavioral dependency replaceable through a focused interface.
 - Allow a future remote or synchronized store without changing application use cases.
@@ -127,7 +132,7 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 | IR-INC-004 | Duplicate or repeated telemetry samples do not create duplicate incident records. |
 | IR-INC-005 | Detector progress and its incident record are persisted atomically so failure, retry, or restart cannot silently lose or duplicate an incident. |
 | IR-RPY-001 | A recorded incident contains a simulator-neutral replay position with session number and session time. |
-| IR-RPY-002 | Reviewing an incident seeks to the configured lead-in before its recorded time, clamped to zero. |
+| IR-RPY-002 | Reviewing an incident seeks to the configured lead-in before its recorded time (clamped to zero), focuses the local player with the preferred/current camera group, and applies playback in that order. |
 | IR-RPY-003 | Replay actions unavailable in the current iRacing state are disabled or return a clear structured failure. |
 | IR-STR-001 | Sessions and incidents survive application restart. |
 | IR-STR-002 | Every application data mutation executes inside a transaction. |
@@ -262,7 +267,7 @@ eng/
 | `Application.Contracts` | Use cases, runtime lifecycle, and UI-facing state/events | Application service/lifecycle interfaces and immutable models |
 | `Application` | Use-case orchestration and incident detection | Registration module; internal implementations |
 | `Store.Sqlite` | Dapper queries, SQLite mappings, transactions, DbUp migrations | Registration/options plus a narrowly named testing registration surface |
-| `Iracing` | SDK shared-memory reader, session-info translation, replay broadcasts | Registration/options plus a narrowly named testing registration surface |
+| `Iracing` | SDK shared-memory reader, session-info translation, replay broadcasts and telemetry confirmation | Registration/options plus a narrowly named testing registration surface |
 | `Desktop.Wpf` | Views, view models, UI mapping, dispatcher interaction | Registration module and WPF application surface |
 | `Host.Wpf` | Executable, composition root, startup and shutdown | Process entry point |
 | `Analyzers` | Compile-time enforcement that needs semantic source analysis | Roslyn diagnostics only; no runtime API |
@@ -367,11 +372,15 @@ public interface IReplayController
 {
     Result ValidatePlayback(ReplayPlayback playback);
 
-    Result Seek(
+    ValueTask<Result> SeekAsync(
         ReplayPosition position,
         CancellationToken cancellationToken);
 
-    Result SetPlayback(
+    ValueTask<Result> FocusPlayerAsync(
+        string? preferredCamera,
+        CancellationToken cancellationToken);
+
+    ValueTask<Result> SetPlaybackAsync(
         ReplayPlayback playback,
         CancellationToken cancellationToken);
 }
@@ -384,9 +393,11 @@ public sealed class ReplayPosition
 }
 ```
 
-`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. The replay contract speaks in intent and does not expose iRacing broadcast enums or Windows message packing.
+`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving it to the local player, group number, and camera number is the adapter's responsibility.
 
 `ValidatePlayback` is a pure capability preflight. The application calls it before seeking so a persisted playback preference that cannot be represented by the pinned iRacing protocol cannot produce a half-completed “seek succeeded, playback failed validation” workflow.
+
+The three asynchronous operations are applied-result boundaries, not transport acknowledgements. Each adapter sends its native command and then waits for a later stable simulator observation that confirms the requested state. Cancellation remains `OperationCanceledException`; unavailable metadata, a missing named camera group, native delivery rejection, disconnection, and separate seek/camera/playback confirmation timeouts return stable `Result` failures. Another simulator adapter may confirm equivalent state through a different mechanism without changing `Application` or the UI.
 
 ### 7.3 Store
 
@@ -581,8 +592,10 @@ Responsibilities:
 - Copy telemetry frames promptly before processing to avoid holding SDK-owned buffers.
 - Parse only the session metadata needed by the application.
 - Translate raw telemetry into immutable `TelemetrySample` values.
-- Detect connection, disconnection, replay, and on-track state.
-- Encode replay commands, including search by session number and session time in milliseconds.
+- Detect connection, disconnection, moving or paused replay, and on-track state.
+- Resolve the local player and named camera groups from the current session information without leaking that schema through a contract.
+- Encode replay commands for session-time search, player/camera focus, pause, and playback speed.
+- Convert the fire-and-forget Windows transport into applied-result semantics by confirming each command against a later stable telemetry frame.
 - Translate expected integration failures into stable `Result` errors.
 
 Frame reads follow the official buffer-generation/tick protocol: copy the selected frame into app-owned memory, prove the header did not change during the copy, and retry a bounded number of times on a torn read. Every count, offset, element size, index, and string length is range-checked before slicing. Unknown variables, SDK-version drift, and malformed session information yield typed unavailability/errors rather than unchecked memory access.
@@ -593,18 +606,20 @@ The telemetry reader and downstream processing are decoupled by a bounded single
 
 Replay review behavior:
 
-1. Load the incident through an application use case.
-2. Subtract the configured lead-in and clamp to zero.
-3. Confirm that iRacing is connected, the SDK authoritatively reports `NotOnTrack`, no review command is already in flight, and the incident's session is the one currently loaded.
-4. Ask `IReplayController` to seek to the target session/time.
-5. Pause or start an exactly representable playback speed according to user settings.
-6. Return one structured, actionable failure for the exact failed precondition: disconnected telemetry, unknown on-track state, driver still on track, another command in progress, a different session loaded, or insufficient simulator identity evidence to verify a provisional replay after continuity was lost.
+1. Confirm that iRacing is connected, the SDK reports `NotOnTrack`, and no review command is already in flight.
+2. Load the incident and preferences through application use cases, subtract the configured lead-in, and clamp the target time to zero.
+3. Preflight pause or playback speed through `ValidatePlayback`; an unrepresentable preference fails before any external command.
+4. Recheck that the incident's application session and replay session number are the ones currently loaded, including the stricter continuity rule for connection-scoped identities.
+5. Call `SeekAsync` and wait for a later stable frame whose replay session and time confirm the target. The iRacing adapter accepts a time within 250 milliseconds because search and frame publication are asynchronous.
+6. Call `FocusPlayerAsync`. The adapter resolves the local player's `CarNumberRaw` and requested camera group from current session information, selects the group's first camera for the command, then confirms the local player's car index and group. It deliberately does not require the same sub-camera number because an iRacing TV group may advance its shot automatically. With no preferred group, the adapter preserves the currently reported group/camera while focusing the local player.
+7. Call `SetPlaybackAsync` and confirm the requested speed and slow-motion flag in a later stable frame.
+8. Return one structured, actionable failure for the exact failed precondition or stage. Seek, camera, and playback confirmation have independent ten-second default windows and distinct codes: `iracing.replay.seek-timeout`, `iracing.replay.camera-timeout`, and `iracing.replay.playback-timeout`. Missing/ambiguous player or camera metadata and a named group absent from the current session are separate failures.
 
 `ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
 
-The current application prevents detection during its own seek/playback command and keeps that suppression active until telemetry authoritatively reports the car back on track. `IsReplayPlaying` identifies moving replay, but the official SDK field is false for a paused replay. A manually entered, manually paused replay outside the app-owned workflow therefore remains a live-simulator acceptance gap; the adapter does not invent a heuristic.
+The current application prevents detection during its own replay-navigation command and keeps that suppression active until telemetry reports the car back on track. The adapter classifies a frame as replay when either `IsReplayPlaying` is true or the official `CamCameraState` bitfield includes `IsSessionScreen`. This keeps a paused session-screen replay in replay mode even though `IsReplayPlaying` becomes false. Compatibility of that official signal across every supported real-iRacing session type remains part of live acceptance rather than an unimplemented behavior.
 
-Replay command registration, command identifiers, field widths, signedness, and parameter packing are derived from the pinned official header and protected by golden-vector tests. SDK broadcast commands are fire-and-forget at the operating-system boundary. Replay-controller handoff is deliberately synchronous: a successful `Seek` means the command was valid and handed to the Windows broadcast mechanism before the method returned; it does not falsely claim that iRacing applied it. Implementations must not defer delivery or call back into the application. Where telemetry provides corresponding state, the adapter SHOULD observe it to offer a separately defined confirmation state.
+Replay command registration, command identifiers, field widths, signedness, and parameter packing are derived from the pinned official header and protected by golden-vector tests. SDK broadcasts remain fire-and-forget at the operating-system boundary: `SendNotifyMessageW` returning success proves only that Windows accepted the notification for delivery. `IReplayController` does not expose that transport outcome as success. It awaits a stable observation newer than the pre-command baseline and returns success only when iRacing reports the corresponding seek, camera, or playback state. A disconnect while waiting returns replay unavailable, caller cancellation propagates, and an expired stage returns its exact timeout error. Confirmation remains private to the adapter; it does not call back into application policy or leak protocol state through the interface.
 
 ## 11. Storage design
 
@@ -990,7 +1005,7 @@ The implemented MVP UI contains:
 - a bottom status bar containing iRacing connection state, live-update state, work/incident state, and exact safe error text;
 - explicit unavailable state when replay control cannot be used.
 
-The event stream is presentation-only, is capped at 200 entries by evicting the oldest entry, and is not a substitute for a future durable diagnostic log. The incident grid deliberately does not display driver name or car number: those values are not yet captured by the telemetry/domain/store contracts and the UI must not invent them. It displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. Preferred camera is persisted for forward compatibility but is not applied by the current replay adapter. These controls must not be described as implemented until the application contract, WPF interaction, and adapter behavior are connected and tested.
+The event stream is presentation-only, is capped at 200 entries by evicting the oldest entry, and is not a substitute for a future durable diagnostic log. The incident grid deliberately does not display driver name or car number: those values are not yet captured by the telemetry/domain/store contracts and the UI must not invent them. It displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. The preferred-camera field names an iRacing camera group; the replay adapter resolves that name only within the current session, focuses the local player, and returns an exact error when the metadata or group is unavailable. Notes/classification editing and reviewed/dismissed controls must not be described as implemented until their application contract, WPF interaction, and storage behavior are connected and tested.
 
 View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry, or encode replay commands.
 
@@ -1041,7 +1056,7 @@ Packaged-deliverable smoke tests
 Real-iRacing acceptance checklist
 ```
 
-The repository currently implements the first six layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, application workflow tests with suite-local fakes, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, replay golden-vector tests, and WPF view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
+The repository currently implements the first six layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, application workflow tests with suite-local fakes, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, confirmed replay-controller/golden-vector tests, a focused hidden-native-window broadcast test, and WPF view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
 
 ### 15.3 Requirements traceability
 
@@ -1060,15 +1075,15 @@ Production behavior is tested through the same contracts used by consumers where
 
 - `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
 - The SQLite suite validates observable on-disk behavior against real temporary databases.
-- The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed input, replay suppression, and bounded-buffer behavior against an independent process.
-- Replay tests exercise intent validation, representability, availability, delivery outcomes, and independently authored packed-message vectors.
+- The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed input, moving and paused-session-screen replay classification, replay suppression, and bounded-buffer behavior against an independent process.
+- Replay tests exercise intent validation, representability, availability, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Independently authored packed-message vectors cover seek, camera focus, and playback.
 - Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
 
 ### 15.5 Deterministic test implementations
 
-The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, dispatcher, and service fakes. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, and a recording replay sender.
+The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, dispatcher, and service fakes. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
 
 `IncidentReview.TestKit` currently establishes only the permitted public-contract dependency direction; it does not yet contain shared implementations. Reusable `ScriptedTelemetrySource`, `RecordingReplayController`, `InMemoryStore`, manual time/identity helpers, scheduler controls, and a general occurrence-based fault injector remain planned. When duplication or a second adapter/store makes them useful, they move into `TestKit` without privileged implementation access.
 
@@ -1093,7 +1108,7 @@ Replay.BeforeBroadcast
 Replay.AfterBroadcast
 ```
 
-The current SQLite `.Testing` facade can select normal, indeterminate-before-commit, indeterminate-after-commit, and cleanup-failure outcomes; cancel after operation lookup; inject test migrations; and coordinate a blocked migration. The current iRacing `.Testing` facade creates a real reader over isolated object names, opens a focused frame-copy probe, supplies controlled replay-delivery outcomes, and exposes the narrow session-key extractor. These facades exercise the compiled implementation and are inaccessible to ordinary production consumers under the architecture policy. There is no user-activatable test mode.
+The current SQLite `.Testing` facade can select normal, indeterminate-before-commit, indeterminate-after-commit, and cleanup-failure outcomes; cancel after operation lookup; inject test migrations; and coordinate a blocked migration. The current iRacing `.Testing` facade creates a real reader over isolated object names, opens a focused frame-copy probe, supplies controlled replay-delivery and stable-frame outcomes, invokes the production Windows sender, and exposes only narrow session-key/replay-metadata observations. These facades exercise the compiled implementation and are inaccessible to ordinary production consumers under the architecture policy. There is no user-activatable test mode.
 
 A general named-probe controller and occurrence sweep across every critical I/O point do not exist yet. Reliability work MUST add them only through similarly explicit implementation-owned testing surfaces, keep normal registration on no-op/production behavior, and prove that test controls do not replace the code being tested.
 
@@ -1112,7 +1127,7 @@ Critical hand-written logic requires complete decision/branch coverage:
 - application orchestration and error propagation;
 - transaction commit/rollback selection;
 - SQLite error translation;
-- iRacing frame decoding and replay command encoding;
+- iRacing frame/metadata decoding, replay command encoding, and applied-state confirmation;
 - startup phase success/failure decisions.
 - runtime worker completion/fault supervision and WPF shutdown routing.
 
@@ -1185,9 +1200,9 @@ A mutation run/catalog is not implemented yet. A third-party mutation tool such 
 
 The current deliverable test launches the Release host executable with `--verify-startup` and a unique temporary database. It exercises the real Generic Host registrations, SQLitePCL initialization, DbUp migration, schema validation, application runtime start/stop, host shutdown, database creation, and copied iRacing third-party notice. It asserts a successful exit and cleans only its owned temporary directory. This is a useful startup smoke test, but it is not a packaged install test and does not drive the WPF UI.
 
-`IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process. Replay-message packing is currently verified separately through the implementation's recording-sender testing facade and independent golden vectors; the simulator does not yet own a User32 receiver window.
+`IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process, including a coalesced telemetry frame that confirms an outstanding seek. Separately, replay tests verify packing through the implementation's recording-sender testing facade and independent golden vectors, and a Windows-only test sends the production broadcast to a hidden native top-level receiver and asserts the exact delivered `wParam`/`lParam`. The protocol simulator and native receiver are not yet combined into one packaged end-to-end peer.
 
-The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against an OS-level protocol peer; use stable WPF `AutomationId` values to select and review an incident; and independently validate the broadcast command. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
+The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use stable WPF `AutomationId` values to invoke Review on an incident row; independently validate the seek, camera, and playback broadcasts; and publish later confirming telemetry for each stage. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
 
 Real iRacing acceptance follows a versioned checklist with captured Windows, simulator, SDK-baseline, and app versions. It supplements automated protocol tests; it does not replace them, and it has not yet been completed for this revision.
 
@@ -1589,7 +1604,7 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 ### Milestone 3 — iRacing adapter
 
 - Implement and fixture-test shared-memory decoding.
-- Implement replay search-by-session-time command encoding.
+- Implement replay seek, local-player camera focus, and playback encoding with later stable-telemetry confirmation.
 - Build the external protocol simulator used by packaged-deliverable tests.
 - Validate connection/reconnect and simulator-state behavior.
 - Run the real-iRacing acceptance checklist.
@@ -1682,7 +1697,7 @@ A feature is not done until:
 1. Which exact iRacing incident counters are reliable in solo, team, hosted, and replay sessions?
 2. How much delay exists between the physical event and incident-counter update, and should the marker time be refined from a telemetry ring buffer?
 3. Which replay camera, playback speed, and default lead-in provide the best review experience?
-4. What telemetry state most reliably confirms that replay commands are currently accepted?
+4. Do live current builds validate the ten-second per-stage timeout and 250-millisecond seek tolerance across short and long replay searches?
 5. What is the minimum supported Windows build, and does its serviced `winsqlite3.dll` pass the existing startup/schema/migration/transaction suite and release acceptance matrix?
 6. Which SQLite pragmas provide the desired durability/concurrency balance on supported Windows filesystems?
 7. What retention, deletion, backup, and database-corruption recovery experience should the UI provide?
@@ -1691,7 +1706,7 @@ A feature is not done until:
 10. What real-iRacing scenarios and versions form the first release acceptance matrix?
 11. Do live samples confirm that the narrow repository-owned `WeekendInfo:SubSessionID` extractor remains sufficient, or does permitted real-world evidence justify a separately reviewed YAML dependency?
 12. Does `SubSessionID` plus SDK session number remain a durable simulator-session key across every supported live/team/offline scenario?
-13. Which authoritative SDK signal, if any, distinguishes a manually entered paused replay from live paused/stationary state?
+13. Does the official `CamCameraState.IsSessionScreen` bit unambiguously identify paused replay across every supported live, offline, team, and hosted session state?
 14. Which persistent Release diagnostic sink and rotation policy meet support needs without adding an unjustified logging package?
 
 Open questions are resolved with experiments, fixtures, or ADRs—not assumptions embedded silently in implementation code.
