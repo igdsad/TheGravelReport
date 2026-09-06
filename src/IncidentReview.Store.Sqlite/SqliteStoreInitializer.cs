@@ -36,7 +36,10 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
     {
         _options = options;
         _connectionFactory = new SqliteConnectionFactory(options);
-        _migrationRunner = new SqliteMigrationRunner(testMigrations, logger);
+        _migrationRunner = new SqliteMigrationRunner(
+            testMigrations,
+            options.BusyTimeoutSeconds,
+            logger);
         _schemaValidator = new SqliteSchemaValidator(options.BusyTimeoutSeconds, logger);
         _gate = gate;
         _configureMigrationConnection = configureMigrationConnection;
@@ -48,6 +51,7 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
         cancellationToken.ThrowIfCancellationRequested();
         lock (_initializationLock)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (_initialized)
             {
                 return Task.FromResult(Result.Success());
@@ -77,7 +81,10 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
             if (File.Exists(_options.DatabasePath))
             {
                 using var preflightConnection = _connectionFactory.CreateOpenReadOnly();
-                var preflightResult = _schemaValidator.ValidateMigrationPreflight(preflightConnection);
+                var preflightResult = _schemaValidator.ValidateMigrationPreflight(
+                    preflightConnection,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!preflightResult.IsSuccess)
                 {
                     return preflightResult;
@@ -93,7 +100,9 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
                 return migrationResult;
             }
 
-            var validationResult = _schemaValidator.Validate(connection);
+            cancellationToken.ThrowIfCancellationRequested();
+            var validationResult = _schemaValidator.Validate(connection, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!validationResult.IsSuccess)
             {
                 return validationResult;
@@ -105,8 +114,9 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
             return Result.Failure(SqliteStoreErrors.MigrationFailed);
         }
 
-        _initialized = true;
+        cancellationToken.ThrowIfCancellationRequested();
         _gate.Open();
+        _initialized = true;
         return Result.Success();
     }
 

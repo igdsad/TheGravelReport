@@ -1,5 +1,6 @@
 using System.Text;
 using Dapper;
+using IncidentReview.Domain;
 using IncidentReview.Results;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -75,9 +76,13 @@ internal sealed class SqliteSchemaValidator
         _logger = logger;
     }
 
-    public Result ValidateMigrationPreflight(SqliteConnection connection)
+    public Result ValidateMigrationPreflight(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
     {
-        var schemaVersion = QueryInteger(connection, "PRAGMA user_version;");
+        cancellationToken.ThrowIfCancellationRequested();
+        var schemaVersion = QueryInteger(connection, "PRAGMA user_version;", cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (schemaVersion is >= 0 and <= CurrentSchemaVersion)
         {
             return Result.Success();
@@ -87,34 +92,64 @@ internal sealed class SqliteSchemaValidator
         return Result.Failure(SqliteStoreErrors.SchemaInvalid);
     }
 
-    public Result Validate(SqliteConnection connection)
+    public Result Validate(SqliteConnection connection, CancellationToken cancellationToken)
     {
         var checks = new (string Name, Func<bool> IsValid)[]
         {
-            ("engine version", () => HasSupportedEngine(connection)),
-            ("foreign keys", () => QueryInteger(connection, "PRAGMA foreign_keys;") == 1),
+            ("engine version", () => HasSupportedEngine(connection, cancellationToken)),
+            ("foreign keys", () => QueryInteger(
+                connection,
+                "PRAGMA foreign_keys;",
+                cancellationToken) == 1),
             ("busy timeout", () => connection.DefaultTimeout == _busyTimeoutSeconds),
             ("journal mode", () => string.Equals(
-                connection.QuerySingle<string>("PRAGMA journal_mode;"),
+                QuerySingleString(connection, "PRAGMA journal_mode;", cancellationToken),
                 "delete",
                 StringComparison.OrdinalIgnoreCase)),
-            ("synchronous mode", () => QueryInteger(connection, "PRAGMA synchronous;") == 2),
-            ("schema version", () => QueryInteger(connection, "PRAGMA user_version;") == CurrentSchemaVersion),
+            ("synchronous mode", () => QueryInteger(
+                connection,
+                "PRAGMA synchronous;",
+                cancellationToken) == 2),
+            ("schema version", () => QueryInteger(
+                connection,
+                "PRAGMA user_version;",
+                cancellationToken) == CurrentSchemaVersion),
             ("integrity", () => string.Equals(
-                connection.QuerySingle<string>("PRAGMA integrity_check;"),
+                QuerySingleString(connection, "PRAGMA integrity_check;", cancellationToken),
                 "ok",
                 StringComparison.Ordinal)),
-            ("tables", () => HasRequiredTables(connection)),
-            ("columns", () => HasRequiredColumns(connection)),
-            ("session unique key", () => HasRequiredIndex(connection, SessionUniqueKey)),
-            ("incident unique key", () => HasRequiredIndex(connection, IncidentUniqueKey)),
-            ("incident foreign key", () => HasCascadeForeignKey(connection, "Incident")),
-            ("checkpoint foreign key", () => HasCascadeForeignKey(connection, "IncidentCheckpoint")),
+            ("foreign key data", () => HasNoForeignKeyViolations(
+                connection,
+                cancellationToken)),
+            ("tables", () => HasRequiredTables(connection, cancellationToken)),
+            ("columns", () => HasRequiredColumns(connection, cancellationToken)),
+            ("application preferences", () => HasValidApplicationPreferences(
+                connection,
+                cancellationToken)),
+            ("session unique key", () => HasRequiredIndex(
+                connection,
+                SessionUniqueKey,
+                cancellationToken)),
+            ("incident unique key", () => HasRequiredIndex(
+                connection,
+                IncidentUniqueKey,
+                cancellationToken)),
+            ("incident foreign key", () => HasCascadeForeignKey(
+                connection,
+                "Incident",
+                cancellationToken)),
+            ("checkpoint foreign key", () => HasCascadeForeignKey(
+                connection,
+                "IncidentCheckpoint",
+                cancellationToken)),
         };
 
         foreach (var check in checks)
         {
-            if (!check.IsValid())
+            cancellationToken.ThrowIfCancellationRequested();
+            var isValid = check.IsValid();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!isValid)
             {
                 SqliteLog.SchemaInvalid(_logger, check.Name, exception: null);
                 return Result.Failure(SqliteStoreErrors.SchemaInvalid);
@@ -124,34 +159,100 @@ internal sealed class SqliteSchemaValidator
         return Result.Success();
     }
 
-    private static bool HasSupportedEngine(SqliteConnection connection)
+    private bool HasSupportedEngine(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
     {
-        var value = connection.QuerySingle<string>("SELECT sqlite_version();");
+        var value = QuerySingleString(connection, "SELECT sqlite_version();", cancellationToken);
         return Version.TryParse(value, out var version) && version >= MinimumSqliteVersion;
     }
 
-    private static long QueryInteger(SqliteConnection connection, string sql) =>
-        connection.QuerySingle<long>(sql);
+    private long QueryInteger(
+        SqliteConnection connection,
+        string sql,
+        CancellationToken cancellationToken) =>
+        connection.QuerySingle<long>(CreateCommand(sql, cancellationToken));
 
-    private static bool HasRequiredTables(SqliteConnection connection)
+    private string QuerySingleString(
+        SqliteConnection connection,
+        string sql,
+        CancellationToken cancellationToken) =>
+        connection.QuerySingle<string>(CreateCommand(sql, cancellationToken));
+
+    private CommandDefinition CreateCommand(string sql, CancellationToken cancellationToken) =>
+        new(
+            sql,
+            commandTimeout: _busyTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+    private bool HasRequiredTables(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
     {
-        var tables = connection.Query<string>(
+        var tables = connection.Query<string>(CreateCommand(
             """
-            SELECT name
-            FROM sqlite_schema
-            WHERE type = 'table'
-              AND name NOT LIKE 'sqlite_%'
-            ORDER BY name;
-            """).ToArray();
+                SELECT name
+                FROM sqlite_schema
+                WHERE type = 'table'
+                  AND name NOT LIKE 'sqlite_%'
+                ORDER BY name;
+                """,
+            cancellationToken)).ToArray();
 
         return tables.SequenceEqual(RequiredTables, StringComparer.Ordinal);
     }
 
-    private static bool HasRequiredIndex(
+    private bool HasValidApplicationPreferences(
         SqliteConnection connection,
-        RequiredIndex expected)
+        CancellationToken cancellationToken)
     {
+        try
+        {
+            var rows = connection.Query<ApplicationPreferencesValidationRow>(CreateCommand(
+                """
+                SELECT
+                    preferences_id AS PreferencesId,
+                    replay_lead_in_ms AS ReplayLeadInMilliseconds,
+                    auto_pause AS AutoPause,
+                    playback_speed AS PlaybackSpeed,
+                    preferred_camera AS PreferredCamera,
+                    updated_at_utc_ms AS UpdatedAtUnixMilliseconds
+                FROM ApplicationPreferences
+                ORDER BY preferences_id;
+                """,
+                cancellationToken)).ToArray();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (rows.Length != 1 || rows[0].PreferencesId != 1 || rows[0].AutoPause is < 0 or > 1)
+            {
+                return false;
+            }
+
+            var row = rows[0];
+            return UserPreferences.TryCreateMilliseconds(
+                    row.ReplayLeadInMilliseconds,
+                    row.PlaybackSpeed,
+                    row.AutoPause == 1,
+                    row.PreferredCamera).IsSuccess
+                && UtcInstant.TryCreateUnixMilliseconds(row.UpdatedAtUnixMilliseconds).IsSuccess;
+        }
+        catch (Exception exception) when (
+            exception is System.Data.DataException
+            or InvalidCastException
+            or FormatException
+            or OverflowException)
+        {
+            return false;
+        }
+    }
+
+    private bool HasRequiredIndex(
+        SqliteConnection connection,
+        RequiredIndex expected,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
         command.CommandText = expected.Table switch
         {
             "Session" => "PRAGMA index_list('Session');",
@@ -163,6 +264,7 @@ internal sealed class SqliteSchemaValidator
         var hasExpectedCharacteristics = false;
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.Equals(reader.GetString(1), expected.Name, StringComparison.Ordinal))
             {
                 hasExpectedCharacteristics = reader.GetInt64(2) == 1
@@ -173,19 +275,23 @@ internal sealed class SqliteSchemaValidator
         }
 
         reader.Close();
+        cancellationToken.ThrowIfCancellationRequested();
         return hasExpectedCharacteristics
-            && HasRequiredIndexColumns(connection, expected)
+            && HasRequiredIndexColumns(connection, expected, cancellationToken)
             && string.Equals(
-                ReadNormalizedWherePredicate(connection, expected),
+                ReadNormalizedWherePredicate(connection, expected, cancellationToken),
                 expected.NormalizedWherePredicate,
                 StringComparison.Ordinal);
     }
 
-    private static bool HasRequiredIndexColumns(
+    private bool HasRequiredIndexColumns(
         SqliteConnection connection,
-        RequiredIndex expected)
+        RequiredIndex expected,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
         command.CommandText = expected.Name switch
         {
             "ux_session_simulator_key" => "PRAGMA index_xinfo('ux_session_simulator_key');",
@@ -198,6 +304,7 @@ internal sealed class SqliteSchemaValidator
         var keyColumns = new List<string>();
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (reader.GetInt64(5) == 0)
             {
                 continue;
@@ -219,17 +326,22 @@ internal sealed class SqliteSchemaValidator
         return keyColumns.SequenceEqual(expected.KeyColumns, StringComparer.Ordinal);
     }
 
-    private static string? ReadNormalizedWherePredicate(
+    private string? ReadNormalizedWherePredicate(
         SqliteConnection connection,
-        RequiredIndex expected)
+        RequiredIndex expected,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
         command.CommandText =
             "SELECT sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = @table AND name = @name;";
         _ = command.Parameters.AddWithValue("@table", expected.Table);
         _ = command.Parameters.AddWithValue("@name", expected.Name);
 
-        if (command.ExecuteScalar() is not string sql)
+        var value = command.ExecuteScalar();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (value is not string sql)
         {
             return null;
         }
@@ -280,11 +392,15 @@ internal sealed class SqliteSchemaValidator
         return normalized.ToString();
     }
 
-    private static bool HasRequiredColumns(SqliteConnection connection)
+    private bool HasRequiredColumns(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
     {
         foreach (var expected in RequiredColumns)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var command = connection.CreateCommand();
+            command.CommandTimeout = _busyTimeoutSeconds;
             command.CommandText = expected.Table switch
             {
                 "Session" => "PRAGMA table_info('Session');",
@@ -299,6 +415,7 @@ internal sealed class SqliteSchemaValidator
             var actual = new List<string>();
             while (reader.Read())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 actual.Add(reader.GetString(1));
             }
 
@@ -311,9 +428,14 @@ internal sealed class SqliteSchemaValidator
         return true;
     }
 
-    private static bool HasCascadeForeignKey(SqliteConnection connection, string table)
+    private bool HasCascadeForeignKey(
+        SqliteConnection connection,
+        string table,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
         command.CommandText = table switch
         {
             "Incident" => "PRAGMA foreign_key_list('Incident');",
@@ -322,17 +444,36 @@ internal sealed class SqliteSchemaValidator
         };
 
         using var reader = command.ExecuteReader();
+        var foreignKeyCount = 0;
+        var hasRequiredDefinition = false;
         while (reader.Read())
         {
-            if (string.Equals(reader.GetString(2), "Session", StringComparison.Ordinal)
-                && string.Equals(reader.GetString(3), "session_id", StringComparison.Ordinal)
-                && string.Equals(reader.GetString(6), "CASCADE", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            foreignKeyCount++;
+            hasRequiredDefinition =
+                string.Equals(reader.GetString(2), "Session", StringComparison.Ordinal) &&
+                string.Equals(reader.GetString(3), "session_id", StringComparison.Ordinal) &&
+                string.Equals(reader.GetString(4), "session_id", StringComparison.Ordinal) &&
+                string.Equals(reader.GetString(5), "RESTRICT", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(reader.GetString(6), "CASCADE", StringComparison.OrdinalIgnoreCase);
         }
 
-        return false;
+        cancellationToken.ThrowIfCancellationRequested();
+        return foreignKeyCount == 1 && hasRequiredDefinition;
+    }
+
+    private bool HasNoForeignKeyViolations(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
+        command.CommandText = "PRAGMA foreign_key_check;";
+        using var reader = command.ExecuteReader();
+        var hasViolation = reader.Read();
+        cancellationToken.ThrowIfCancellationRequested();
+        return !hasViolation;
     }
 
     private sealed record RequiredIndex(
@@ -340,4 +481,19 @@ internal sealed class SqliteSchemaValidator
         string Name,
         string[] KeyColumns,
         string? NormalizedWherePredicate);
+
+    private sealed class ApplicationPreferencesValidationRow
+    {
+        public long PreferencesId { get; init; }
+
+        public long ReplayLeadInMilliseconds { get; init; }
+
+        public long AutoPause { get; init; }
+
+        public double PlaybackSpeed { get; init; }
+
+        public string? PreferredCamera { get; init; }
+
+        public long UpdatedAtUnixMilliseconds { get; init; }
+    }
 }

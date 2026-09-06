@@ -11,11 +11,16 @@ namespace IncidentReview.Store.Sqlite;
 internal sealed class SqliteMigrationRunner
 {
     private readonly IReadOnlyList<SqlScript> _testMigrations;
+    private readonly TimeSpan _executionTimeout;
     private readonly ILogger _logger;
 
-    public SqliteMigrationRunner(IReadOnlyList<SqlScript> testMigrations, ILogger logger)
+    public SqliteMigrationRunner(
+        IReadOnlyList<SqlScript> testMigrations,
+        int executionTimeoutSeconds,
+        ILogger logger)
     {
         _testMigrations = testMigrations;
+        _executionTimeout = TimeSpan.FromSeconds(executionTimeoutSeconds);
         _logger = logger;
     }
 
@@ -41,10 +46,12 @@ internal sealed class SqliteMigrationRunner
             .WithScripts(scripts)
             .WithVariablesDisabled()
             .WithTransaction()
+            .WithExecutionTimeout(_executionTimeout)
             .LogToNowhere()
             .Build();
 
         var outcome = engine.PerformUpgrade();
+        cancellationToken.ThrowIfCancellationRequested();
         if (!outcome.Successful)
         {
             SqliteLog.MigrationFailed(_logger, outcome.Error);

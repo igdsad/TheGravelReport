@@ -307,15 +307,15 @@ public sealed class SqliteInitializationTests
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-002")]
     [TestProperty("Requirement", "IR-STR-004")]
-    public async Task CancellationDuringSuccessfulMigrationReportsCommittedSuccess()
+    public async Task CancellationAfterBlockedMigrationKeepsStoreGateClosed()
     {
         using var database = new TemporarySqliteDatabase();
         using var migrationGate = new SqliteTestMigrationGate();
         using var cancellation = new CancellationTokenSource();
-        var initializer = SqliteMigrationTestingRegistration.CreateInitializer(
+        await using var context = SqliteMigrationTestingRegistration.CreateStore(
             database.Options,
             migrationGate);
-        var initialization = Task.Run(() => initializer.InitializeAsync(cancellation.Token));
+        var initialization = Task.Run(() => context.Initializer.InitializeAsync(cancellation.Token));
 
         var enteredMigration = migrationGate.WaitUntilEntered(TimeSpan.FromSeconds(10));
         if (enteredMigration)
@@ -324,13 +324,25 @@ public sealed class SqliteInitializationTests
         }
 
         migrationGate.Release();
-        var result = await initialization;
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => initialization);
 
         Assert.IsTrue(enteredMigration, "The migration did not reach its deterministic test gate.");
-        Assert.IsTrue(result.IsSuccess, result.Error?.ToString());
         using var connection = database.OpenConnection();
         Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
         Assert.AreEqual(2L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
+
+        var whileCanceled = await context.Store.QueryAsync(
+            GetPreferences.Instance,
+            CancellationToken.None);
+        Assert.IsFalse(whileCanceled.IsSuccess);
+        Assert.IsNotNull(whileCanceled.Error);
+        Assert.AreEqual(StoreErrorCodes.NotInitialized, whileCanceled.Error.Code);
+
+        var retry = await context.Initializer.InitializeAsync(CancellationToken.None);
+        Assert.IsTrue(retry.IsSuccess, retry.Error?.ToString());
+        Assert.IsTrue((await context.Store.QueryAsync(
+            GetPreferences.Instance,
+            CancellationToken.None)).IsSuccess);
     }
 
     [TestMethod]
@@ -377,6 +389,69 @@ public sealed class SqliteInitializationTests
 
         Assert.AreEqual(0L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM Incident;"));
         Assert.AreEqual(0L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM IncidentCheckpoint;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-004")]
+    [TestProperty("Requirement", "IR-STR-003")]
+    public async Task SchemaValidationRejectsExistingForeignKeyViolations()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "PRAGMA foreign_keys = OFF;");
+            InsertIncident(
+                connection,
+                IncidentId.Generate().ToString(),
+                SessionIdentity.Generate().ToString(),
+                total: 2,
+                delta: 2);
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsMissingPreferencesSingleton()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "DELETE FROM ApplicationPreferences WHERE preferences_id = 1;");
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsPreferencesThatCannotBeDecodedByTheDomain()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteParameterized(
+                connection,
+                "UPDATE ApplicationPreferences SET preferred_camera = @camera WHERE preferences_id = 1;",
+                ("@camera", "Cockpit\nCamera"));
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
     }
 
     [TestMethod]

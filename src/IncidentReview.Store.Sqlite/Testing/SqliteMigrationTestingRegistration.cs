@@ -22,6 +22,42 @@ public static class SqliteMigrationTestingRegistration
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(migrations);
 
+        return new SqliteStoreInitializer(
+            options,
+            CreateScripts(migrations),
+            new SqliteStoreGate(),
+            NullLogger<SqliteStoreInitializer>.Instance,
+            connection => connection.CreateFunction<long>(GateFunctionName, gate.EnterAndWait));
+    }
+
+    /// <summary>Creates a real gated store paired with a migration-coordinated initializer.</summary>
+    public static SqliteTestStoreContext CreateStore(
+        SqliteStoreOptions options,
+        SqliteTestMigrationGate gate,
+        params SqliteTestMigration[] migrations)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(gate);
+        ArgumentNullException.ThrowIfNull(migrations);
+
+        var storeGate = new SqliteStoreGate();
+        var store = new SqliteStore(
+            options,
+            storeGate,
+            SqliteCommitBoundary.Instance,
+            SqliteTransactionCleanup.Instance,
+            NullLogger<SqliteStore>.Instance);
+        var initializer = new SqliteStoreInitializer(
+            options,
+            CreateScripts(migrations),
+            storeGate,
+            NullLogger<SqliteStoreInitializer>.Instance,
+            connection => connection.CreateFunction<long>(GateFunctionName, gate.EnterAndWait));
+        return new SqliteTestStoreContext(store, initializer, store);
+    }
+
+    private static List<SqlScript> CreateScripts(SqliteTestMigration[] migrations)
+    {
         var scripts = new List<SqlScript>(migrations.Length + 1)
         {
             new(GateMigrationName, GateMigrationSql),
@@ -32,11 +68,6 @@ public static class SqliteMigrationTestingRegistration
             return new SqlScript(migration.Name, migration.Sql);
         }));
 
-        return new SqliteStoreInitializer(
-            options,
-            scripts,
-            new SqliteStoreGate(),
-            NullLogger<SqliteStoreInitializer>.Instance,
-            connection => connection.CreateFunction<long>(GateFunctionName, gate.EnterAndWait));
+        return scripts;
     }
 }
