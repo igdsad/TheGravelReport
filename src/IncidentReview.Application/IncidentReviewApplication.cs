@@ -454,11 +454,14 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 SetUnavailable(unavailable.Error);
                 break;
             case TelemetrySampleObserved observed:
+                SessionIdentity? invalidatedSession = null;
                 lock (_stateLock)
                 {
                     if (!SampleMatchesCurrentSession(observed.Sample.Session))
                     {
+                        invalidatedSession = _currentSession;
                         _currentSession = null;
+                        _replayDescriptor = null;
                     }
 
                     _onTrackState = observed.Sample.OnTrackState;
@@ -466,6 +469,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                     {
                         _ownedReviewActive = false;
                     }
+                }
+
+                if (invalidatedSession is not null)
+                {
+                    PublishClearedSession(invalidatedSession);
                 }
 
                 if (await ProcessSampleAsync(observed.Sample, cancellationToken).ConfigureAwait(false))

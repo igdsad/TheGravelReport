@@ -262,6 +262,35 @@ public sealed class IncidentReviewApplicationWorkflowTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public async Task UnmatchedConnectionScopedReplayPublishesCurrentSessionInvalidation()
+    {
+        await using var host = new TestHost();
+        var collected = CollectUpdatesUntilErrorAsync(host.Service, TestError.Code);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        var session = host.Store.Session!.Id;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        var updates = await collected;
+
+        Assert.AreEqual(
+            2,
+            updates.OfType<ReviewUpdate.SessionChanged>().Count(update =>
+                update.Session == session));
+        Assert.IsFalse(
+            (await host.Service.GetCurrentSessionAsync(CancellationToken.None)).IsSuccess);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-SES-001")]
     public async Task ReturningFromDifferentReplayRestoresConnectionScopedLiveSession()
     {
@@ -1011,6 +1040,9 @@ public sealed class IncidentReviewApplicationWorkflowTests
             mode: SessionMode.Replay,
             onTrackState: OnTrackState.NotOnTrack,
             sessionNumber: 3));
+        await WaitUntilAsync(async () =>
+            !(await host.Service.GetCurrentSessionAsync(CancellationToken.None)).IsSuccess);
+
         await host.Telemetry.PublishAsync(CreateSample(
             counter: 4,
             time: 2_300,
