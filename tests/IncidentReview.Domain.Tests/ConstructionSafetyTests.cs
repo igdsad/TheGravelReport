@@ -32,6 +32,9 @@ public sealed class ConstructionSafetyTests
             typeof(SessionMode),
             typeof(SimulatorIdentityScope),
             typeof(SimulatorSessionDescriptor),
+            typeof(IncidentObservation),
+            typeof(IncidentCheckpoint),
+            typeof(IncidentBaselineReason),
         };
 
         foreach (var type in domainValueTypes)
