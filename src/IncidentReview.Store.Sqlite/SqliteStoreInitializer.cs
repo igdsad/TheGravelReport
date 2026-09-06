@@ -12,6 +12,7 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
     private readonly SqliteConnectionFactory _connectionFactory;
     private readonly SqliteMigrationRunner _migrationRunner;
     private readonly SqliteSchemaValidator _schemaValidator;
+    private readonly SqliteStoreGate _gate;
     private readonly ILogger _logger;
     private readonly object _initializationLock = new();
     private bool _initialized;
@@ -19,12 +20,14 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
     public SqliteStoreInitializer(
         SqliteStoreOptions options,
         IReadOnlyList<DbUp.Engine.SqlScript> testMigrations,
+        SqliteStoreGate gate,
         ILogger<SqliteStoreInitializer> logger)
     {
         _options = options;
         _connectionFactory = new SqliteConnectionFactory(options);
         _migrationRunner = new SqliteMigrationRunner(testMigrations, logger);
         _schemaValidator = new SqliteSchemaValidator(options.BusyTimeoutSeconds, logger);
+        _gate = gate;
         _logger = logger;
     }
 
@@ -79,6 +82,7 @@ internal sealed class SqliteStoreInitializer : IStoreInitializer
         }
 
         _initialized = true;
+        _gate.Open();
         return Result.Success();
     }
 

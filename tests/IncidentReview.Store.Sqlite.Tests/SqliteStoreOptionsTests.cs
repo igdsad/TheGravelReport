@@ -12,11 +12,15 @@ public sealed class SqliteStoreOptionsTests
     {
         var path = Path.Combine(Path.GetTempPath(), "IncidentReview.Tests", "store.db");
 
-        var result = SqliteStoreOptions.TryCreate(path, busyTimeoutSeconds: 7);
+        var result = SqliteStoreOptions.TryCreate(
+            path,
+            busyTimeoutSeconds: 7,
+            executorCapacity: 8);
 
         Assert.IsTrue(result.IsSuccess);
         Assert.AreEqual(Path.GetFullPath(path), result.Value.DatabasePath);
         Assert.AreEqual(7, result.Value.BusyTimeoutSeconds);
+        Assert.AreEqual(8, result.Value.ExecutorCapacity);
     }
 
     [TestMethod]
@@ -34,5 +38,19 @@ public sealed class SqliteStoreOptionsTests
         Assert.IsFalse(result.IsSuccess);
         Assert.AreEqual("store.sqlite.options-invalid", result.Error?.Code.ToString());
         Assert.AreEqual("The SQLite store configuration is invalid.", result.Error?.Message);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    [DataRow(0)]
+    [DataRow(1025)]
+    public void InvalidExecutorCapacityReturnsStableSafeFailure(int capacity)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "IncidentReview.Tests", "store.db");
+
+        var result = SqliteStoreOptions.TryCreate(path, executorCapacity: capacity);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual("store.sqlite.options-invalid", result.Error?.Code.ToString());
     }
 }

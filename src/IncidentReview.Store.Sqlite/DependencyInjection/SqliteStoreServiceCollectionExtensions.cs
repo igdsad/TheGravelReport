@@ -17,10 +17,17 @@ public static class SqliteStoreServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(options);
 
         _ = services.AddSingleton(options);
+        _ = services.AddSingleton<SqliteStoreGate>();
+        _ = services.AddSingleton<ISqliteCommitBoundary>(SqliteCommitBoundary.Instance);
+        _ = services.AddSingleton<ISqliteTransactionCleanup>(SqliteTransactionCleanup.Instance);
+        _ = services.AddSingleton<SqliteStore>();
+        _ = services.AddSingleton<IStore>(static provider =>
+            provider.GetRequiredService<SqliteStore>());
         _ = services.AddSingleton<IStoreInitializer>(provider =>
             new SqliteStoreInitializer(
                 options,
                 Array.Empty<DbUp.Engine.SqlScript>(),
+                provider.GetRequiredService<SqliteStoreGate>(),
                 provider.GetRequiredService<ILogger<SqliteStoreInitializer>>()));
         return services;
     }

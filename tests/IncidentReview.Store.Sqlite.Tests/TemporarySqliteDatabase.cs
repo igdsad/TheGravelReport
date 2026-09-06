@@ -11,10 +11,12 @@ internal sealed class TemporarySqliteDatabase : IDisposable
         "IncidentReview.Tests",
         Guid.NewGuid().ToString("N"));
 
-    public TemporarySqliteDatabase()
+    public TemporarySqliteDatabase(int executorCapacity = 64)
     {
         DatabasePath = Path.Combine(_directoryPath, "incident-review.db");
-        var options = SqliteStoreOptions.TryCreate(DatabasePath);
+        var options = SqliteStoreOptions.TryCreate(
+            DatabasePath,
+            executorCapacity: executorCapacity);
         Assert.IsTrue(options.IsSuccess);
         Options = options.Value;
     }
