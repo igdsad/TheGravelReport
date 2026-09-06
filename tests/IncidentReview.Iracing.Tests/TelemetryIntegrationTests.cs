@@ -177,6 +177,136 @@ public sealed class TelemetryIntegrationTests
     [TestProperty("Requirement", "IR-CON-001")]
     [TestProperty("Requirement", "IR-SES-003")]
     [TestProperty("Requirement", "QR-TST-001")]
+    public async Task InvalidDiagnosticsAreCoalescedAndRearmedAfterRecovery()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var frameCopied = new SemaphoreSlim(initialCount: 0);
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            options: FastOptions(),
+            stableFrameCopied: () => frameCopied.Release());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+        await simulator.SendAsync("invalid-bool");
+        var firstUnavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
+            await NextAsync(observer));
+        Assert.AreEqual(
+            IracingErrorCodes.InvalidTelemetryFrame,
+            firstUnavailable.Error.Code);
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("invalid-bool");
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("publish 6 14.0");
+        Assert.IsInstanceOfType<TelemetrySampleObserved>(await NextAsync(observer));
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("invalid-bool");
+        var secondUnavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
+            await NextAsync(observer));
+        Assert.AreEqual(
+            IracingErrorCodes.InvalidTelemetryFrame,
+            secondUnavailable.Error.Code);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task ValidFrameAtRecoveryDeadlineStartsANewLogicalConnection()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var timeProvider = new ManualTimeProvider(ObservedAt);
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            timeProvider,
+            FastOptions());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        await simulator.SendAsync("identity none");
+        var before = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        await simulator.SendAsync("invalid-bool");
+        Assert.IsInstanceOfType<TelemetryUnavailable>(await NextAsync(observer));
+
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        await simulator.SendAsync("publish 6 14.0");
+
+        Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+        Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
+        var reconnected = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreNotEqual(before.Session.SessionKey, reconnected.Session.SessionKey);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task CoalescedValidFrameRefreshesLogicalConnectionStaleDeadline()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var frameCopied = new SemaphoreSlim(initialCount: 0);
+        var timeProvider = new ManualTimeProvider(ObservedAt);
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            timeProvider,
+            FastOptions(),
+            stableFrameCopied: () => frameCopied.Release());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("identity none");
+        var scoped = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        timeProvider.Advance(TimeSpan.FromSeconds(29));
+        await simulator.SendAsync("publish 4 13.0");
+        Assert.IsTrue(await frameCopied.WaitAsync(EventTimeout));
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+        await simulator.SendAsync("invalid-bool");
+        var unavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
+            await NextAsync(observer));
+        Assert.AreEqual(
+            IracingErrorCodes.InvalidTelemetryFrame,
+            unavailable.Error.Code);
+
+        await simulator.SendAsync("publish 4 14.0");
+        var recovered = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(scoped.Session.SessionKey, recovered.Session.SessionKey);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
     public async Task PersistentInvalidFrameEndsLogicalConnectionOnlyAtStaleDeadline()
     {
         using var simulator = await SimulatorProcess.StartAsync();
@@ -444,6 +574,87 @@ public sealed class TelemetryIntegrationTests
     [TestMethod]
     [TestProperty("Requirement", "IR-CON-001")]
     [TestProperty("Requirement", "QR-TST-001")]
+    public async Task DisposeAsyncWaitsForProducerAndLeavesReplayUnavailable()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var timeProvider = new BlockingUtcNowTimeProvider(ObservedAt);
+        var integration = IracingTestingRegistration.CreateIntegrationContext(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            FastOptions(),
+            confirmationTimeout: null,
+            timeProvider: timeProvider,
+            stableFrameCopied: null);
+        var source = integration.Telemetry;
+        await using var observer = source.ObserveAsync(CancellationToken.None)
+            .GetAsyncEnumerator();
+
+        try
+        {
+            _ = await NextAsync(observer);
+            _ = await NextAsync(observer);
+            timeProvider.BlockNextUtcRead();
+            await simulator.SendAsync("publish 6 13.0");
+            Assert.IsTrue(timeProvider.WaitUntilBlocked(EventTimeout));
+            Assert.IsTrue(integration.ContextReader.Read().IsSuccess);
+
+            var disposal = ((IAsyncDisposable)source).DisposeAsync().AsTask();
+            Assert.IsFalse(
+                disposal.IsCompleted,
+                "Disposal must not return while the telemetry producer can still publish state.");
+
+            timeProvider.Release();
+            await disposal.WaitAsync(EventTimeout);
+
+            Assert.IsFalse(integration.ContextReader.Read().IsSuccess);
+            Assert.IsFalse(await observer.MoveNextAsync().AsTask().WaitAsync(EventTimeout));
+
+            await simulator.SendAsync("publish 9 14.0");
+            Assert.IsFalse(integration.ContextReader.Read().IsSuccess);
+        }
+        finally
+        {
+            timeProvider.Release();
+        }
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task UnexpectedProducerFaultIsObservedAndDoesNotPoisonLaterDisposal()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var throwOnNextFrame = 0;
+        var source = IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            options: FastOptions(),
+            stableFrameCopied: () =>
+            {
+                if (Interlocked.Exchange(ref throwOnNextFrame, 0) == 1)
+                {
+                    throw new InvalidOperationException("Injected producer fault.");
+                }
+            });
+        await using var observer = source.ObserveAsync(CancellationToken.None)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        Volatile.Write(ref throwOnNextFrame, 1);
+        await simulator.SendAsync("publish 6 13.0");
+        _ = await NextAsync(observer);
+
+        var exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => observer.MoveNextAsync().AsTask());
+        Assert.AreEqual("Injected producer fault.", exception.Message);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
     public async Task ObserveAsyncDisconnectsAfterOfficialNoValidFrameTimeout()
     {
         using var simulator = await SimulatorProcess.StartAsync();
@@ -619,6 +830,50 @@ public sealed class TelemetryIntegrationTests
 
         public void Advance(TimeSpan duration) =>
             Interlocked.Add(ref _timestamp, duration.Ticks);
+    }
+
+    private sealed class BlockingUtcNowTimeProvider : TimeProvider, IDisposable
+    {
+        private readonly DateTimeOffset _utcNow;
+        private readonly ManualResetEventSlim _blocked = new(initialState: false);
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+        private int _blockNextUtcRead;
+
+        public BlockingUtcNowTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override long TimestampFrequency => TimeProvider.System.TimestampFrequency;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (Interlocked.Exchange(ref _blockNextUtcRead, 0) == 1)
+            {
+                _blocked.Set();
+                if (!_release.Wait(EventTimeout))
+                {
+                    throw new TimeoutException("The test did not release the UTC clock read.");
+                }
+            }
+
+            return _utcNow;
+        }
+
+        public override long GetTimestamp() => TimeProvider.System.GetTimestamp();
+
+        public void BlockNextUtcRead() => Volatile.Write(ref _blockNextUtcRead, 1);
+
+        public bool WaitUntilBlocked(TimeSpan timeout) => _blocked.Wait(timeout);
+
+        public void Release() => _release.Set();
+
+        public void Dispose()
+        {
+            _release.Set();
+            _blocked.Dispose();
+            _release.Dispose();
+        }
     }
 
     private sealed class RecoveryDeadlineTimeProvider : TimeProvider, IDisposable

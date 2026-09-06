@@ -174,6 +174,24 @@ public sealed class ReplayControllerTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task LaterValidFrameAtomicallyRestoresReplayCommands()
+    {
+        var context = IracingTestingRegistration.CreateReplayContext(
+            telemetryAvailable: false);
+        context.ObserveFrame(State());
+
+        var result = await context.Controller.SeekAsync(
+            Position(0, 0),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.HasCount(1, context.Messages);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-RPY-003")]
     public async Task ReplayCommandsPropagateCancellationBeforeDelivery()
     {

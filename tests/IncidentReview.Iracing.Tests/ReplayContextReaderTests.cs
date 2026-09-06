@@ -124,6 +124,25 @@ public sealed class ReplayContextReaderTests
         Assert.AreEqual(ErrorKind.Unavailable, result.Error?.Kind);
     }
 
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void LaterValidFrameAtomicallyRestoresReplayContext()
+    {
+        var integration = IracingTestingRegistration.CreateReplayContext(
+            telemetryAvailable: false,
+            sessionInfo: ValidContextSessionInfo);
+        Assert.IsFalse(integration.ContextReader.Read().IsSuccess);
+
+        integration.ObserveFrame(State(ValidContextSessionInfo, cameraGroupNumber: 2));
+
+        var recovered = integration.ContextReader.Read();
+        Assert.IsTrue(recovered.IsSuccess);
+        Assert.AreEqual("René Gravel", recovered.Value.DriverDisplayName);
+        Assert.AreEqual("TV1", recovered.Value.CurrentCameraGroup);
+    }
+
     private static string SessionInfoWithDriverEntry(string displayNameLines) => string.Concat(
         "DriverInfo:\n",
         " DriverCarIdx: 4\n",
