@@ -26,4 +26,11 @@
     <ProjectReference Include="../IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
     <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../vendor/third_party/iracing-sdk-1.20/NOTICE.md"
+          Link="THIRD-PARTY-NOTICES/iracing-sdk-1.20.md"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
