@@ -1,6 +1,6 @@
-# iRacing Incident Review
+# GravelReview
 
-A local Windows companion that watches iRacing's local telemetry, records increases in the local member's incident counter, keeps the resulting review points in SQLite, and lets the user review an incident by seeking iRacing replay, focusing the local player, and applying the requested playback state.
+A local Windows companion that watches iRacing's local telemetry, records increases in the local member's incident counter, keeps the resulting review points in SQLite, and lets the user jump directly to each incident in iRacing replay.
 
 The repository contains a runnable MVP. Automated Release startup and protocol-simulator coverage exist, but acceptance against a recorded current real iRacing build is still required before treating it as a public release.
 
@@ -21,7 +21,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
     --configuration Release --no-restore --no-build
 ```
 
-The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **Review** on that incident's row. The workflow preflights the selected session and playback preference, seeks to the stored session time minus the configured lead-in, focuses the local player with the preferred camera group (for example, `TV1`), and applies the configured pause/playback setting. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
+The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **-2 sec**, **0 sec**, or **+2 sec** on that incident's row. The workflow preflights the active session, seeks relative to the stored event time, focuses the local player with the selected camera group, and applies the stored playback behavior. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
 
 Only one app instance may run in the Windows user session.
 
@@ -44,7 +44,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The database path must be an absolute local file path. Startup timeout accepts 1 through 120 seconds. The equivalent environment variables are `INCIDENTREVIEW_DatabasePath` and `INCIDENTREVIEW_StartupTimeoutSeconds`; command-line values take precedence. There is no JSON configuration file in the current runtime.
 
-Replay lead-in, pause/playback speed, and preferred camera group are durable user preferences stored through `IStore`. A named camera preference is matched case-insensitively against the groups in the current iRacing session; no preference preserves the currently reported camera group while still focusing the local player.
+Replay pause/playback behavior and the preferred camera group are durable user preferences stored through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while still focusing the local player.
 
 ## Build, test, and publish
 
@@ -85,14 +85,14 @@ The application is split by behavioral boundary:
 - `Application` orchestrates use cases through those contracts; it has no SQLite, Dapper, DbUp, WPF, or Windows interop reference.
 - `Store.Sqlite` is one `IStore` implementation. It owns Dapper SQL, connections, transactions, row mapping, DbUp, and schema validation.
 - `Iracing` is the only production assembly that knows the SDK ABI or replay broadcast protocol.
-- `Desktop.Wpf` talks only to `Application.Contracts` plus domain/result values.
+- `Desktop.Wpf` talks only to `Application.Contracts` plus domain/result values. It renders one immutable root presentation state; UI events are reduced into a replacement state and external effects remain outside the reducer.
 - `Host.Wpf` is the sole composition root and selects the concrete adapters using Microsoft Generic Host and its built-in DI container.
 
 Every store mutation is an immutable typed `IStoreCommand` with an `OperationId`. The SQLite adapter executes it in one owned transaction, writes its operation fingerprint in the same transaction, and supports reconciliation after an indeterminate commit. Runtime values are Dapper parameters; raw SQL is private to the adapter. DbUp applies the checksum-pinned embedded migration before the store gate opens.
 
 Boundary rules are defined once in [`eng/ArchitecturePolicy.props`](eng/ArchitecturePolicy.props), enforced during MSBuild, inspected again in compiled-assembly architecture tests, and supplemented by repository analyzers for non-constant Dapper SQL, missing Dapper mutation transactions (including `CommandDefinition`), and nested service-provider construction.
 
-See [`DESIGN.md`](DESIGN.md) for the complete architecture, transaction/error semantics, testing philosophy, dependency policy, and future evolution path.
+See [`DESIGN.md`](DESIGN.md) for the complete architecture, transaction/error semantics, testing philosophy, dependency policy, and future evolution path. [`AGENTS.md`](AGENTS.md) is the mandatory day-to-day working agreement for contributors and coding agents, so these patterns do not have to be re-established in each task.
 
 ## Official iRacing SDK baseline
 

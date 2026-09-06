@@ -1,18 +1,22 @@
-# iRacing Incident Review — System Design
+# GravelReview — System Design
 
 - **Status:** Accepted architecture; runnable MVP implemented, distribution and live-simulator acceptance pending
-- **Document version:** 1.3
+- **Document version:** 1.4
 - **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
 
-This document is the architectural contract and implementation record for the iRacing Incident Review application. It records the product goal, project boundaries, public contracts, storage and transaction model, error model, startup model, dependency policy, testing philosophy, and the line between the implemented MVP and remaining release work.
+This document is the architectural contract and implementation record for GravelReview, a local iRacing incident-review application. It records the product goal, project boundaries, public contracts, storage and transaction model, error model, startup model, dependency policy, testing philosophy, and the line between the implemented MVP and remaining release work.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A departure from a MUST or MUST NOT requires an architecture decision record (ADR), accompanying tests, and explicit review.
 
+[`AGENTS.md`](AGENTS.md) is the mandatory operational summary of these rules for every human or coding-agent change. It MUST remain aligned with this design so future work starts from the repository's established practices rather than reconstructing them from conversation history.
+
+`GravelReview` is the user-visible product name. `IncidentReview.*` remains the internal bounded-context, project, namespace, and assembly identity. The existing `%LOCALAPPDATA%\IncidentReview\incident-review.db` database path, `INCIDENTREVIEW_` environment-variable prefix, `Local\IncidentReview.Host.Wpf` single-instance mutex, and `IncidentReview.*` UI Automation identifiers are compatibility contracts and MUST NOT be renamed as part of product-facing branding. This preserves existing data, deployment configuration, old/new-process exclusion, public library identities, and accessibility automation. A future internal-identity migration requires its own ADR and compatibility plan.
+
 ## 1. Executive summary
 
-The application is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents them in a review UI, and lets the user review an incident by seeking the iRacing replay to the relevant session time, focusing the local player, and applying a requested playback state.
+GravelReview is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents the active session through a review UI, and lets the user review an incident at two seconds before, exactly at, or two seconds after its recorded time while focusing the local player and applying the stored playback state.
 
 The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
 
@@ -35,8 +39,13 @@ iRacing shared memory/event
     → IncidentReview.Store.Sqlite
     → SQLite
 
+IncidentReview.Iracing → IReplayContextReader
+                         → IncidentReview.Application
+
 WPF UI
-    → IIncidentReviewService
+    → IIncidentReviewService.GetSnapshotAsync
+    ← coherent ReviewSnapshot
+    → ReviewIncidentAsync(IncidentId, ReplayOffset)
     → IReplayController
     → official iRacing replay broadcast messages
     ← later stable iRacing telemetry confirmation
@@ -49,7 +58,9 @@ Implemented at this revision:
 - cumulative local-member incident detection, durable checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
 - the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and an embedded checksum-pinned DbUp migration;
 - a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, narrow session/driver/camera metadata extraction, and confirmed replay seek/camera/playback control;
-- a WPF screen centered on a chronological incident log with a Review action on each row, a collapsed power-user section, status, and durable replay preferences;
+- one coherent `ReviewSnapshot` application read containing revisioned status, the active session and its incidents, stored preferences, and transient driver/camera context;
+- a WPF screen centered on the active session's chronological incident log, with `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, and a bottom status bar;
+- a single immutable `MainWindowState` reduced from explicit UI actions and replaced atomically for top-down WPF rendering; its bounded tail-follow event stream and current status share the exact same event object;
 - a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
 - automated domain, contract, application, SQLite, architecture, adapter/protocol-simulator, view-model, and Release-host-startup tests.
 
@@ -68,7 +79,7 @@ No test result or live-simulator acceptance is implied by this document alone. T
 
 ### 2.1 Primary user outcome
 
-After completing or pausing an iRacing session, a driver can see the incidents observed during that session, choose Review on one row, and have iRacing move its replay to a configurable lead-in before the event with the local player and preferred—or current—camera group selected.
+After completing or pausing an iRacing session, a driver can see the incidents observed in the active session, choose `-2 sec`, `0 sec`, or `+2 sec` on one row, and have iRacing move its replay to that explicit offset from the event with the local player and preferred—or current—camera group selected.
 
 ### 2.2 Primary workflow
 
@@ -78,13 +89,13 @@ After completing or pausing an iRacing session, a driver can see the incidents o
 4. When iRacing connects, the application identifies the active session from validated SDK session evidence.
 5. The incident detector observes changes to `PlayerCarMyIncidentCount`, the local member's cumulative counter.
 6. A counter increase creates a durable incident record containing its replay position and useful session context.
-7. The UI updates to show the incident.
+7. The application publishes a revision and the UI obtains one coherent `ReviewSnapshot`; one reducer transition replaces the immutable top-level state and shows the incident.
 8. The user exits the car; the current policy requires an authoritative `NotOnTrack` sample before replay control.
-9. The user chooses Review on an incident row.
-10. The application preflights the current simulator/session state and the configured playback representation before sending an external command.
-11. The replay controller seeks to the incident time minus the configured lead-in and waits for a later stable telemetry frame to confirm the requested session/time.
-12. The controller focuses the local player with the configured camera group, or preserves the current group when no preference is set, and waits for camera confirmation.
-13. The controller applies pause or playback speed and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
+9. The user chooses `-2 sec`, `0 sec`, or `+2 sec` on an incident row; double-click means `0 sec`.
+10. The application applies the selected `ReplayOffset` to the stored incident time, clamping a negative result to zero, and preflights the current simulator/session state and stored playback representation before sending an external command.
+11. The replay controller seeks to the explicit target and waits for a later stable telemetry frame to confirm the requested session/time.
+12. The controller focuses the local player with the stored camera-group preference, or preserves the current group when no preference is set, and waits for camera confirmation.
+13. The controller applies the stored pause or playback-speed compatibility preference and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
 
 Classification, notes, explicit reviewed/dismissed actions, and export remain follow-on UI capabilities; they are not steps in the current WPF workflow.
 
@@ -92,7 +103,8 @@ Classification, notes, explicit reviewed/dismissed actions, and export remain fo
 
 - Detect and persist incident-count increases for the local member.
 - Preserve the iRacing session number and session time required for exact replay seeking.
-- Present a fast, accessible Windows UI with connection, session-history, incident, and replay-preference state.
+- Present a fast, accessible Windows UI whose primary log contains only the active session's incidents and whose complete visible state arrives and renders as one coherent top-down value.
+- Show the transient active driver and live iRacing camera-group catalog without persisting simulator-owned display metadata.
 - Seek iRacing replay through the official local SDK broadcast mechanism.
 - Focus the replay on the local player through an optional named camera-group preference.
 - Report external replay control as successful only after stable telemetry confirms the requested state.
@@ -132,7 +144,7 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 | IR-INC-004 | Duplicate or repeated telemetry samples do not create duplicate incident records. |
 | IR-INC-005 | Detector progress and its incident record are persisted atomically so failure, retry, or restart cannot silently lose or duplicate an incident. |
 | IR-RPY-001 | A recorded incident contains a simulator-neutral replay position with session number and session time. |
-| IR-RPY-002 | Reviewing an incident seeks to the configured lead-in before its recorded time (clamped to zero), focuses the local player with the preferred/current camera group, and applies playback in that order. |
+| IR-RPY-002 | Reviewing an incident accepts an explicit `-2 sec`, `0 sec`, or `+2 sec` offset, applies it to the recorded time with a zero lower bound, focuses the local player with the preferred/current camera group, and applies the stored playback state in that order. The compatibility overload without an explicit offset continues to use the stored lead-in. |
 | IR-RPY-003 | Replay actions unavailable in the current iRacing state are disabled or return a clear structured failure. |
 | IR-STR-001 | Sessions and incidents survive application restart. |
 | IR-STR-002 | Every application data mutation executes inside a transaction. |
@@ -140,10 +152,10 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 | IR-STR-004 | Released schema migrations are applied once and are never edited in place. |
 | IR-STR-005 | Re-executing an identical command with the same operation identifier can produce at most one committed effect; a transient pre-commit failure may later succeed. |
 | IR-STR-006 | An indeterminate commit can be reconciled by operation identifier before retry. |
-| IR-HIS-001 | The user can list past sessions and open the incidents belonging to a selected session after restart. |
-| IR-SET-001 | Mutable durable user preferences, including replay lead-in and playback choices, are stored through `IStore`. |
-| IR-UI-001 | The UI displays connection state, active session, and incidents in chronological order. |
-| IR-UI-002 | The UI can show safe, actionable messages derived from structured errors. |
+| IR-HIS-001 | Past sessions and incidents remain durably queryable through application/store contracts after restart; the primary WPF UI deliberately displays only the active session and does not expose session-history navigation. |
+| IR-SET-001 | Mutable durable user preferences, including preferred camera and hidden lead-in/playback compatibility values, are stored through `IStore`; removing controls from the primary UI does not silently discard existing values. |
+| IR-UI-001 | One coherent revisioned `ReviewSnapshot` supplies the active session, chronological incidents, connection/error state, stored preferences, transient active driver, and live camera groups. WPF renders one immutable top-level `MainWindowState`; stale revisions cannot replace newer state and an automatic refresh preserves a dirty camera draft. |
+| IR-UI-002 | Every safe actionable UI message is one immutable event appended to the bounded event stream and assigned by reference as `CurrentStatusEvent`. Except while a transient busy label obscures it, the status bar displays that exact event object's message; busy state MUST NOT create or replace a competing status event. |
 
 Deferred requirement: `DR-EXP-001` — a future export operation can serialize selected session data without exposing the SQLite schema.
 
@@ -181,6 +193,7 @@ Deferred requirement: `DR-EXP-001` — a future export operation can serialize s
 8. **Test through the surface that production uses.** Test hooks enable conditions; they do not create alternate production behavior.
 9. **Prefer a small explicit dependency graph.** Every external package requires a reason, a pinned version, and review of its transitive graph.
 10. **Optimize for replacement, not speculation.** Interfaces describe capabilities we use; they do not attempt to predict every future backend.
+11. **Render visible state from one root value.** Presentation effects dispatch data-only actions to a pure reducer; no control, handler, collection, or parallel property bag owns an independent copy of UI-visible state.
 
 ## 5. System context
 
@@ -263,12 +276,12 @@ eng/
 | `Domain` | Simulator-neutral identities, values, incident rules, and invariants | Domain values and pure services |
 | `Store.Contracts` | Store capabilities expressed as typed queries, atomic commands, and host-only initialization | `IStore`, `IStoreInitializer`, store queries, store commands |
 | `Telemetry.Contracts` | Stream of simulator-neutral telemetry observations | `ITelemetrySource`, telemetry records |
-| `Replay.Contracts` | Replay capabilities in application vocabulary | `IReplayController`, replay records |
-| `Application.Contracts` | Use cases, runtime lifecycle, and UI-facing state/events | Application service/lifecycle interfaces and immutable models |
+| `Replay.Contracts` | Replay command and read-only context capabilities in application vocabulary | `IReplayController`, `IReplayContextReader`, `ReplayContext`, replay records |
+| `Application.Contracts` | Use cases, runtime lifecycle, and coherent UI-facing state/events | Application service/lifecycle interfaces, `ReviewSnapshot`, and immutable models |
 | `Application` | Use-case orchestration and incident detection | Registration module; internal implementations |
 | `Store.Sqlite` | Dapper queries, SQLite mappings, transactions, DbUp migrations | Registration/options plus a narrowly named testing registration surface |
 | `Iracing` | SDK shared-memory reader, session-info translation, replay broadcasts and telemetry confirmation | Registration/options plus a narrowly named testing registration surface |
-| `Desktop.Wpf` | Views, view models, UI mapping, dispatcher interaction | Registration module and WPF application surface |
+| `Desktop.Wpf` | Views, effects, pure UI-state reduction, UI mapping, dispatcher interaction | `MainWindowState`, `MainWindowAction`, reducer, registration module, and WPF application surface |
 | `Host.Wpf` | Executable, composition root, startup and shutdown | Process entry point |
 | `Analyzers` | Compile-time enforcement that needs semantic source analysis | Roslyn diagnostics only; no runtime API |
 | `Verification` | Reserved home for traceability, dependency, migration-manifest, artifact, and release-evidence checks; currently a no-op CLI scaffold | Repository CLI only; never shipped |
@@ -385,6 +398,18 @@ public interface IReplayController
         CancellationToken cancellationToken);
 }
 
+public interface IReplayContextReader
+{
+    Result<ReplayContext> Read();
+}
+
+public sealed class ReplayContext
+{
+    public string? DriverDisplayName { get; }
+    public IReadOnlyList<string> CameraGroups { get; }
+    public string? CurrentCameraGroup { get; }
+}
+
 // Owned by IncidentReview.Domain and created with ReplayPosition.TryCreate(...).
 public sealed class ReplayPosition
 {
@@ -393,7 +418,9 @@ public sealed class ReplayPosition
 }
 ```
 
-`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving it to the local player, group number, and camera number is the adapter's responsibility.
+`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. `ReplayOffset` is a separately validated signed duration used for explicit relative navigation; applying it to `SessionTime` has a zero lower bound. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving it to the local player, group number, and camera number is the adapter's responsibility.
+
+`IReplayContextReader` is a read-only, synchronous snapshot boundary over context already copied from the latest stable simulator frame. It MUST NOT issue commands, block waiting for telemetry, expose mutable adapter state, or leak raw iRacing YAML/indices. Its immutable `ReplayContext` contains only a validated optional driver display name, an ordered case-insensitively unique camera-group catalog, and an optional current group that is a member of that catalog. Unavailability is a structured `Result` failure. The application may deliberately substitute empty transient context while preserving durable incident/session state; the presentation never reaches into `IncidentReview.Iracing`.
 
 `ValidatePlayback` is a pure capability preflight. The application calls it before seeking so a persisted playback preference that cannot be represented by the pinned iRacing protocol cannot produce a half-completed “seek succeeded, playback failed validation” workflow.
 
@@ -459,6 +486,9 @@ public interface IIncidentReviewService
     Task<Result<ReviewServiceStatus>> GetStatusAsync(
         CancellationToken cancellationToken);
 
+    Task<Result<ReviewSnapshot>> GetSnapshotAsync(
+        CancellationToken cancellationToken);
+
     Task<Result<ReviewSession>> GetCurrentSessionAsync(
         CancellationToken cancellationToken);
 
@@ -470,6 +500,12 @@ public interface IIncidentReviewService
         SessionIdentity session,
         CancellationToken cancellationToken);
 
+    Task<Result> ReviewIncidentAsync(
+        IncidentId incidentId,
+        ReplayOffset offset,
+        CancellationToken cancellationToken);
+
+    // Compatibility path: uses the stored lead-in preference.
     Task<Result> ReviewIncidentAsync(
         IncidentId incidentId,
         CancellationToken cancellationToken);
@@ -490,6 +526,18 @@ public interface IIncidentReviewService
         CancellationToken cancellationToken);
 }
 
+public sealed class ReviewSnapshot
+{
+    public long Revision { get; }
+    public ReviewServiceStatus Status { get; }
+    public Error? StatusError { get; }
+    public ReviewSession? ActiveSession { get; }
+    public UserPreferences Preferences { get; }
+    public string? DriverDisplayName { get; }
+    public IReadOnlyList<string> CameraGroups { get; }
+    public string? CurrentCameraGroup { get; }
+}
+
 public interface IApplicationRuntime
 {
     Task Completion { get; }
@@ -498,7 +546,11 @@ public interface IApplicationRuntime
 }
 ```
 
-`ReviewUpdate` is an application-owned notification that tells the UI which immutable state to refresh; it does not expose telemetry frames, store commands, threads, dispatchers, or infrastructure events. `IApplicationRuntime` gives the composition root an explicit lifecycle for the telemetry/processing loop without exposing its implementation. `Completion` remains incomplete while the runtime is healthy, completes normally only after requested stop, and faults on an unexpected worker defect; an unrequested normal completion is also treated as a runtime failure. `StopAsync` is idempotent, cancels and awaits all owned workers, always observes their completion, and rethrows a worker fault that occurred before expected stop rather than converting it into successful shutdown. View models do not coordinate stores and replay controllers themselves. They invoke application use cases and marshal updates through a presentation-owned dispatcher abstraction.
+`GetSnapshotAsync` is the primary presentation read. It captures a revisioned application anchor, reads the active session and stored preferences, reads transient replay context through `IReplayContextReader`, and verifies that the anchor is still current before constructing one immutable `ReviewSnapshot`. If application state changes during those reads it retries instead of returning a torn mixture. The snapshot validates that `Unavailable` has exactly one structured status error and that the current camera belongs to the bounded camera catalog. The active session—not an independently selected historical session—is the sole source for the primary incident log. Existing granular session/status/query methods remain application capabilities for non-primary consumers and compatibility; WPF MUST NOT assemble its visible root by calling them independently.
+
+Every in-memory application-anchor change advances a monotonically increasing snapshot revision. A presentation MUST ignore a snapshot older than the revision it has already rendered. Equal revisions MAY be reapplied for manual-refresh messaging, a separately persisted preference update, or refreshed transient context, but cannot regress application-owned state. Transient driver/camera context is not written to SQLite. Stored lead-in, playback speed, and pause remain durable compatibility inputs even though the current primary WPF surface exposes only the camera preference and explicit row offsets.
+
+`ReviewUpdate` is an application-owned notification that tells the UI to obtain a fresh coherent snapshot; it does not expose telemetry frames, store commands, threads, dispatchers, or infrastructure events. `IApplicationRuntime` gives the composition root an explicit lifecycle for the telemetry/processing loop without exposing its implementation. `Completion` remains incomplete while the runtime is healthy, completes normally only after requested stop, and faults on an unexpected worker defect; an unrequested normal completion is also treated as a runtime failure. `StopAsync` is idempotent, cancels and awaits all owned workers, always observes their completion, and rethrows a worker fault that occurred before expected stop rather than converting it into successful shutdown. View models do not coordinate stores, replay-context readers, or replay controllers themselves. They invoke application use cases and marshal returned data/actions through a presentation-owned dispatcher abstraction.
 
 ## 8. Domain model
 
@@ -509,6 +561,7 @@ Initial concepts:
 - `IncidentId`: client-generated stable identity, preferably UUIDv7.
 - `Incident`: immutable core record plus controlled annotation/status transitions.
 - `ReplayPosition`: session number and session-relative time.
+- `ReplayOffset`: validated signed relative seek duration, with application to session time clamped at zero.
 - `IncidentPoints`: non-negative total and positive delta.
 - `IncidentClassification`: optional user classification.
 - `IncidentReviewStatus`: pending, reviewed, or dismissed.
@@ -593,7 +646,7 @@ Responsibilities:
 - Parse only the session metadata needed by the application.
 - Translate raw telemetry into immutable `TelemetrySample` values.
 - Detect connection, disconnection, moving or paused replay, and on-track state.
-- Resolve the local player and named camera groups from the current session information without leaking that schema through a contract.
+- Resolve the local player's display/focus metadata and named camera groups from the current session information, then expose only validated simulator-neutral display context through `IReplayContextReader`.
 - Encode replay commands for session-time search, player/camera focus, pause, and playback speed.
 - Convert the fire-and-forget Windows transport into applied-result semantics by confirming each command against a later stable telemetry frame.
 - Translate expected integration failures into stable `Result` errors.
@@ -607,7 +660,7 @@ The telemetry reader and downstream processing are decoupled by a bounded single
 Replay review behavior:
 
 1. Confirm that iRacing is connected, the SDK reports `NotOnTrack`, and no review command is already in flight.
-2. Load the incident and preferences through application use cases, subtract the configured lead-in, and clamp the target time to zero.
+2. Load the incident and preferences through application use cases. For the primary UI, apply its explicit `ReplayOffset` (`-2 sec`, `0 sec`, or `+2 sec`) to the recorded incident time and clamp below zero; the compatibility overload instead subtracts the stored lead-in.
 3. Preflight pause or playback speed through `ValidatePlayback`; an unrepresentable preference fails before any external command.
 4. Recheck that the incident's application session and replay session number are the ones currently loaded, including the stricter continuity rule for connection-scoped identities.
 5. Call `SeekAsync` and wait for a later stable frame whose replay session and time confirm the target. The iRacing adapter accepts a time within 250 milliseconds because search and frame publication are asynchronous.
@@ -616,6 +669,8 @@ Replay review behavior:
 8. Return one structured, actionable failure for the exact failed precondition or stage. Seek, camera, and playback confirmation have independent ten-second default windows and distinct codes: `iracing.replay.seek-timeout`, `iracing.replay.camera-timeout`, and `iracing.replay.playback-timeout`. Missing/ambiguous player or camera metadata and a named group absent from the current session are separate failures.
 
 `ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
+
+Replay context reads are independent of replay commands. After each accepted stable frame, the adapter retains an immutable, bounded projection of the active driver's display name, ordered camera-group names, and the current group. `IReplayContextReader.Read` returns that latest projection immediately or a typed unavailability result. The application includes it in `ReviewSnapshot`; a malformed or temporarily unavailable display context degrades to empty transient context and MUST NOT corrupt or hide durable incidents. Camera choices shown by WPF therefore come from the live iRacing session, while the explicit “current iRacing camera” choice represents a null stored preference. A previously stored camera that is absent from the live catalog remains visible as unavailable so an automatic refresh cannot silently rewrite the user's durable choice.
 
 The current application prevents detection during its own replay-navigation command and keeps that suppression active until telemetry reports the car back on track. The adapter classifies a frame as replay when either `IsReplayPlaying` is true or the official `CamCameraState` bitfield includes `IsSessionScreen`. This keeps a paused session-screen replay in replay mode even though `IsReplayPlaying` becomes false. Compatibility of that official signal across every supported real-iRacing session type remains part of live acceptance rather than an unimplemented behavior.
 
@@ -990,30 +1045,45 @@ disable/close UI
     → dispose host
 ```
 
-JSON configuration is not used in the current application. Deployment settings use code defaults, `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database is `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
+JSON configuration is not used in the current application. Deployment settings use code defaults, the compatibility-stable `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. The product-facing host assembly metadata is `GravelReview`, while its assembly/namespace identity remains `IncidentReview.Host.Wpf`. The existing database location, environment prefix, `Local\IncidentReview.Host.Wpf` mutex, and `IncidentReview.*` Automation IDs MUST remain unchanged during this rebrand. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
 
 ## 14. UI design boundary
 
-The implemented MVP UI contains:
+The implemented GravelReview UI contains:
 
-- a single primary, chronological incident log with its own horizontal and vertical scrolling;
-- recorded time, incident identity, replay time, lap, delta, total, review status, and stored notes for each incident;
-- Review actions on each incident row, plus double-click review;
-- a collapsed-by-default power-user section containing bounded, timestamped diagnostic events and its own scrolling;
-- current and historical session selection inside the power-user section rather than as a competing primary pane;
-- editable durable lead-in, pause/playback-speed, and preferred-camera preference fields inside that section;
-- a bottom status bar containing iRacing connection state, live-update state, work/incident state, and exact safe error text;
+- the `GravelReview` product name and transient active-driver display name in the header;
+- one primary chronological incident log derived only from `ReviewSnapshot.ActiveSession`, with its own horizontal and vertical scrolling and no historical-session selector;
+- recorded time, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and review status for each incident; the full stable incident ID remains the command identity and is available as a tooltip;
+- `-2 sec`, `0 sec`, and `+2 sec` actions on each incident row; double-click dispatches the `0 sec` action;
+- no Notes column and no annotation/classification controls in the primary UI, while those durable domain/store capabilities remain intact for future workflows;
+- a collapsed-by-default **Advanced** panel containing a timestamped bounded event stream with horizontal/vertical scrolling and tail-follow behavior, plus a live iRacing camera-group dropdown and Save action;
+- no visible lead-in, playback-speed, or pause fields; those stored values remain compatibility behavior for playback and the legacy review overload rather than being silently deleted;
+- a bottom status bar containing iRacing connection state, current event/work state, and live-update state;
 - explicit unavailable state when replay control cannot be used.
 
-The event stream is presentation-only, is capped at 200 entries by evicting the oldest entry, and is not a substitute for a future durable diagnostic log. The incident grid deliberately does not display driver name or car number: those values are not yet captured by the telemetry/domain/store contracts and the UI must not invent them. It displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. The preferred-camera field names an iRacing camera group; the replay adapter resolves that name only within the current session, focuses the local player, and returns an exact error when the metadata or group is unavailable. Notes/classification editing and reviewed/dismissed controls must not be described as implemented until their application contract, WPF interaction, and storage behavior are connected and tested.
+The camera dropdown is populated from the simulator-neutral camera names in `ReviewSnapshot`. It always offers “current iRacing camera” as the null preference. The selected or saved name is retained as an unavailable choice when it is absent from a later live catalog; only a successful explicit Save writes the preference. Driver and current-camera display values are transient and disappear when the application snapshot no longer supplies them. WPF MUST NOT parse SDK session information or invent a second default-camera catalog.
 
-View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry, or encode replay commands.
+The WPF state model deliberately adapts the top-down, data-driven ideas described by [Replicant](https://replicant.fun/) without adding Clojure, ClojureScript, a browser runtime, or a Replicant dependency:
 
-UI event handlers contain presentation mechanics only. Use-case decisions live in `Application` and pure rules live in `Domain`.
+```text
+ReviewSnapshot + local UiAction (implemented as MainWindowAction)
+    → pure MainWindowReducer.Reduce(previousState, action)
+    → replacement immutable MainWindowState
+    → one State property notification
+    → XAML binds State.* from the window root
+```
 
-The initial presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, collection views, and accessibility automation peers directly. No MVVM framework, mediator, event-bus, or reactive package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; UI collections are updated only on the dispatcher through the presentation abstraction.
+`MainWindowState` is the sole owner of UI-visible data: snapshot revision/status/error, active session, incidents, selected incident identity, saved preferences, transient driver/current-camera context, camera choices and dirty draft, busy/monitoring state, event log, and current status event. The view model MUST NOT maintain independent visible fields or mutable observable collections that can disagree with this root. It may own effect machinery—commands, cancellation sources, gates, worker tasks, and the dispatcher—but effects occur outside the reducer. Service calls and update observation produce data-only actions; time needed by an action is captured before reduction. `MainWindowReducer.Reduce` performs no I/O, reads no clock/service/control, mutates no prior value, and returns either the unchanged instance for an ignored action or a complete replacement state.
 
-User-visible state and interactive elements have stable, documented Windows UI Automation names/`AutomationId` values. Keyboard navigation, focus order, screen-reader names, scaling, high contrast, and selection/review behavior are acceptance-tested; automation identifiers are contracts and do not depend on localized display text.
+Applying a snapshot is atomic. The reducer derives the incident list from the active session, retains selection only while its full ID remains present, builds camera choices, and then replaces the root. A snapshot with a revision lower than the rendered revision is stale and MUST return the existing state instance. During an automatic refresh, an unsaved camera draft MUST survive application preference/context updates; a manual refresh may deliberately accept the stored preference. Busy and monitoring transitions also flow through actions instead of separate bindable properties.
+
+Every actionable notice is constructed once as an immutable `EventLogItem`. Appending it evicts the oldest entries above the 200-entry bound, stores it as the event-log tail, and assigns that exact object reference to `CurrentStatusEvent`. Whenever current-event text is displayed, `ReferenceEquals(State.EventLog[^1], State.CurrentStatusEvent)` MUST hold; a temporary busy label may obscure its text but MUST NOT create or replace a competing status event. Errors, successful replay navigation, refreshes, monitoring transitions, and simulator-status transitions use this same path. The list tail-follows after replacement-state notification as a view-only WPF effect; the running event stream is not a substitute for a future durable diagnostic sink.
+
+View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry/replay context, or encode replay commands. UI event handlers contain presentation mechanics only. Use-case decisions live in `Application`, pure business rules live in `Domain`, and pure presentation transitions live in the reducer.
+
+The presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, read-only snapshots, and accessibility automation peers directly. No MVVM framework, mediator, event-bus, immutable-collection package, or reactive package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; replacement state is published only on the dispatcher through the presentation abstraction.
+
+User-visible state and interactive elements have stable, documented Windows UI Automation names/`AutomationId` values. Keyboard navigation, focus order, screen-reader names, scaling, high contrast, scrolling/tail-follow, all three row offsets, and selection/review behavior are acceptance-tested; automation identifiers remain the compatibility-stable `IncidentReview.*` contracts and do not depend on product branding or localized display text.
 
 ## 15. Testing philosophy and strategy
 
@@ -1043,6 +1113,8 @@ Pure domain/result tests
     ↓
 Application use-case tests through contracts
     ↓
+Pure presentation reducer/state tests
+    ↓
 Reusable implementation contract suites
     ↓
 Real SQLite and binary/protocol integration tests
@@ -1056,7 +1128,7 @@ Packaged-deliverable smoke tests
 Real-iRacing acceptance checklist
 ```
 
-The repository currently implements the first six layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, application workflow tests with suite-local fakes, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, confirmed replay-controller/golden-vector tests, a focused hidden-native-window broadcast test, and WPF view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
+The repository currently implements the source/contract/integration layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, coherent `ReviewSnapshot` construction and retry tests, explicit replay-offset workflow tests, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, replay-context-reader tests, confirmed replay-controller/golden-vector tests, a focused hidden-native-window broadcast test, pure `MainWindowReducer`/immutable-state tests, and WPF effect/view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
 
 ### 15.3 Requirements traceability
 
@@ -1076,20 +1148,21 @@ Production behavior is tested through the same contracts used by consumers where
 - `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
 - The SQLite suite validates observable on-disk behavior against real temporary databases.
 - The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed input, moving and paused-session-screen replay classification, replay suppression, and bounded-buffer behavior against an independent process.
-- Replay tests exercise intent validation, representability, availability, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Independently authored packed-message vectors cover seek, camera focus, and playback.
-- Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
+- Replay tests exercise intent validation, representability, availability, bounded/validated transient driver and camera context, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Contract-shape tests require `IReplayContextReader` to remain a command-free simulator-neutral read boundary. Independently authored packed-message vectors cover seek, camera focus, and playback.
+- Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, explicit negative/zero/positive offsets, coherent snapshot anchor retry, transient-context degradation, monotonically increasing revisions, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
+- Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, selection retention, dirty camera-draft preservation across automatic refresh, bounded eviction, and reference identity between `CurrentStatusEvent` and the event-log tail. View-model tests verify that effects dispatch actions without constructing a second visible state.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
 
 ### 15.5 Deterministic test implementations
 
-The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, dispatcher, and service fakes. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
+The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, `IReplayContextReader`, dispatcher, and service fakes. Reducer tests need no fake, dispatcher, window, or clock because every input—including occurrence time—is action data. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
 
 `IncidentReview.TestKit` currently establishes only the permitted public-contract dependency direction; it does not yet contain shared implementations. Reusable `ScriptedTelemetrySource`, `RecordingReplayController`, `InMemoryStore`, manual time/identity helpers, scheduler controls, and a general occurrence-based fault injector remain planned. When duplication or a second adapter/store makes them useful, they move into `TestKit` without privileged implementation access.
 
 Randomized, property, and fuzz-style tests must record the seed and minimized input required to reproduce a failure. Those campaigns are not implemented yet. Existing concurrency tests prefer deterministic barriers and bounded outer timeouts over sleep-based assertions.
 
-Current lifecycle tests cover application start/stop/completion, early telemetry completion/faults, cancellation, WPF monitoring, dirty-edit/selection preservation, and view-model disposal while an operation is active. The complete host/UI race matrix—faulting between UI return, expected-stop marking, runtime stop, host stop, and disposal—remains release-hardening work.
+Current lifecycle tests cover application start/stop/completion, early telemetry completion/faults, cancellation, WPF monitoring, stale-snapshot rejection, dirty camera-draft/incident-selection preservation, serialized effect dispatch, and view-model disposal while an operation is active. The complete host/UI race matrix—faulting between UI return, expected-stop marking, runtime stop, host stop, and disposal—remains release-hardening work.
 
 ### 15.6 Fault injection
 
@@ -1188,7 +1261,7 @@ Planned curated mutations will verify that important tests detect:
 - reversed comparisons in incident detection;
 - removed rollback or commit calls;
 - ignored failed results;
-- altered replay lead-in arithmetic;
+- altered explicit replay-offset or compatibility lead-in arithmetic;
 - swapped session/time fields;
 - removed SQL transaction arguments;
 - unsafe acceptance of reset counters;
@@ -1198,11 +1271,11 @@ A mutation run/catalog is not implemented yet. A third-party mutation tool such 
 
 ### 15.10 Test the deliverable
 
-The current deliverable test launches the Release host executable with `--verify-startup` and a unique temporary database. It exercises the real Generic Host registrations, SQLitePCL initialization, DbUp migration, schema validation, application runtime start/stop, host shutdown, database creation, and copied iRacing third-party notice. It asserts a successful exit and cleans only its owned temporary directory. This is a useful startup smoke test, but it is not a packaged install test and does not drive the WPF UI.
+The current deliverable tests launch the Release host executable with `--verify-startup` and a unique temporary database and inspect its compiled identity metadata. They exercise the real Generic Host registrations, SQLitePCL initialization, DbUp migration, schema validation, application runtime start/stop, host shutdown, database creation, copied iRacing third-party notice, `GravelReview` product/title metadata, and preservation of the `IncidentReview.Host.Wpf` assembly identity. They assert a successful exit and clean only their owned temporary directory. This is useful startup/identity evidence, but it is not a packaged install test and does not drive the WPF UI.
 
 `IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process, including a coalesced telemetry frame that confirms an outstanding seek. Separately, replay tests verify packing through the implementation's recording-sender testing facade and independent golden vectors, and a Windows-only test sends the production broadcast to a hidden native top-level receiver and asserts the exact delivered `wParam`/`lParam`. The protocol simulator and native receiver are not yet combined into one packaged end-to-end peer.
 
-The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use stable WPF `AutomationId` values to invoke Review on an incident row; independently validate the seek, camera, and playback broadcasts; and publish later confirming telemetry for each stage. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
+The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use compatibility-stable WPF `IncidentReview.*` Automation IDs to invoke each of the `-2 sec`, `0 sec`, and `+2 sec` actions; independently validate the corresponding seek offset plus camera/playback broadcasts; and publish later confirming telemetry for each stage. It must also verify the active-session-only incident log, compact/full incident identity pair, transient driver header, live camera dropdown, collapsed Advanced panel, tail-follow behavior, and same-object event-tail/current-status invariant. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
 
 Real iRacing acceptance follows a versioned checklist with captured Windows, simulator, SDK-baseline, and app versions. It supplements automated protocol tests; it does not replace them, and it has not yet been completed for this revision.
 
@@ -1575,7 +1648,7 @@ Simulator-neutral telemetry/replay contracts permit another adapter only if its 
 
 ## 20. Delivery plan
 
-Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices with remaining reliability-matrix work; Milestone 3 has the official SDK adapter and independent-process tests but not real-simulator acceptance; Milestone 4 has the runnable core WPF review workflow but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
+Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices, including coherent revisioned presentation snapshots and explicit replay offsets, with remaining reliability-matrix work; Milestone 3 has the official SDK adapter, transient replay-context reader, and independent-process tests but not real-simulator acceptance for this revision; Milestone 4 has the runnable GravelReview WPF workflow and immutable reducer-driven state but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
 
 ### Milestone 0 — Repository foundation
 
@@ -1600,20 +1673,26 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 - Implement domain identities, incident detector, and application use cases.
 - Use scripted telemetry, recording replay, deterministic IDs/clocks, and in-memory store.
 - Verify the complete detect → store → list → review workflow without iRacing.
+- Supply presentation consumers with one revisioned `ReviewSnapshot`; retry reads when their application anchor changes and support explicit signed `ReplayOffset` navigation.
 
 ### Milestone 3 — iRacing adapter
 
 - Implement and fixture-test shared-memory decoding.
 - Implement replay seek, local-player camera focus, and playback encoding with later stable-telemetry confirmation.
+- Implement `IReplayContextReader` over the latest stable frame for bounded simulator-neutral active-driver and live camera-group context.
 - Build the external protocol simulator used by packaged-deliverable tests.
 - Validate connection/reconnect and simulator-state behavior.
 - Run the real-iRacing acceptance checklist.
 
-### Milestone 4 — WPF experience
+### Milestone 4 — GravelReview WPF experience
 
-- Implement status, incident list, review action, annotations, and errors.
-- Add accessibility and dispatcher/lifetime tests.
-- Package and smoke-test the Release deliverable.
+- Render only `MainWindowState` from the root; route data-only actions through a pure reducer and replace the complete immutable state on the dispatcher.
+- Show the active-session incident log, transient driver header, compact/full identity pair, and per-row `-2 sec`, `0 sec`, and `+2 sec` actions.
+- Provide the collapsed Advanced panel with bounded tail-follow events and the live iRacing camera selector; derive current status from the exact event-log-tail object.
+- Preserve dirty camera drafts across automatic snapshots, reject stale revisions, and retain hidden playback/pause/lead-in compatibility values.
+- Keep session history and Notes out of the primary UI while retaining their lower-layer contracts and durable records.
+- Add reducer, accessibility, scrolling, dispatcher, and lifetime tests.
+- Package and UI-automation-test the Release deliverable; the current host-startup smoke is necessary but not sufficient.
 
 ### Milestone 5 — Reliability hardening
 
@@ -1639,6 +1718,7 @@ A feature is not done until:
 11. Dependency and lock-file changes are explicitly reviewed.
 12. User-visible behavior is validated in the packaged artifact or documented acceptance environment.
 13. The work is recorded in one or more small green Conventional Commits and their hashes are reported.
+14. A UI feature has one immutable visible-state owner, pure reducer coverage, stale-update behavior, and proof that each displayed status/event derives from its documented source object.
 
 ### 21.1 Database-change checklist
 
@@ -1691,12 +1771,15 @@ A feature is not done until:
 | ADR-0010 | Deferred | JSON is an optional export format, not an internal storage or communication requirement. |
 | ADR-0011 | Accepted | Codex creates small, green Conventional Commits for completed work; push/merge/tag/history rewriting remain separately authorized actions. |
 | ADR-0012 | Accepted; live acceptance pending | Transcribe only the used protocol surface from the pinned official iRacing SDK 1.20 artifact; do not depend on an unofficial wrapper or redistribute the upstream archive. |
+| ADR-0013 | Accepted | `GravelReview` is the product-facing name and assembly metadata; `IncidentReview.*` code/assembly identity plus the legacy database path, environment prefix, mutex, and Automation IDs remain compatibility-stable. |
+| ADR-0014 | Accepted | `IReplayContextReader` exposes only a bounded immutable simulator-neutral projection of active driver and camera context; `ReviewSnapshot` is the coherent revisioned application read for presentation. |
+| ADR-0015 | Accepted | WPF follows a top-down immutable-state model: data-only UI action → pure reducer → replacement `MainWindowState`; effects stay outside the reducer and current status references the event-log tail object. |
 
 ## 23. Open questions requiring evidence or product decisions
 
 1. Which exact iRacing incident counters are reliable in solo, team, hosted, and replay sessions?
 2. How much delay exists between the physical event and incident-counter update, and should the marker time be refined from a telemetry ring buffer?
-3. Which replay camera, playback speed, and default lead-in provide the best review experience?
+3. Which preferred camera and hidden playback/pause compatibility defaults should ship, and when may the legacy configured-lead-in review overload be retired?
 4. Do live current builds validate the ten-second per-stage timeout and 250-millisecond seek tolerance across short and long replay searches?
 5. What is the minimum supported Windows build, and does its serviced `winsqlite3.dll` pass the existing startup/schema/migration/transaction suite and release acceptance matrix?
 6. Which SQLite pragmas provide the desired durability/concurrency balance on supported Windows filesystems?
@@ -1714,6 +1797,7 @@ Open questions are resolved with experiments, fixtures, or ADRs—not assumption
 ## 24. References
 
 - Richard Hipp, [*Reliability Lessons From SQLite* — SSW 2026](https://www.youtube.com/watch?v=V_qzqY1bb7I)
+- Replicant, [*Simpler, more testable UIs with pure functions and data*](https://replicant.fun/) — architectural inspiration for top-down immutable UI state only; GravelReview does not depend on Clojure, ClojureScript, or Replicant
 - iRacing Support, [distinction between the local simulator SDK and remote Data API](https://support.iracing.com/support/solutions/articles/31000177790-oauth-client-credentials)
 - iRacing, [official member SDK discussion and distribution](https://forums.iracing.com/discussion/62/iracing-sdk/p1)
 - Repository evidence gate, [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md)
