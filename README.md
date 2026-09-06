@@ -83,15 +83,13 @@ Only an intentional dependency change should regenerate lock files:
 
 Review every resulting `packages.lock.json` change before committing it.
 
-Publish the framework-dependent Windows x64 app after a successful restore/build:
+Create the Windows x64 release artifacts with the repository-owned packaging script:
 
 ```powershell
-dotnet publish .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.csproj `
-    --configuration Release --no-restore `
-    --output .\artifacts\publish\win-x64
+.\eng\publish.ps1
 ```
 
-The target machine needs the matching .NET Desktop Runtime. The output must include `THIRD-PARTY-NOTICES\iracing-sdk-1.20.md`. An installer, updater, and self-contained packaging policy have not been selected.
+The script performs a locked restore, publishes the untrimmed self-contained single-file host, validates the exact output, and smoke-tests the renamed executable with an isolated temporary database. It leaves `artifacts\release\win-x64\GravelReview-win-x64.exe` for local use and `artifacts\release\win-x64\GravelReview-win-x64.zip` for a GitHub release. The ZIP is the distributable asset because it contains both the executable and the required `THIRD-PARTY-NOTICES\iracing-sdk-1.20.md`; the target machine does not need a separately installed .NET Desktop Runtime. The external filename uses the GravelReview product name while the internal `IncidentReview.Host.Wpf` assembly identity remains unchanged. An installer and updater have not been selected.
 
 ## Architecture
 
