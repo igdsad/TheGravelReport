@@ -1,13 +1,15 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="MSTest.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>IncidentReview.Desktop.Wpf.Tests</AssemblyName>
     <RootNamespace>IncidentReview.Desktop.Wpf.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
     <ProjectReference Include="../../src/IncidentReview.Desktop.Wpf/IncidentReview.Desktop.Wpf.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
