@@ -14,6 +14,16 @@ public sealed class RepositorySafetyAnalyzerTests
 
         namespace Dapper
         {
+            public readonly struct CommandDefinition
+            {
+                public CommandDefinition(
+                    string commandText,
+                    object? parameters = null,
+                    IDbTransaction? transaction = null)
+                {
+                }
+            }
+
             public static class SqlMapper
             {
                 public static int Execute(
@@ -27,6 +37,14 @@ public sealed class RepositorySafetyAnalyzerTests
                     string sql,
                     object? param = null,
                     IDbTransaction? transaction = null) => new object();
+
+                public static int Execute(
+                    this IDbConnection connection,
+                    CommandDefinition command) => 0;
+
+                public static object Query(
+                    this IDbConnection connection,
+                    CommandDefinition command) => new object();
             }
         }
         """;
@@ -84,6 +102,59 @@ public sealed class RepositorySafetyAnalyzerTests
                     public static object Run(IDbConnection connection, string tableName)
                     {
                         return connection.Query("SELECT * FROM " + tableName);
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(source, "Example");
+
+        AssertHasOnly(diagnostics, RepositorySafetyAnalyzer.UnsafeSqlConstructionId);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-SQL-001")]
+    public async Task IndirectRuntimeSqlReportsIR0001()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static object Run(IDbConnection connection, string tableName)
+                    {
+                        var sql = "SELECT * FROM " + tableName;
+                        return connection.Query(sql);
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(source, "Example");
+
+        AssertHasOnly(diagnostics, RepositorySafetyAnalyzer.UnsafeSqlConstructionId);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-SQL-001")]
+    public async Task ReassignedLocalSqlReportsIR0001()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static object Run(IDbConnection connection, string suffix)
+                    {
+                        var sql = "SELECT * FROM Incident";
+                        sql += suffix;
+                        return connection.Query(sql);
                     }
                 }
             }
@@ -271,6 +342,148 @@ public sealed class RepositorySafetyAnalyzerTests
         var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(source, "IncidentReview.Store.Sqlite");
 
         Assert.AreEqual(0, diagnostics.Length);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-002")]
+    public async Task CommandDefinitionWithoutTransactionReportsIR0002()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static int Run(IDbConnection connection)
+                    {
+                        return connection.Execute(new CommandDefinition("DELETE FROM Incident"));
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(
+            source,
+            "IncidentReview.Store.Sqlite");
+
+        AssertHasOnly(diagnostics, RepositorySafetyAnalyzer.MissingDapperTransactionId);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-SQL-001")]
+    [TestProperty("Requirement", "IR-STR-002")]
+    public async Task TransactionBoundCommandFactoryWithConstantSqlIsAccepted()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static int Run(
+                        IDbConnection connection,
+                        IDbTransaction transaction)
+                    {
+                        return connection.Execute(CreateDapperCommand(
+                            "DELETE FROM Incident",
+                            new object(),
+                            transaction));
+                    }
+
+                    private static CommandDefinition CreateDapperCommand(
+                        string sql,
+                        object? parameters,
+                        IDbTransaction transaction) => new(sql, parameters, transaction);
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(
+            source,
+            "IncidentReview.Store.Sqlite");
+
+        Assert.AreEqual(0, diagnostics.Length);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-SQL-001")]
+    [TestProperty("Requirement", "IR-STR-002")]
+    public async Task CommandFactoryRejectsIndirectRuntimeSql()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static int Run(
+                        IDbConnection connection,
+                        IDbTransaction transaction,
+                        string tableName)
+                    {
+                        var sql = "DELETE FROM " + tableName;
+                        return connection.Execute(CreateDapperCommand(
+                            sql,
+                            new object(),
+                            transaction));
+                    }
+
+                    private static CommandDefinition CreateDapperCommand(
+                        string sql,
+                        object? parameters,
+                        IDbTransaction transaction) => new(sql, parameters, transaction);
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(
+            source,
+            "IncidentReview.Store.Sqlite");
+
+        AssertHasOnly(diagnostics, RepositorySafetyAnalyzer.UnsafeSqlConstructionId);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-002")]
+    public async Task CommandFactoryThatDropsTransactionReportsIR0002()
+    {
+        var source = DapperStub + """
+            namespace Example
+            {
+                using Dapper;
+                using System.Data;
+
+                public static class Subject
+                {
+                    public static int Run(
+                        IDbConnection connection,
+                        IDbTransaction transaction)
+                    {
+                        return connection.Execute(CreateDapperCommand(
+                            "DELETE FROM Incident",
+                            new object(),
+                            transaction));
+                    }
+
+                    private static CommandDefinition CreateDapperCommand(
+                        string sql,
+                        object? parameters,
+                        IDbTransaction transaction) => new(sql, parameters);
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzerTestHarness.GetDiagnosticsAsync(
+            source,
+            "IncidentReview.Store.Sqlite");
+
+        AssertHasOnly(diagnostics, RepositorySafetyAnalyzer.MissingDapperTransactionId);
     }
 
     [TestMethod]
