@@ -1,0 +1,59 @@
+using IncidentReview.Application.Contracts;
+using IncidentReview.Domain;
+
+namespace IncidentReview.Desktop.Wpf.Tests;
+
+internal static class TestModelFactory
+{
+    public static UserPreferences Preferences(
+        long leadIn = 3_000,
+        double speed = 0.5,
+        bool autoPause = true,
+        string? camera = "Cockpit") =>
+        UserPreferences.TryCreateMilliseconds(leadIn, speed, autoPause, camera).Value;
+
+    public static ReviewSession Session(
+        SessionIdentity? id = null,
+        params ReviewIncident[] incidents)
+    {
+        var identity = id ?? SessionIdentity.Generate();
+        return ReviewSession.Create(
+            identity,
+            Descriptor(),
+            UtcInstant.TryCreateUnixMilliseconds(1_000).Value,
+            incidents);
+    }
+
+    public static SessionSummary Summary(ReviewSession session) => SessionSummary.Create(
+        session.Id,
+        session.Descriptor,
+        session.StartedAt,
+        session.Incidents.Count,
+        session.Incidents.Count(static incident => incident.ReviewStatus == IncidentReviewStatus.Pending));
+
+    public static ReviewIncident Incident(
+        SessionIdentity session,
+        long observedAt,
+        long replayTime,
+        int total,
+        int delta) => ReviewIncident.Create(
+            IncidentId.Generate(),
+            session,
+            ReplayPosition.TryCreate(
+                SessionNumber.TryCreate(1).Value,
+                SessionTime.TryCreateMilliseconds(replayTime).Value).Value,
+            UtcInstant.TryCreateUnixMilliseconds(observedAt).Value,
+            IncidentPoints.TryCreate(total, delta).Value,
+            CounterEpoch.TryCreate(0).Value,
+            LapNumber.TryCreate(2).Value,
+            LapDistance.TryCreate(0.25).Value,
+            IncidentReviewStatus.Pending,
+            IncidentAnnotation.TryCreate(null, null).Value);
+
+    private static SimulatorSessionDescriptor Descriptor() => SimulatorSessionDescriptor.TryCreate(
+        SimulatorCode.TryCreate("iracing").Value,
+        SimulatorSessionKey.TryCreate(Guid.NewGuid().ToString("D")).Value,
+        SessionNumber.TryCreate(1).Value,
+        SessionMode.Live,
+        SimulatorIdentityScope.Durable).Value;
+}
