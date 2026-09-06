@@ -69,6 +69,7 @@ GravelReview uses a reducer-style, top-down presentation architecture inspired b
 - Prefer the smallest repository-owned transcription of the authenticated official SDK surface. Do not add an unofficial SDK wrapper casually.
 - `IReplayController` issues simulator-neutral replay intents. `IReplayContextReader` exposes only transient driver/camera display context.
 - Driver and camera parsing fail independently. Missing display metadata must not disable otherwise valid replay control.
+- A malformed or inconsistent frame is transient unavailability, not proof of a simulator disconnect. Retain the logical connection/session identity while recovery remains within 30 seconds of the last successfully decoded sample. Only a real SDK disconnect, expiry of that deadline, or valid evidence of a different simulator session may replace the active session.
 - Report seek, camera, and playback success only after later stable telemetry confirms the requested state; accepting a Windows message is not success.
 
 ## Dependencies and build configuration
