@@ -11,6 +11,7 @@ public sealed class IncidentCheckpointTests
     public void CheckpointPreservesDurableProgressWithValueEquality()
     {
         var session = IncidentTransitionTestData.FirstSession;
+        var participantIdentity = IncidentTransitionTestData.FirstParticipant.Identity;
         var epoch = CounterEpoch.TryCreate(2).Value;
         var counter = IncidentCounter.TryCreate(8).Value;
         var position = ReplayPosition.TryCreate(
@@ -20,18 +21,21 @@ public sealed class IncidentCheckpointTests
 
         var first = IncidentCheckpoint.TryCreate(
             session,
+            participantIdentity,
             epoch,
             counter,
             position,
             updatedAt).Value;
         var second = IncidentCheckpoint.TryCreate(
             session,
+            participantIdentity,
             epoch,
             counter,
             position,
             updatedAt).Value;
 
         Assert.AreSame(session, first.Session);
+        Assert.AreSame(participantIdentity, first.ParticipantIdentity);
         Assert.AreSame(epoch, first.CounterEpoch);
         Assert.AreSame(counter, first.LastCounter);
         Assert.AreSame(position, first.LastPosition);
@@ -47,25 +51,34 @@ public sealed class IncidentCheckpointTests
     public void CheckpointIndependentlyRejectsEveryMissingRequiredValue()
     {
         var session = IncidentTransitionTestData.FirstSession;
+        var participantIdentity = IncidentTransitionTestData.FirstParticipant.Identity;
         var epoch = CounterEpoch.TryCreate(0).Value;
         var counter = IncidentCounter.TryCreate(0).Value;
         var position = IncidentTransitionTestData.Observation().Position;
         var updatedAt = UtcInstant.TryCreateUnixMilliseconds(0).Value;
 
-        AssertInvalid(null, epoch, counter, position, updatedAt);
-        AssertInvalid(session, null, counter, position, updatedAt);
-        AssertInvalid(session, epoch, null, position, updatedAt);
-        AssertInvalid(session, epoch, counter, null, updatedAt);
-        AssertInvalid(session, epoch, counter, position, null);
-        AssertInvalid(null, null, null, null, null);
+        AssertInvalid(null, participantIdentity, epoch, counter, position, updatedAt);
+        AssertInvalid(session, null, epoch, counter, position, updatedAt);
+        AssertInvalid(session, participantIdentity, null, counter, position, updatedAt);
+        AssertInvalid(session, participantIdentity, epoch, null, position, updatedAt);
+        AssertInvalid(session, participantIdentity, epoch, counter, null, updatedAt);
+        AssertInvalid(session, participantIdentity, epoch, counter, position, null);
+        AssertInvalid(null, null, null, null, null, null);
     }
 
     private static void AssertInvalid(
         SessionIdentity? session,
+        ParticipantIdentity? participantIdentity,
         CounterEpoch? epoch,
         IncidentCounter? counter,
         ReplayPosition? position,
         UtcInstant? updatedAt) => DomainTestAssertions.IsValidationFailure(
-            IncidentCheckpoint.TryCreate(session, epoch, counter, position, updatedAt),
+            IncidentCheckpoint.TryCreate(
+                session,
+                participantIdentity,
+                epoch,
+                counter,
+                position,
+                updatedAt),
             "domain.incident-checkpoint.invalid");
 }

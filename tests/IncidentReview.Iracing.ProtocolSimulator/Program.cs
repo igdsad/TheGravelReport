@@ -63,7 +63,13 @@ internal sealed class ProtocolSimulator : IDisposable
     private readonly MemoryMappedViewAccessor _view;
     private readonly EventWaitHandle _dataEvent;
     private int _incidentCounter = 4;
-    private readonly int _teamIncidentCounter = 9;
+    private int _teamIncidentCounter = 9;
+    private int _opponentIncidentCounter = 2;
+    private string _opponentDriverName = "Opponent Driver";
+    private int _opponentTeamId = 22;
+    private int _opponentUserId = 222;
+    private int _playerTeamId;
+    private int _playerUserId = 444;
     private readonly int _lap = 7;
     private readonly int _sessionNumber = 2;
     private int _replaySessionNumber = 3;
@@ -78,6 +84,9 @@ internal sealed class ProtocolSimulator : IDisposable
     private bool _isReplayPlaying;
     private bool _writeInvalidUtf8Session;
     private int _sessionInfoUpdate = 1;
+    private int _sessionInfoCurrentSessionNumber = 2;
+    private bool _reverseRoster;
+    private bool _omitPlayerRosterIncidentCount;
     private SessionTextEncoding _sessionTextEncoding = SessionTextEncoding.Utf8;
 
     public ProtocolSimulator(string mappingName, string eventName)
@@ -119,6 +128,57 @@ internal sealed class ProtocolSimulator : IDisposable
                 _incidentCounter = ParseInt32(parts[1]);
                 _sessionSeconds = ParseDouble(parts[2]);
                 Publish();
+                break;
+            case "team-publish" when parts.Length == 3:
+                _isReplayPlaying = false;
+                _teamIncidentCounter = ParseInt32(parts[1]);
+                _sessionSeconds = ParseDouble(parts[2]);
+                PublishSessionInformationChange();
+                break;
+            case "opponent-publish" when parts.Length == 3:
+                _isReplayPlaying = false;
+                _opponentIncidentCounter = ParseInt32(parts[1]);
+                _sessionSeconds = ParseDouble(parts[2]);
+                PublishSessionInformationChange();
+                break;
+            case "opponent-evidence-publish" when parts.Length == 5:
+                _isReplayPlaying = false;
+                _opponentTeamId = ParseInt32(parts[1]);
+                _opponentUserId = ParseInt32(parts[2]);
+                _opponentIncidentCounter = ParseInt32(parts[3]);
+                _sessionSeconds = ParseDouble(parts[4]);
+                PublishSessionInformationChange();
+                break;
+            case "player-evidence-publish" when parts.Length == 5:
+                _isReplayPlaying = false;
+                _playerTeamId = ParseInt32(parts[1]);
+                _playerUserId = ParseInt32(parts[2]);
+                _teamIncidentCounter = ParseInt32(parts[3]);
+                _sessionSeconds = ParseDouble(parts[4]);
+                PublishSessionInformationChange();
+                break;
+            case "omit-player-roster-counter" when parts.Length == 1:
+                _omitPlayerRosterIncidentCount = true;
+                PublishSessionInformationChange();
+                break;
+            case "restore-player-roster-counter" when parts.Length == 1:
+                _omitPlayerRosterIncidentCount = false;
+                PublishSessionInformationChange();
+                break;
+            case "invalid-opponent-display-publish" when parts.Length == 3:
+                _isReplayPlaying = false;
+                _opponentIncidentCounter = ParseInt32(parts[1]);
+                _sessionSeconds = ParseDouble(parts[2]);
+                _opponentDriverName = "Invalid\u0001Driver";
+                PublishSessionInformationChange();
+                break;
+            case "roster-session" when parts.Length == 2:
+                _sessionInfoCurrentSessionNumber = ParseInt32(parts[1]);
+                PublishSessionInformationChange();
+                break;
+            case "reorder-roster" when parts.Length == 1:
+                _reverseRoster = !_reverseRoster;
+                PublishSessionInformationChange();
                 break;
             case "replay" when parts.Length == 4:
                 _isReplayPlaying = true;
@@ -269,11 +329,34 @@ internal sealed class ProtocolSimulator : IDisposable
         var encodingLine = _sessionTextEncoding == SessionTextEncoding.Utf8
             ? " Encoding: UTF8\n"
             : string.Empty;
-        var text = _subSessionId is null
+        var weekendInfo = _subSessionId is null
             ? $"WeekendInfo:\n{encodingLine} TrackName: Test Track\n DriverName: {_driverName}\n"
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"WeekendInfo:\n{encodingLine} TrackName: Test Track\n DriverName: {_driverName}\n SubSessionID: {_subSessionId.Value}\n");
+        var paceCar = string.Create(
+            CultureInfo.InvariantCulture,
+            $" - CarIdx: 0\n   UserName: Pace Car\n   TeamID: 0\n   UserID: 0\n   TeamName: Pace Car\n   CarNumber: \"0\"\n   CarNumberRaw: 0\n   CarIsPaceCar: 1\n   IsSpectator: 0\n   TeamIncidentCount: 0\n");
+        var opponent = string.Create(
+            CultureInfo.InvariantCulture,
+            $" - CarIdx: 2\n   UserName: {_opponentDriverName}\n   TeamID: {_opponentTeamId}\n   UserID: {_opponentUserId}\n   TeamName: Opponent Team\n   CarNumber: \"012\"\n   CarNumberRaw: 12\n   CarIsPaceCar: 0\n   IsSpectator: 0\n   TeamIncidentCount: {_opponentIncidentCounter}\n");
+        var playerIncidentCounter = _omitPlayerRosterIncidentCount
+            ? string.Empty
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"   TeamIncidentCount: {_teamIncidentCounter}\n");
+        var player = string.Create(
+            CultureInfo.InvariantCulture,
+            $" - CarIdx: 4\n   UserName: René Test Driver\n   TeamID: {_playerTeamId}\n   UserID: {_playerUserId}\n   TeamName: Local Team\n   CarNumber: \"023\"\n   CarNumberRaw: 23\n   CarIsPaceCar: 0\n   IsSpectator: 0\n{playerIncidentCounter}");
+        var spectator = string.Create(
+            CultureInfo.InvariantCulture,
+            $" - CarIdx: 5\n   UserName: Spectator\n   TeamID: 0\n   UserID: 555\n   TeamName: Spectator Team\n   CarNumber: \"5\"\n   CarNumberRaw: 5\n   CarIsPaceCar: 0\n   IsSpectator: 1\n   TeamIncidentCount: 7\n");
+        var roster = _reverseRoster
+            ? spectator + player + opponent + paceCar
+            : paceCar + opponent + player + spectator;
+        var text = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{weekendInfo}SessionInfo:\n CurrentSessionNum: {_sessionInfoCurrentSessionNumber}\nDriverInfo:\n DriverCarIdx: 4\n PaceCarIdx: 0\n Drivers:\n{roster}CameraInfo:\n Groups:\n - GroupNum: 1\n   GroupName: Cockpit\n   Cameras:\n   - CameraNum: 10\n - GroupNum: 2\n   GroupName: TV1\n   Cameras:\n   - CameraNum: 20\n   - CameraNum: 21\n");
         var encoding = _sessionTextEncoding == SessionTextEncoding.Utf8 &&
             !_writeInvalidUtf8Session
             ? Encoding.UTF8
@@ -313,6 +396,13 @@ internal sealed class ProtocolSimulator : IDisposable
         {
             Publish();
         }
+    }
+
+    private void PublishSessionInformationChange()
+    {
+        _sessionInfoUpdate = checked(_sessionInfoUpdate + 1);
+        WriteSessionInfo();
+        Publish();
     }
 
     private void WriteFrame(byte? isOnTrackOverride = null)

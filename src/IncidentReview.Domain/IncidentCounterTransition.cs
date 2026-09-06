@@ -14,6 +14,11 @@ public static class IncidentCounterTransition
         ErrorKind.Conflict,
         "The same application session cannot change replay session number.");
 
+    private static readonly Error ParticipantMismatchError = Error.Create(
+        ErrorCode.Define("domain.incident-transition.participant-mismatch"),
+        ErrorKind.Conflict,
+        "An incident checkpoint cannot be evaluated against another participant.");
+
     private static readonly Error CounterEpochOverflowError = Error.Create(
         ErrorCode.Define("domain.incident-transition.counter-epoch-overflow"),
         ErrorKind.Conflict,
@@ -42,6 +47,11 @@ public static class IncidentCounterTransition
                 observation,
                 IncidentBaselineReason.SessionChanged,
                 epoch: 0);
+        }
+
+        if (checkpoint.ParticipantIdentity != observation.Participant.Identity)
+        {
+            return Result<IncidentTransitionDecision>.Failure(ParticipantMismatchError);
         }
 
         if (checkpoint.LastPosition.SessionNumber != observation.Position.SessionNumber)
@@ -107,6 +117,7 @@ public static class IncidentCounterTransition
         IncidentObservation observation,
         CounterEpoch epoch) => IncidentCheckpoint.TryCreate(
             observation.Session,
+            observation.Participant.Identity,
             epoch,
             observation.IncidentCounter,
             observation.Position,

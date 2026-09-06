@@ -94,7 +94,7 @@ public sealed class SqliteIncidentStoreTests
 
         var incidents = await context.Store.QueryAsync(new GetIncidents(session), CancellationToken.None);
         var checkpoint = await context.Store.QueryAsync(
-            new GetIncidentCheckpoint(session),
+            new GetIncidentCheckpoints(session),
             CancellationToken.None);
         var retryOutcome = await context.Store.QueryAsync(
             new GetOperationOutcome(record.OperationId),
@@ -105,7 +105,8 @@ public sealed class SqliteIncidentStoreTests
         Assert.IsTrue(incidents.IsSuccess);
         Assert.HasCount(1, incidents.Value);
         Assert.AreEqual(incident.Id, incidents.Value[0].Id);
-        Assert.AreEqual(next, checkpoint.Value.Value);
+        Assert.HasCount(1, checkpoint.Value);
+        Assert.AreEqual(next, checkpoint.Value[0]);
         Assert.AreSame(OperationOutcome.Committed, retryOutcome.Value);
         Assert.AreSame(OperationOutcome.NotCommitted, conflictOutcome.Value);
     }
@@ -139,14 +140,15 @@ public sealed class SqliteIncidentStoreTests
             new GetIncidents(session),
             CancellationToken.None);
         var checkpointAfterCancellation = await context.Store.QueryAsync(
-            new GetIncidentCheckpoint(session),
+            new GetIncidentCheckpoints(session),
             CancellationToken.None);
         var outcomeAfterCancellation = await context.Store.QueryAsync(
             new GetOperationOutcome(command.OperationId),
             CancellationToken.None);
         Assert.IsTrue(incidentsAfterCancellation.IsSuccess);
         Assert.IsEmpty(incidentsAfterCancellation.Value);
-        Assert.AreEqual(baseline, checkpointAfterCancellation.Value.Value);
+        Assert.HasCount(1, checkpointAfterCancellation.Value);
+        Assert.AreEqual(baseline, checkpointAfterCancellation.Value[0]);
         Assert.AreSame(OperationOutcome.NotCommitted, outcomeAfterCancellation.Value);
 
         Assert.IsTrue((await context.Store.ExecuteAsync(command, CancellationToken.None)).IsSuccess);
@@ -154,14 +156,15 @@ public sealed class SqliteIncidentStoreTests
             new GetIncidents(session),
             CancellationToken.None);
         var checkpointAfterRetry = await context.Store.QueryAsync(
-            new GetIncidentCheckpoint(session),
+            new GetIncidentCheckpoints(session),
             CancellationToken.None);
         var outcomeAfterRetry = await context.Store.QueryAsync(
             new GetOperationOutcome(command.OperationId),
             CancellationToken.None);
         Assert.HasCount(1, incidentsAfterRetry.Value);
         Assert.AreEqual(incident.Id, incidentsAfterRetry.Value[0].Id);
-        Assert.AreEqual(next, checkpointAfterRetry.Value.Value);
+        Assert.HasCount(1, checkpointAfterRetry.Value);
+        Assert.AreEqual(next, checkpointAfterRetry.Value[0]);
         Assert.AreSame(OperationOutcome.Committed, outcomeAfterRetry.Value);
     }
 
@@ -300,6 +303,112 @@ public sealed class SqliteIncidentStoreTests
         Assert.AreEqual(later.Id, details.Value.Value.Incidents[1].Id);
     }
 
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "IR-STR-002")]
+    public async Task EqualCounterTotalsRemainIndependentAcrossParticipants()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        var session = await EnsureSessionAsync(context.Store, "participant-scoped-session");
+        var firstBaseline = CreateCheckpoint(
+            session,
+            counter: 0,
+            time: 1_000,
+            participantIdentity: "car:4:team:10");
+        var secondBaseline = CreateCheckpoint(
+            session,
+            counter: 0,
+            time: 1_000,
+            participantIdentity: "car:7:team:20");
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(null, firstBaseline).Value,
+            CancellationToken.None)).IsSuccess);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(null, secondBaseline).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var firstNext = CreateCheckpoint(
+            session,
+            counter: 4,
+            time: 2_000,
+            participantIdentity: "car:4:team:10");
+        var secondNext = CreateCheckpoint(
+            session,
+            counter: 4,
+            time: 2_000,
+            participantIdentity: "car:7:team:20");
+        var firstIncident = CreateIncident(
+            session,
+            total: 4,
+            delta: 4,
+            time: 2_000,
+            participantIdentity: "car:4:team:10");
+        var secondIncident = CreateIncident(
+            session,
+            total: 4,
+            delta: 4,
+            time: 2_000,
+            participantIdentity: "car:7:team:20");
+
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(firstIncident, firstBaseline, firstNext).Value,
+            CancellationToken.None)).IsSuccess);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(secondIncident, secondBaseline, secondNext).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var incidents = await context.Store.QueryAsync(
+            new GetIncidents(session),
+            CancellationToken.None);
+        var checkpoints = await context.Store.QueryAsync(
+            new GetIncidentCheckpoints(session),
+            CancellationToken.None);
+
+        Assert.IsTrue(incidents.IsSuccess);
+        Assert.HasCount(2, incidents.Value);
+        CollectionAssert.AreEquivalent(
+            new[] { firstIncident.Participant.Identity, secondIncident.Participant.Identity },
+            incidents.Value.Select(static item => item.Participant.Identity).ToArray());
+        Assert.AreEqual(
+            firstIncident.Participant,
+            incidents.Value.Single(item =>
+                item.Participant.Identity == firstIncident.Participant.Identity).Participant);
+        Assert.AreEqual(
+            secondIncident.Participant,
+            incidents.Value.Single(item =>
+                item.Participant.Identity == secondIncident.Participant.Identity).Participant);
+        Assert.IsTrue(checkpoints.IsSuccess);
+        CollectionAssert.AreEqual(
+            new[] { firstNext, secondNext },
+            checkpoints.Value.ToArray());
+
+        using var connection = database.OpenConnection();
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM StoreOperation
+            WHERE command_kind = 'incident-checkpoint.establish'
+              AND command_version = 2;
+            """));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            """
+            SELECT COUNT(DISTINCT payload_fingerprint_sha256)
+            FROM StoreOperation
+            WHERE command_kind = 'incident-checkpoint.establish';
+            """));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM StoreOperation
+            WHERE command_kind = 'incident.record-detected'
+              AND command_version = 2;
+            """));
+    }
+
     private static async Task<SqliteTestStoreContext> CreateInitializedStore(
         TemporarySqliteDatabase database)
     {
@@ -331,8 +440,10 @@ public sealed class SqliteIncidentStoreTests
     private static IncidentCheckpoint CreateCheckpoint(
         SessionIdentity session,
         int counter,
-        long time) => IncidentCheckpoint.TryCreate(
+        long time,
+        string participantIdentity = "participant-1") => IncidentCheckpoint.TryCreate(
             session,
+            ParticipantIdentity.TryCreate(participantIdentity).Value,
             CounterEpoch.TryCreate(0).Value,
             IncidentCounter.TryCreate(counter).Value,
             ReplayPosition.TryCreate(
@@ -344,12 +455,18 @@ public sealed class SqliteIncidentStoreTests
         SessionIdentity session,
         int total,
         int delta,
-        long time)
+        long time,
+        string participantIdentity = "participant-1")
     {
         var instant = UtcInstant.TryCreateUnixMilliseconds(time).Value;
         return StoredIncident.Create(
             IncidentId.Generate(),
             session,
+            IncidentParticipant.TryCreate(
+                ParticipantIdentity.TryCreate(participantIdentity).Value,
+                driverName: "Driver One",
+                teamName: "Team One",
+                carNumber: "01").Value,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(1).Value,
                 SessionTime.TryCreateMilliseconds(time).Value).Value,
@@ -369,5 +486,16 @@ public sealed class SqliteIncidentStoreTests
         Assert.IsFalse(result.IsSuccess);
         Assert.AreEqual(code, result.Error!.Code);
         Assert.AreEqual(kind, result.Error.Kind);
+    }
+
+    private static long ExecuteScalarInt64(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(
+            command.ExecuteScalar(),
+            System.Globalization.CultureInfo.InvariantCulture);
     }
 }

@@ -55,6 +55,7 @@ public sealed class IncidentCounterTransitionTests
             replaySessionNumber: 1);
         var observation = IncidentTransitionTestData.Observation(
             session: IncidentTransitionTestData.SecondSession,
+            participant: IncidentTransitionTestData.SecondParticipant,
             counter: 2,
             replaySessionNumber: 7);
 
@@ -63,6 +64,25 @@ public sealed class IncidentCounterTransitionTests
             IncidentBaselineReason.SessionChanged);
 
         AssertCheckpointMatchesObservation(decision.NextCheckpoint, observation, expectedEpoch: 0);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-004")]
+    [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void SameSessionParticipantMismatchReturnsConflict()
+    {
+        var checkpoint = IncidentTransitionTestData.Checkpoint(
+            participantIdentity: IncidentTransitionTestData.FirstParticipant.Identity,
+            counter: 4);
+        var observation = IncidentTransitionTestData.Observation(
+            participant: IncidentTransitionTestData.SecondParticipant,
+            counter: 5);
+
+        AssertConflict(
+            IncidentCounterTransition.Evaluate(checkpoint, observation),
+            "domain.incident-transition.participant-mismatch");
     }
 
     [TestMethod]
@@ -221,6 +241,7 @@ public sealed class IncidentCounterTransitionTests
         int expectedEpoch)
     {
         Assert.AreSame(observation.Session, checkpoint.Session);
+        Assert.AreSame(observation.Participant.Identity, checkpoint.ParticipantIdentity);
         Assert.AreEqual(expectedEpoch, checkpoint.CounterEpoch.Value);
         Assert.AreSame(observation.IncidentCounter, checkpoint.LastCounter);
         Assert.AreSame(observation.Position, checkpoint.LastPosition);

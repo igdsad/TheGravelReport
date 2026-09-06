@@ -1,6 +1,6 @@
 # GravelReview
 
-A local Windows companion that watches iRacing's local telemetry, records increases in the local member's incident counter, keeps the resulting review points in SQLite, and lets the user jump directly to each incident in iRacing replay.
+A local Windows companion that watches iRacing's local telemetry, records scored incident-counter increases for eligible participants across the field exposed to the local SDK, keeps the resulting review points in SQLite, and lets the user jump directly to each incident in iRacing replay.
 
 The repository contains a runnable MVP. Automated Release startup and protocol-simulator coverage exist, but acceptance against a recorded current real iRacing build is still required before treating it as a public release.
 
@@ -10,7 +10,8 @@ Prerequisites:
 
 - Windows x64;
 - the .NET SDK selected by [`global.json`](global.json) (`10.0.400` feature band);
-- iRacing for live telemetry/replay use. It is not needed to build or run the automated tests.
+- iRacing for live telemetry/replay use. It is not needed to build or run the automated tests;
+- iRacing's **Max Cars** setting set to **63** for the intended field-wide coverage. A lower value can prevent entrants from being transmitted to the local SDK, while [iRacing's connection guidance](https://support.iracing.com/support/solutions/articles/31000149355-connection-type-max-cars) warns that even 63 does not guarantee every car will be sent.
 
 From PowerShell in the repository root:
 
@@ -21,11 +22,21 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
     --configuration Release --no-restore --no-build
 ```
 
-The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **-2 sec**, **0 sec**, or **+2 sec** on that incident's row. The workflow preflights the active session, seeks relative to the stored event time, focuses the local player with the selected camera group, and applies the stored playback behavior. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
+The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an eligible participant's scored incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **-2 sec**, **0 sec**, or **+2 sec** on that incident's row. The workflow preflights the active session, seeks relative to the stored event time, requires `CurrentSessionNum` to match both the live and replay session numbers, and resolves the incident's deterministic participant identity by exact current-roster match before applying the selected camera group and stored playback behavior. If that car slot now has different identity evidence, replay focus fails clearly rather than focusing the replacement. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
 
 The far-right status-bar button cycles the appearance through **Follow desktop → Light → Dark → Follow desktop**. Its monitor, sun, or moon icon shows the configured mode, and its tooltip states both the current mode and what the next click will select. Follow desktop reacts to Windows theme changes while the app is running; forced Light and Dark do not. The choice is applied immediately and saved to SQLite. If saving fails, GravelReview restores the previous appearance and reports that exact failure in the shared status/event stream.
 
 Only one app instance may run in the Windows user session.
+
+## Field-wide incident tracking
+
+For each non-pace-car, non-spectator entry that iRacing includes in the current `DriverInfo:Drivers` session data with usable deterministic identity and counter evidence, GravelReview observes the cumulative scored `TeamIncidentCount`. Every entrant has an independent durable checkpoint. A temporary omission leaves that checkpoint intact, a later reappearance continues from it, and a counter decrease establishes a new baseline only for that entrant. A team-car driver swap therefore continues the same team/car counter and identity rather than creating a false incident merely because the displayed driver changed. The driver name captured at observation time is context, not an assertion that the named driver caused the points.
+
+The participant key is opaque outside the iRacing adapter and is derived afresh from current roster evidence, so it is identical after an application restart: `car-index:{CarIdx}:team:{TeamID}` for a positive `TeamID`, otherwise `car-index:{CarIdx}:user:{UserID}` when the row explicitly has no positive team and does have a positive user. A row whose required identity evidence is missing, malformed, or non-positive is omitted until usable evidence returns; the durable checkpoint remains intact. Changed positive evidence produces a different identity, while an exact A→B→A reuse of the same car index and canonical ID is inherently indistinguishable from the original entrant and reuses its checkpoint. Driver, team, and car-number text is saved as context on the incident, but the current WPF row layout is intentionally unchanged and does not yet display that attribution. That is a separate presentation enhancement.
+
+`PlayerCarMyIncidentCount` is never used because it is a personal counter and cannot safely share a checkpoint with the team/car counter. If the current-session player row supplies the same deterministic identity but its row-level counter is unavailable, GravelReview may use `PlayerCarTeamIncidentCount`, which has the same whole-team semantics. If session metadata does not match the live `SessionNum`, or no safe current player identity exists, the adapter emits no local participant observation; a sample with no counters still keeps connection, position, and on-track state current. When usable roster evidence returns, comparison resumes against the durable participant checkpoint without any process-memory alias or counter-source mixing.
+
+“Field-wide” is deliberately bounded. GravelReview can record only eligible entries and counter changes that iRacing exposes and transmits to this client. [iRacing's documented incident-visibility policy](https://www.iracing.com/2016-season-3-release-notes/) restricts ordinary clients in a live race to their own team's count, while admins can see the field; non-race and completed-race visibility is broader. Current-build validation remains pending, and session type, client visibility, admin/broadcaster context, connection settings, and server transmission may all affect the available data. The scored counter cannot reveal a `0x` contact because no value changes. If one observed update jumps by several incident points, GravelReview records one marker containing the complete delta rather than inventing separate event times for intermediate points. If multiple entrants increase in the same update, each gets its own marker.
 
 ## Data and configuration
 
@@ -46,7 +57,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The database path must be an absolute local file path. Startup timeout accepts 1 through 120 seconds. The equivalent environment variables are `INCIDENTREVIEW_DatabasePath` and `INCIDENTREVIEW_StartupTimeoutSeconds`; command-line values take precedence. There is no JSON configuration file in the current runtime.
 
-Replay pause/playback behavior, preferred camera group, and theme mode are durable user preferences stored together through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while still focusing the local player. Existing databases migrate to **Follow desktop** without changing any replay preference, and the stored mode is applied before the main window becomes visible.
+Replay pause/playback behavior, preferred camera group, and theme mode are durable user preferences stored together through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while focusing the participant stored with the selected incident. Existing databases migrate to **Follow desktop** without changing any replay preference, and the stored mode is applied before the main window becomes visible.
 
 ## Appearance and branding
 
@@ -124,7 +135,9 @@ JSON is not part of storage, internal messaging, or current configuration. A fut
 
 - Run and record the real-iRacing acceptance checklist against a current simulator build.
 - Capture a permitted redacted session-information fixture and expand variable-header mutation coverage.
+- Validate field-wide `DriverInfo:Drivers[].TeamIncidentCount` behavior in current solo, team, hosted, and admin/broadcaster contexts with **Max Cars = 63**, including participant visibility, driver swaps, temporary omissions, counter resets, simultaneous changes, batched deltas, and the expected `0x` limitation.
 - Validate paused-replay classification through `CamCameraState.IsSessionScreen`, camera-group selection, and all replay confirmations across the supported session types in a recorded current-iRacing acceptance run.
+- Confirm that replay focus selects the participant stored with each incident, including team-car driver swaps, and returns the expected clear failure when that participant is no longer present in current session metadata.
 - Add package-level WPF UI Automation that combines the independent shared-memory protocol simulator with the existing hidden native Windows broadcast receiver; those mechanisms are currently tested separately.
 - Complete packaged visual acceptance for both palettes, all interaction states, common scaling levels, Windows high contrast, live Follow-desktop switching, and restart persistence.
 - Complete crash/full/locked/corrupt-database campaigns, coverage enforcement, fuzz/mutation/stress jobs, dependency/license inventory, and SBOM generation.

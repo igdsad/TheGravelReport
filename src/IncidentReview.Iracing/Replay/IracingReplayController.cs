@@ -1,4 +1,5 @@
 using IncidentReview.Domain;
+using IncidentReview.Iracing.Protocol;
 using IncidentReview.Replay.Contracts;
 using IncidentReview.Results;
 
@@ -61,10 +62,12 @@ internal sealed class IracingReplayController : IReplayController
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<Result> FocusPlayerAsync(
+    public async ValueTask<Result> FocusParticipantAsync(
+        IncidentParticipant participant,
         string? preferredCamera,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(participant);
         cancellationToken.ThrowIfCancellationRequested();
         var observation = _connectionState.Read();
         if (observation is not ReplayFrameObservation.Available available)
@@ -72,8 +75,17 @@ internal sealed class IracingReplayController : IReplayController
             return Result.Failure(IracingErrors.ReplayUnavailable);
         }
 
-        if (available.Frame.Metadata is not { Player: { } player } metadata ||
-            metadata.CameraGroups.Count == 0)
+        var metadata = available.Frame.Metadata;
+        if (metadata.CameraGroups.Count == 0 ||
+            metadata.CurrentSessionNumber is not { } currentSessionNumber ||
+            available.Frame.LiveSessionNumber != currentSessionNumber ||
+            available.Frame.ReplaySessionNumber != currentSessionNumber)
+        {
+            return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
+        }
+
+        var target = ResolveFocusTarget(metadata, participant.Identity.Value);
+        if (target is null)
         {
             return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
         }
@@ -105,7 +117,7 @@ internal sealed class IracingReplayController : IReplayController
         }
 
         var command = IracingReplayEncoder.EncodeFocusPlayer(
-            player.CarNumberRaw,
+            target.CarNumberRaw,
             cameraGroupNumber,
             cameraNumber);
         if (!command.IsSuccess)
@@ -121,11 +133,56 @@ internal sealed class IracingReplayController : IReplayController
 
         return await ConfirmAsync(
             observation.Version,
-            frame =>
-                frame.CameraCarIndex == player.CarIndex &&
-                frame.CameraGroupNumber == cameraGroupNumber,
+            frame => IsParticipantFocusApplied(
+                frame,
+                participant.Identity.Value,
+                target,
+                currentSessionNumber,
+                cameraGroupNumber),
             IracingErrors.ReplayCameraTimeout,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool IsParticipantFocusApplied(
+        ReplayFrameState frame,
+        string identity,
+        IracingReplayParticipantMetadata expectedTarget,
+        int expectedSessionNumber,
+        int expectedCameraGroupNumber)
+    {
+        if (frame.Metadata.CurrentSessionNumber != expectedSessionNumber ||
+            frame.LiveSessionNumber != expectedSessionNumber ||
+            frame.ReplaySessionNumber != expectedSessionNumber ||
+            frame.CameraCarIndex != expectedTarget.CarIndex ||
+            frame.CameraGroupNumber != expectedCameraGroupNumber)
+        {
+            return false;
+        }
+
+        var currentTarget = ResolveFocusTarget(frame.Metadata, identity);
+        return currentTarget is not null &&
+            currentTarget.CarIndex == expectedTarget.CarIndex &&
+            currentTarget.CarNumberRaw == expectedTarget.CarNumberRaw;
+    }
+
+    private static IracingReplayParticipantMetadata? ResolveFocusTarget(
+        IracingReplayContextMetadata metadata,
+        string identity)
+    {
+        if (string.Equals(identity, "local-player", StringComparison.Ordinal))
+        {
+            return metadata.Player is { } player
+                ? new IracingReplayParticipantMetadata(
+                    identity,
+                    player.CarIndex,
+                    player.CarNumberRaw,
+                    TeamId: null,
+                    UserId: null)
+                : null;
+        }
+
+        return metadata.Participants.SingleOrDefault(participant =>
+            string.Equals(participant.Identity, identity, StringComparison.Ordinal));
     }
 
     public async ValueTask<Result> SetPlaybackAsync(

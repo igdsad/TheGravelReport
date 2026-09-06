@@ -8,8 +8,23 @@ internal static class IncidentTransitionTestData
     public static SessionIdentity SecondSession { get; } = SessionIdentity.TryParse(
         "018f0c24-7a35-7a0d-8000-000000000102").Value;
 
+    public static IncidentParticipant FirstParticipant { get; } =
+        IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("participant:1").Value,
+            "Driver One",
+            "Team One",
+            "01").Value;
+
+    public static IncidentParticipant SecondParticipant { get; } =
+        IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("participant:2").Value,
+            "Driver Two",
+            "Team Two",
+            "02").Value;
+
     public static IncidentObservation Observation(
         SessionIdentity? session = null,
+        IncidentParticipant? participant = null,
         int counter = 0,
         int replaySessionNumber = 0,
         long sessionTimeMilliseconds = 1_000,
@@ -23,6 +38,7 @@ internal static class IncidentTransitionTestData
 
         return IncidentObservation.TryCreate(
             session ?? FirstSession,
+            participant ?? FirstParticipant,
             position,
             IncidentCounter.TryCreate(counter).Value,
             lap.HasValue ? LapNumber.TryCreate(lap.Value).Value : null,
@@ -32,6 +48,7 @@ internal static class IncidentTransitionTestData
 
     public static IncidentCheckpoint Checkpoint(
         SessionIdentity? session = null,
+        ParticipantIdentity? participantIdentity = null,
         int epoch = 0,
         int counter = 0,
         int replaySessionNumber = 0,
@@ -44,6 +61,7 @@ internal static class IncidentTransitionTestData
 
         return IncidentCheckpoint.TryCreate(
             session ?? FirstSession,
+            participantIdentity ?? FirstParticipant.Identity,
             CounterEpoch.TryCreate(epoch).Value,
             IncidentCounter.TryCreate(counter).Value,
             position,

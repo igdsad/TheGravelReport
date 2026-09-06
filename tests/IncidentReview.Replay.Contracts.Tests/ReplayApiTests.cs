@@ -81,13 +81,15 @@ public sealed class ReplayApiTests
         IEnumerable<System.Reflection.MethodInfo> methods)
     {
         var method = methods.Single(
-            candidate => candidate.Name == nameof(IReplayController.FocusPlayerAsync));
+            candidate => candidate.Name == nameof(IReplayController.FocusParticipantAsync));
         Assert.AreEqual(typeof(ValueTask<Result>), method.ReturnType);
         var parameters = method.GetParameters();
-        Assert.HasCount(2, parameters);
-        Assert.AreEqual(typeof(string), parameters[0].ParameterType);
+        Assert.HasCount(3, parameters);
+        Assert.AreEqual(typeof(IncidentParticipant), parameters[0].ParameterType);
         Assert.IsFalse(parameters[0].IsOptional);
-        Assert.AreEqual(typeof(CancellationToken), parameters[1].ParameterType);
+        Assert.AreEqual(typeof(string), parameters[1].ParameterType);
         Assert.IsFalse(parameters[1].IsOptional);
+        Assert.AreEqual(typeof(CancellationToken), parameters[2].ParameterType);
+        Assert.IsFalse(parameters[2].IsOptional);
     }
 }

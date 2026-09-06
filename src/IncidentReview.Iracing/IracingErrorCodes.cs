@@ -53,7 +53,7 @@ public static class IracingErrorCodes
     public static ErrorCode ReplayPlaybackTimeout { get; } =
         ErrorCode.Define("iracing.replay.playback-timeout");
 
-    /// <summary>The session metadata needed to focus the local player is unavailable.</summary>
+    /// <summary>The session metadata needed to focus the recorded participant is unavailable.</summary>
     public static ErrorCode ReplayMetadataUnavailable { get; } =
         ErrorCode.Define("iracing.replay.metadata-unavailable");
 

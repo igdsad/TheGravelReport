@@ -30,7 +30,9 @@ public sealed record RecordDetectedIncident : IStoreCommand
     {
         if (incident is null || expectedCheckpoint is null || nextCheckpoint is null ||
             incident.Session != expectedCheckpoint.Session ||
+            incident.Participant.Identity != expectedCheckpoint.ParticipantIdentity ||
             nextCheckpoint.Session != expectedCheckpoint.Session ||
+            nextCheckpoint.ParticipantIdentity != expectedCheckpoint.ParticipantIdentity ||
             nextCheckpoint.CounterEpoch != expectedCheckpoint.CounterEpoch ||
             nextCheckpoint.LastCounter.Value <= expectedCheckpoint.LastCounter.Value ||
             nextCheckpoint.LastPosition.SessionNumber != expectedCheckpoint.LastPosition.SessionNumber ||

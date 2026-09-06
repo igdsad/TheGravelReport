@@ -19,6 +19,8 @@ public sealed class ConstructionSafetyTests
             typeof(ReplayPosition),
             typeof(UtcInstant),
             typeof(IncidentCounter),
+            typeof(ParticipantIdentity),
+            typeof(IncidentParticipant),
             typeof(LapNumber),
             typeof(LapDistance),
             typeof(IncidentPoints),

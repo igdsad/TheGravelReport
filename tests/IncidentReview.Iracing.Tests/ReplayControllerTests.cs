@@ -252,7 +252,8 @@ public sealed class ReplayControllerTests
     {
         var context = IracingTestingRegistration.CreateReplayContext();
 
-        var result = await context.Controller.FocusPlayerAsync(
+        var result = await context.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             "TV1",
             CancellationToken.None);
 
@@ -268,11 +269,115 @@ public sealed class ReplayControllerTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FocusParticipantResolvesExactCanonicalOpponentReplayMetadata()
+    {
+        var context = IracingTestingRegistration.CreateReplayContext(
+            sessionInfo: OpponentReplaySessionInfo);
+        context.ObserveFrame(State(sessionInfo: OpponentReplaySessionInfo));
+        var opponent = IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("car-index:2:team:22").Value,
+            "Stored Driver",
+            "Stored Team",
+            "display-only").Value;
+
+        var result = await context.Controller.FocusParticipantAsync(
+            opponent,
+            "TV1",
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(
+            new IracingTestReplayMessage(
+                Command: 1,
+                WParam: 1 | (12 << 16),
+                LParam: 2 | (20 << 16)),
+            context.Messages.Single());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FocusParticipantRejectsPriorEntrantAfterExplicitIdentityChange()
+    {
+        var currentSessionInfo = OpponentReplaySessionInfo.Replace(
+            "TeamID: 22",
+            "TeamID: 23",
+            StringComparison.Ordinal).Replace(
+                "CurrentSessionNum: 0",
+                "CurrentSessionNum: 1",
+                StringComparison.Ordinal);
+        var context = IracingTestingRegistration.CreateReplayContext(
+            sessionInfo: currentSessionInfo);
+        context.ObserveFrame(State(
+            replaySessionNumber: 1,
+            sessionInfo: currentSessionInfo,
+            liveSessionNumber: 1));
+        var prior = Participant("car-index:2:team:22");
+        var current = Participant("car-index:2:team:23");
+
+        var rejected = await context.Controller.FocusParticipantAsync(
+            prior,
+            "TV1",
+            CancellationToken.None);
+        var focused = await context.Controller.FocusParticipantAsync(
+            current,
+            "TV1",
+            CancellationToken.None);
+
+        Assert.IsFalse(rejected.IsSuccess);
+        Assert.AreEqual(IracingErrorCodes.ReplayMetadataUnavailable, rejected.Error?.Code);
+        Assert.IsTrue(focused.IsSuccess);
+        Assert.HasCount(1, context.Messages);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FocusParticipantRejectsMismatchedLiveOrReplaySessionMetadata()
+    {
+        var context = IracingTestingRegistration.CreateReplayContext(
+            sessionInfo: OpponentReplaySessionInfo);
+        var opponent = Participant("car-index:2:team:22");
+
+        context.ObserveFrame(State(
+            replaySessionNumber: 0,
+            sessionInfo: OpponentReplaySessionInfo,
+            liveSessionNumber: 1));
+        var liveMismatch = await context.Controller.FocusParticipantAsync(
+            opponent,
+            "TV1",
+            CancellationToken.None);
+
+        context.ObserveFrame(State(
+            replaySessionNumber: 1,
+            sessionInfo: OpponentReplaySessionInfo,
+            liveSessionNumber: 0));
+        var replayMismatch = await context.Controller.FocusParticipantAsync(
+            opponent,
+            "TV1",
+            CancellationToken.None);
+
+        Assert.AreEqual(
+            IracingErrorCodes.ReplayMetadataUnavailable,
+            liveMismatch.Error?.Code);
+        Assert.AreEqual(
+            IracingErrorCodes.ReplayMetadataUnavailable,
+            replayMismatch.Error?.Code);
+        Assert.IsEmpty(context.Messages);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-001")]
     public async Task FocusPlayerWithoutPreferencePreservesCurrentCamera()
     {
         var context = IracingTestingRegistration.CreateReplayContext();
 
-        var result = await context.Controller.FocusPlayerAsync(
+        var result = await context.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             preferredCamera: null,
             CancellationToken.None);
 
@@ -293,7 +398,8 @@ public sealed class ReplayControllerTests
             autoApplyCommands: false,
             confirmationTimeout: TimeSpan.FromSeconds(1));
 
-        var pending = context.Controller.FocusPlayerAsync(
+        var pending = context.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             "TV1",
             CancellationToken.None).AsTask();
         context.ObserveFrame(State(
@@ -306,6 +412,38 @@ public sealed class ReplayControllerTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FocusParticipantDoesNotConfirmAfterTargetIdentityChanges()
+    {
+        var context = IracingTestingRegistration.CreateReplayContext(
+            autoApplyCommands: false,
+            confirmationTimeout: TimeSpan.FromMilliseconds(25),
+            sessionInfo: OpponentReplaySessionInfo);
+        context.ObserveFrame(State(sessionInfo: OpponentReplaySessionInfo));
+        var pending = context.Controller.FocusParticipantAsync(
+            Participant("car-index:2:team:22"),
+            "TV1",
+            CancellationToken.None).AsTask();
+        Assert.HasCount(1, context.Messages);
+
+        var replacementSessionInfo = OpponentReplaySessionInfo.Replace(
+            "TeamID: 22",
+            "TeamID: 23",
+            StringComparison.Ordinal);
+        context.ObserveFrame(State(
+            cameraCarIndex: 2,
+            cameraGroupNumber: 2,
+            cameraNumber: 20,
+            sessionInfo: replacementSessionInfo));
+
+        var result = await pending;
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(IracingErrorCodes.ReplayCameraTimeout, result.Error?.Code);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-001")]
     [TestProperty("Requirement", "QR-ERR-002")]
     public async Task FocusPlayerReturnsExactMetadataAndCameraErrorsWithoutBroadcast()
     {
@@ -313,10 +451,12 @@ public sealed class ReplayControllerTests
             sessionInfo: "WeekendInfo:\n SubSessionID: 1");
         var missingCamera = IracingTestingRegistration.CreateReplayContext();
 
-        var metadataResult = await missingMetadata.Controller.FocusPlayerAsync(
+        var metadataResult = await missingMetadata.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             "TV1",
             CancellationToken.None);
-        var cameraResult = await missingCamera.Controller.FocusPlayerAsync(
+        var cameraResult = await missingCamera.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             "Not Installed",
             CancellationToken.None);
 
@@ -353,7 +493,8 @@ public sealed class ReplayControllerTests
             autoApplyCommands: false,
             confirmationTimeout: TimeSpan.FromMilliseconds(25));
 
-        var result = await context.Controller.FocusPlayerAsync(
+        var result = await context.Controller.FocusParticipantAsync(
+            LocalPlayer(),
             "TV1",
             CancellationToken.None);
 
@@ -398,7 +539,9 @@ public sealed class ReplayControllerTests
         int cameraState = 1,
         int cameraCarIndex = 4,
         int cameraGroupNumber = 1,
-        int cameraNumber = 10) => new(
+        int cameraNumber = 10,
+        string? sessionInfo = null,
+        int liveSessionNumber = 0) => new(
         replaySessionNumber,
         replayMilliseconds,
         replayPlaySpeed,
@@ -407,9 +550,12 @@ public sealed class ReplayControllerTests
         cameraCarIndex,
         cameraGroupNumber,
         cameraNumber,
-        ReplaySessionInfo);
+        sessionInfo ?? ReplaySessionInfo,
+        liveSessionNumber);
 
     private const string ReplaySessionInfo = """
+        SessionInfo:
+         CurrentSessionNum: 0
         DriverInfo:
          DriverCarIdx: 4
          Drivers:
@@ -428,8 +574,53 @@ public sealed class ReplayControllerTests
            - CameraNum: 21
         """;
 
+    private const string OpponentReplaySessionInfo = """
+        SessionInfo:
+         CurrentSessionNum: 0
+        DriverInfo:
+         DriverCarIdx: 4
+         PaceCarIdx: 0
+         Drivers:
+         - CarIdx: 2
+           UserName: Opponent Driver
+           TeamID: 22
+           UserID: 222
+           CarNumber: "012"
+           CarNumberRaw: 12
+         - CarIdx: 4
+           UserName: Local Driver
+           TeamID: 0
+           UserID: 444
+           CarNumber: "023"
+           CarNumberRaw: 23
+        CameraInfo:
+         Groups:
+         - GroupNum: 1
+           GroupName: Cockpit
+           Cameras:
+           - CameraNum: 10
+         - GroupNum: 2
+           GroupName: TV1
+           Cameras:
+           - CameraNum: 20
+        """;
+
     private static ReplayPosition Position(int sessionNumber, long milliseconds) =>
         ReplayPosition.TryCreate(
             SessionNumber.TryCreate(sessionNumber).Value,
             SessionTime.TryCreateMilliseconds(milliseconds).Value).Value;
+
+    private static IncidentParticipant LocalPlayer() =>
+        IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("local-player").Value,
+            driverName: null,
+            teamName: null,
+            carNumber: null).Value;
+
+    private static IncidentParticipant Participant(string identity) =>
+        IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate(identity).Value,
+            driverName: null,
+            teamName: null,
+            carNumber: null).Value;
 }

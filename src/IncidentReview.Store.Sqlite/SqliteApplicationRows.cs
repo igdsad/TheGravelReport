@@ -21,6 +21,10 @@ internal sealed class IncidentRow
 {
     public required string IncidentId { get; init; }
     public required string SessionId { get; init; }
+    public required string ParticipantIdentity { get; init; }
+    public string? DriverName { get; init; }
+    public string? TeamName { get; init; }
+    public string? CarNumber { get; init; }
     public int ReplaySessionNumber { get; init; }
     public long ReplaySessionTimeMilliseconds { get; init; }
     public long ObservedAtUnixMilliseconds { get; init; }
@@ -39,6 +43,7 @@ internal sealed class IncidentRow
 internal sealed class IncidentCheckpointRow
 {
     public required string SessionId { get; init; }
+    public required string ParticipantIdentity { get; init; }
     public int CounterEpoch { get; init; }
     public int LastIncidentPointsTotal { get; init; }
     public int LastReplaySessionNumber { get; init; }

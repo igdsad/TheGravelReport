@@ -8,6 +8,7 @@ public sealed record StoredIncident
     private StoredIncident(
         IncidentId id,
         SessionIdentity session,
+        IncidentParticipant participant,
         ReplayPosition position,
         UtcInstant observedAt,
         IncidentPoints points,
@@ -21,6 +22,7 @@ public sealed record StoredIncident
     {
         Id = id;
         Session = session;
+        Participant = participant;
         Position = position;
         ObservedAt = observedAt;
         Points = points;
@@ -35,6 +37,7 @@ public sealed record StoredIncident
 
     public IncidentId Id { get; }
     public SessionIdentity Session { get; }
+    public IncidentParticipant Participant { get; }
     public ReplayPosition Position { get; }
     public UtcInstant ObservedAt { get; }
     public IncidentPoints Points { get; }
@@ -49,6 +52,7 @@ public sealed record StoredIncident
     public static StoredIncident Create(
         IncidentId id,
         SessionIdentity session,
+        IncidentParticipant participant,
         ReplayPosition position,
         UtcInstant observedAt,
         IncidentPoints points,
@@ -62,6 +66,7 @@ public sealed record StoredIncident
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(participant);
         ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(observedAt);
         ArgumentNullException.ThrowIfNull(points);
@@ -78,6 +83,7 @@ public sealed record StoredIncident
         return new StoredIncident(
             id,
             session,
+            participant,
             position,
             observedAt,
             points,

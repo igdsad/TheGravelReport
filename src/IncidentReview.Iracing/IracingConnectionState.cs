@@ -34,7 +34,7 @@ internal sealed class IracingConnectionState
 
             _observation = new ReplayFrameObservation.Available(
                 checked(_observation.Version + 1),
-                DecodeReplayFrame(snapshot, _metadata));
+                ValidateParticipantMetadata(DecodeReplayFrame(snapshot, _metadata)));
             signal = RotateSignal();
         }
 
@@ -50,7 +50,7 @@ internal sealed class IracingConnectionState
         {
             _observation = new ReplayFrameObservation.Available(
                 checked(_observation.Version + 1),
-                frame);
+                ValidateParticipantMetadata(frame));
             signal = RotateSignal();
         }
 
@@ -100,10 +100,34 @@ internal sealed class IracingConnectionState
         return signal;
     }
 
+    private static ReplayFrameState ValidateParticipantMetadata(ReplayFrameState frame)
+    {
+        if (frame.LiveSessionNumber is { } liveSessionNumber &&
+            frame.Metadata.CurrentSessionNumber == liveSessionNumber)
+        {
+            return frame;
+        }
+
+        return frame with
+        {
+            Metadata = frame.Metadata with
+            {
+                Player = null,
+                Participants = [],
+            },
+        };
+    }
+
     private static ReplayFrameState DecodeReplayFrame(
         IracingFrameSnapshot snapshot,
         IracingReplayContextMetadata metadata)
     {
+        int? liveSessionNumber = IracingFrameDecoder.TryReadInt32(
+            snapshot,
+            IracingProtocol.SessionNumberVariable,
+            out var liveSessionNumberValue)
+            ? liveSessionNumberValue
+            : null;
         int? sessionNumber = IracingFrameDecoder.TryReadInt32(
             snapshot,
             IracingProtocol.ReplaySessionNumberVariable,
@@ -165,7 +189,8 @@ internal sealed class IracingConnectionState
             cameraCarIndex,
             cameraGroupNumber,
             cameraNumber,
-            metadata);
+            metadata,
+            liveSessionNumber);
     }
 
     private static TaskCompletionSource CreateSignal() =>
@@ -210,7 +235,8 @@ internal sealed record ReplayFrameState(
     int? CameraCarIndex,
     int? CameraGroupNumber,
     int? CameraNumber,
-    IracingReplayContextMetadata Metadata)
+    IracingReplayContextMetadata Metadata,
+    int? LiveSessionNumber = null)
 {
     public bool IsSessionScreen =>
         (CameraState & (int)IracingCameraState.IsSessionScreen) != 0;

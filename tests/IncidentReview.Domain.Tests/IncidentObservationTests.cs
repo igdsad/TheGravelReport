@@ -12,6 +12,7 @@ public sealed class IncidentObservationTests
     public void ObservationPreservesRequiredAndOptionalContextWithValueEquality()
     {
         var session = IncidentTransitionTestData.FirstSession;
+        var participant = IncidentTransitionTestData.FirstParticipant;
         var position = ReplayPosition.TryCreate(
             SessionNumber.TryCreate(2).Value,
             SessionTime.TryCreateMilliseconds(12_345L).Value).Value;
@@ -22,6 +23,7 @@ public sealed class IncidentObservationTests
 
         var first = IncidentObservation.TryCreate(
             session,
+            participant,
             position,
             counter,
             lap,
@@ -29,6 +31,7 @@ public sealed class IncidentObservationTests
             observedAt).Value;
         var second = IncidentObservation.TryCreate(
             session,
+            participant,
             position,
             counter,
             lap,
@@ -36,6 +39,7 @@ public sealed class IncidentObservationTests
             observedAt).Value;
 
         Assert.AreSame(session, first.Session);
+        Assert.AreSame(participant, first.Participant);
         Assert.AreSame(position, first.Position);
         Assert.AreSame(counter, first.IncidentCounter);
         Assert.AreSame(lap, first.Lap);
@@ -63,24 +67,28 @@ public sealed class IncidentObservationTests
     public void ObservationIndependentlyRejectsEveryMissingRequiredValue()
     {
         var session = IncidentTransitionTestData.FirstSession;
+        var participant = IncidentTransitionTestData.FirstParticipant;
         var position = IncidentTransitionTestData.Observation().Position;
         var counter = IncidentCounter.TryCreate(0).Value;
         var observedAt = UtcInstant.TryCreateUnixMilliseconds(0).Value;
 
-        AssertInvalid(null, position, counter, observedAt);
-        AssertInvalid(session, null, counter, observedAt);
-        AssertInvalid(session, position, null, observedAt);
-        AssertInvalid(session, position, counter, null);
-        AssertInvalid(null, null, null, null);
+        AssertInvalid(null, participant, position, counter, observedAt);
+        AssertInvalid(session, null, position, counter, observedAt);
+        AssertInvalid(session, participant, null, counter, observedAt);
+        AssertInvalid(session, participant, position, null, observedAt);
+        AssertInvalid(session, participant, position, counter, null);
+        AssertInvalid(null, null, null, null, null);
     }
 
     private static void AssertInvalid(
         SessionIdentity? session,
+        IncidentParticipant? participant,
         ReplayPosition? position,
         IncidentCounter? counter,
         UtcInstant? observedAt) => DomainTestAssertions.IsValidationFailure(
             IncidentObservation.TryCreate(
                 session,
+                participant,
                 position,
                 counter,
                 lap: null,

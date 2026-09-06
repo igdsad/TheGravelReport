@@ -57,7 +57,8 @@ public static class IracingTestingRegistration
                 CameraCarIndex: 4,
                 CameraGroupNumber: 1,
                 CameraNumber: 10,
-                SessionInfo: sessionInfo ?? DefaultReplaySessionInfo));
+                SessionInfo: sessionInfo ?? DefaultReplaySessionInfo,
+                LiveSessionNumber: 0));
         if (telemetryAvailable)
         {
             connectionState.PublishAvailable(initialFrame);
@@ -172,6 +173,25 @@ public static class IracingTestingRegistration
                     [.. group.CameraNumbers])).ToArray());
     }
 
+    /// <summary>Parses the scored participant-counter subset of iRacing session YAML.</summary>
+    public static IracingTestIncidentMetadata ReadIncidentMetadata(string sessionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(sessionInfo);
+        var metadata = IracingSessionInfoDecoder.ReadIncidentMetadata(sessionInfo);
+        return new IracingTestIncidentMetadata(
+            metadata.CurrentSessionNumber,
+            metadata.PlayerCarIndex,
+            metadata.Participants.Select(static participant =>
+                new IracingTestIncidentParticipant(
+                    participant.CarIndex,
+                    participant.Identity,
+                    participant.IncidentCount,
+                    participant.DriverName,
+                    participant.TeamName,
+                    participant.CarNumber,
+                    participant.CarNumberRaw)).ToArray());
+    }
+
     /// <summary>Sends one raw replay message through the production Windows sender.</summary>
     public static IracingTestDeliveryMode SendWindowsReplayMessage(
         IracingTestReplayMessage message,
@@ -243,7 +263,8 @@ public static class IracingTestingRegistration
             state.CameraCarIndex,
             state.CameraGroupNumber,
             state.CameraNumber,
-            metadata);
+            metadata,
+            state.LiveSessionNumber);
     }
 
     private static void ApplyTestCommand(
@@ -282,9 +303,12 @@ public static class IracingTestingRegistration
         ReplayBroadcastCommand command)
     {
         var rawCarNumber = unchecked((short)((uint)command.WParam >> 16));
-        var carIndex = current.Metadata.Player?.CarNumberRaw == rawCarNumber
-            ? current.Metadata.Player.CarIndex
-            : current.CameraCarIndex;
+        var rosterTarget = current.Metadata.Participants.FirstOrDefault(participant =>
+            participant.CarNumberRaw == rawCarNumber);
+        var carIndex = rosterTarget?.CarIndex ??
+            (current.Metadata.Player?.CarNumberRaw == rawCarNumber
+                ? current.Metadata.Player.CarIndex
+                : current.CameraCarIndex);
         return current with
         {
             CameraCarIndex = carIndex,
@@ -294,11 +318,15 @@ public static class IracingTestingRegistration
     }
 
     private const string DefaultReplaySessionInfo = """
+        SessionInfo:
+         CurrentSessionNum: 0
         DriverInfo:
          DriverCarIdx: 4
          Drivers:
          - CarIdx: 4
            UserName: René Test Driver
+           TeamID: 0
+           UserID: 444
            CarNumberRaw: 23
         CameraInfo:
          Groups:
@@ -378,7 +406,8 @@ public sealed class IracingTestReplayContext
             state.CameraCarIndex,
             state.CameraGroupNumber,
             state.CameraNumber,
-            metadata);
+            metadata,
+            state.LiveSessionNumber);
     }
 }
 
@@ -426,7 +455,8 @@ public sealed record IracingTestReplayState(
     int? CameraCarIndex,
     int? CameraGroupNumber,
     int? CameraNumber,
-    string SessionInfo);
+    string SessionInfo,
+    int? LiveSessionNumber = 0);
 
 /// <summary>Represents replay-focus metadata decoded for integration tests.</summary>
 public sealed record IracingTestReplayMetadata(
@@ -439,6 +469,22 @@ public sealed record IracingTestCameraGroup(
     int Number,
     string Name,
     IReadOnlyList<int> CameraNumbers);
+
+/// <summary>Represents scored participant metadata decoded for focused tests.</summary>
+public sealed record IracingTestIncidentMetadata(
+    int? CurrentSessionNumber,
+    int? PlayerCarIndex,
+    IReadOnlyList<IracingTestIncidentParticipant> Participants);
+
+/// <summary>Represents one identified scored row decoded for focused tests.</summary>
+public sealed record IracingTestIncidentParticipant(
+    int CarIndex,
+    string Identity,
+    int? IncidentCount,
+    string? DriverName,
+    string? TeamName,
+    string? CarNumber,
+    int? CarNumberRaw);
 
 /// <summary>Classifies one focused shared-memory copy attempt.</summary>
 public enum IracingTestFrameOutcome

@@ -13,27 +13,24 @@ public sealed class TelemetrySampleTests
     {
         var session = TelemetryContractFixtures.CreateSession();
         var position = TelemetryContractFixtures.CreatePosition();
-        var counter = TelemetryContractFixtures.CreateCounter();
+        var counter = TelemetryContractFixtures.CreateParticipantCounter();
         var observedAt = TelemetryContractFixtures.CreateObservedAt();
         var onTrackState = (OnTrackState)onTrackStateValue;
 
         var result = TelemetrySample.TryCreate(
             session,
             position,
-            counter,
-            lap: null,
-            lapDistance: null,
+            [counter],
             onTrackState,
             observedAt);
 
         Assert.IsTrue(result.IsSuccess);
         Assert.AreSame(session, result.Value.Session);
         Assert.AreSame(position, result.Value.Position);
-        Assert.AreSame(counter, result.Value.IncidentCounter);
+        Assert.HasCount(1, result.Value.IncidentCounters);
+        Assert.AreSame(counter, result.Value.IncidentCounters[0]);
         Assert.AreEqual(onTrackState, result.Value.OnTrackState);
         Assert.AreSame(observedAt, result.Value.ObservedAt);
-        Assert.IsNull(result.Value.Lap);
-        Assert.IsNull(result.Value.LapDistance);
     }
 
     [TestMethod]
@@ -47,21 +44,20 @@ public sealed class TelemetrySampleTests
         bool hasLap,
         bool hasLapDistance)
     {
-        var lap = hasLap ? LapNumber.TryCreate(7).Value : null;
-        var lapDistance = hasLapDistance ? LapDistance.TryCreate(0.625).Value : null;
+        var counter = TelemetryContractFixtures.CreateParticipantCounter(
+            lap: hasLap ? 7 : null,
+            lapDistance: hasLapDistance ? 0.625 : null);
 
         var result = TelemetrySample.TryCreate(
             TelemetryContractFixtures.CreateSession(),
             TelemetryContractFixtures.CreatePosition(),
-            TelemetryContractFixtures.CreateCounter(),
-            lap,
-            lapDistance,
+            [counter],
             OnTrackState.OnTrack,
             TelemetryContractFixtures.CreateObservedAt());
 
         Assert.IsTrue(result.IsSuccess);
-        Assert.AreSame(lap, result.Value.Lap);
-        Assert.AreSame(lapDistance, result.Value.LapDistance);
+        Assert.AreSame(counter.Lap, result.Value.IncidentCounters[0].Lap);
+        Assert.AreSame(counter.LapDistance, result.Value.IncidentCounters[0].LapDistance);
     }
 
     [TestMethod]
@@ -69,13 +65,14 @@ public sealed class TelemetrySampleTests
     [TestProperty("Requirement", "QR-TST-001")]
     [DataRow("session")]
     [DataRow("position")]
-    [DataRow("counter")]
+    [DataRow("counters")]
     [DataRow("observed-at")]
     public void TryCreateRejectsEachMissingRequiredValueIndependently(string missingValue)
     {
         SimulatorSessionDescriptor? session = TelemetryContractFixtures.CreateSession();
         ReplayPosition? position = TelemetryContractFixtures.CreatePosition();
-        IncidentCounter? counter = TelemetryContractFixtures.CreateCounter();
+        IEnumerable<ParticipantIncidentCounter>? counters =
+            [TelemetryContractFixtures.CreateParticipantCounter()];
         UtcInstant? observedAt = TelemetryContractFixtures.CreateObservedAt();
 
         switch (missingValue)
@@ -86,8 +83,8 @@ public sealed class TelemetrySampleTests
             case "position":
                 position = null;
                 break;
-            case "counter":
-                counter = null;
+            case "counters":
+                counters = null;
                 break;
             case "observed-at":
                 observedAt = null;
@@ -100,9 +97,7 @@ public sealed class TelemetrySampleTests
         var result = TelemetrySample.TryCreate(
             session,
             position,
-            counter,
-            lap: null,
-            lapDistance: null,
+            counters,
             OnTrackState.Unknown,
             observedAt);
 
@@ -117,9 +112,7 @@ public sealed class TelemetrySampleTests
         var result = TelemetrySample.TryCreate(
             TelemetryContractFixtures.CreateSession(sessionNumber: 1),
             TelemetryContractFixtures.CreatePosition(sessionNumber: 2),
-            TelemetryContractFixtures.CreateCounter(),
-            lap: null,
-            lapDistance: null,
+            [TelemetryContractFixtures.CreateParticipantCounter()],
             OnTrackState.Unknown,
             TelemetryContractFixtures.CreateObservedAt());
 
@@ -133,13 +126,97 @@ public sealed class TelemetrySampleTests
         var result = TelemetrySample.TryCreate(
             TelemetryContractFixtures.CreateSession(),
             TelemetryContractFixtures.CreatePosition(),
-            TelemetryContractFixtures.CreateCounter(),
-            lap: null,
-            lapDistance: null,
+            [TelemetryContractFixtures.CreateParticipantCounter()],
             (OnTrackState)int.MaxValue,
             TelemetryContractFixtures.CreateObservedAt());
 
         AssertInvalidSample(result);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-004")]
+    [TestProperty("Requirement", "QR-ARC-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void TryCreateCopiesCountersAndPreservesTheirSourceOrder()
+    {
+        var first = TelemetryContractFixtures.CreateParticipantCounter("participant:2");
+        var second = TelemetryContractFixtures.CreateParticipantCounter("participant:1");
+        var source = new List<ParticipantIncidentCounter> { first, second };
+
+        var sample = TelemetrySample.TryCreate(
+            TelemetryContractFixtures.CreateSession(),
+            TelemetryContractFixtures.CreatePosition(),
+            source,
+            OnTrackState.OnTrack,
+            TelemetryContractFixtures.CreateObservedAt()).Value;
+        source.Clear();
+
+        CollectionAssert.AreEqual(
+            new[] { first, second },
+            sample.IncidentCounters.ToArray());
+        var mutableView = (IList<ParticipantIncidentCounter>)sample.IncidentCounters;
+        Assert.ThrowsExactly<NotSupportedException>(() => mutableView[0] = second);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void TryCreateAllowsNoParticipantObservations()
+    {
+        var result = TelemetrySample.TryCreate(
+            TelemetryContractFixtures.CreateSession(),
+            TelemetryContractFixtures.CreatePosition(),
+            [],
+            OnTrackState.OnTrack,
+            TelemetryContractFixtures.CreateObservedAt());
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsEmpty(result.Value.IncidentCounters);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-004")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void TryCreateRejectsNullDuplicateOrExcessiveCounterCollections()
+    {
+        var duplicateIdentity = ParticipantIdentity.TryCreate("participant:duplicate").Value;
+        var firstParticipant = IncidentParticipant.TryCreate(
+            duplicateIdentity,
+            "First Driver",
+            null,
+            null).Value;
+        var secondParticipant = IncidentParticipant.TryCreate(
+            duplicateIdentity,
+            "Second Driver",
+            null,
+            null).Value;
+        var duplicateCounters = new[]
+        {
+            ParticipantIncidentCounter.TryCreate(
+                firstParticipant,
+                IncidentCounter.TryCreate(0).Value,
+                null,
+                null).Value,
+            ParticipantIncidentCounter.TryCreate(
+                secondParticipant,
+                IncidentCounter.TryCreate(1).Value,
+                null,
+                null).Value,
+        };
+
+        AssertInvalidCounters([null!]);
+        AssertInvalidCounters(duplicateCounters);
+
+        var maximum = Enumerable.Range(0, TelemetrySample.MaximumIncidentCounterCount)
+            .Select(index => TelemetryContractFixtures.CreateParticipantCounter(
+                $"participant:{index}"))
+            .ToList();
+        var accepted = CreateSample(maximum);
+        Assert.IsTrue(accepted.IsSuccess);
+
+        maximum.Add(TelemetryContractFixtures.CreateParticipantCounter("participant:excess"));
+        AssertInvalidSample(CreateSample(maximum));
     }
 
     [TestMethod]
@@ -160,4 +237,16 @@ public sealed class TelemetrySampleTests
         Assert.AreEqual(ErrorKind.Validation, result.Error.Kind);
         Assert.ThrowsExactly<InvalidOperationException>(() => _ = result.Value);
     }
+
+    private static Result<TelemetrySample> CreateSample(
+        IEnumerable<ParticipantIncidentCounter> counters) => TelemetrySample.TryCreate(
+            TelemetryContractFixtures.CreateSession(),
+            TelemetryContractFixtures.CreatePosition(),
+            counters,
+            OnTrackState.OnTrack,
+            TelemetryContractFixtures.CreateObservedAt());
+
+    private static void AssertInvalidCounters(
+        IEnumerable<ParticipantIncidentCounter> counters) =>
+        AssertInvalidSample(CreateSample(counters));
 }

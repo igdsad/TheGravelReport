@@ -57,6 +57,10 @@ internal sealed partial class SqliteStore
         """
         SELECT incident_id AS IncidentId,
                session_id AS SessionId,
+               participant_identity AS ParticipantIdentity,
+               driver_name AS DriverName,
+               team_name AS TeamName,
+               car_number AS CarNumber,
                replay_session_number AS ReplaySessionNumber,
                replay_session_time_ms AS ReplaySessionTimeMilliseconds,
                observed_at_utc_ms AS ObservedAtUnixMilliseconds,
@@ -78,6 +82,10 @@ internal sealed partial class SqliteStore
         """
         SELECT incident_id AS IncidentId,
                session_id AS SessionId,
+               participant_identity AS ParticipantIdentity,
+               driver_name AS DriverName,
+               team_name AS TeamName,
+               car_number AS CarNumber,
                replay_session_number AS ReplaySessionNumber,
                replay_session_time_ms AS ReplaySessionTimeMilliseconds,
                observed_at_utc_ms AS ObservedAtUnixMilliseconds,
@@ -96,16 +104,32 @@ internal sealed partial class SqliteStore
         ORDER BY observed_at_utc_ms, incident_id;
         """;
 
-    private const string SelectCheckpointSql =
+    private const string SelectCheckpointsSql =
         """
         SELECT session_id AS SessionId,
+               participant_identity AS ParticipantIdentity,
                counter_epoch AS CounterEpoch,
                last_incident_points_total AS LastIncidentPointsTotal,
                last_replay_session_number AS LastReplaySessionNumber,
                last_replay_session_time_ms AS LastReplaySessionTimeMilliseconds,
                updated_at_utc_ms AS UpdatedAtUnixMilliseconds
         FROM IncidentCheckpoint
-        WHERE session_id = @SessionId;
+        WHERE session_id = @SessionId
+        ORDER BY participant_identity;
+        """;
+
+    private const string SelectCheckpointSql =
+        """
+        SELECT session_id AS SessionId,
+               participant_identity AS ParticipantIdentity,
+               counter_epoch AS CounterEpoch,
+               last_incident_points_total AS LastIncidentPointsTotal,
+               last_replay_session_number AS LastReplaySessionNumber,
+               last_replay_session_time_ms AS LastReplaySessionTimeMilliseconds,
+               updated_at_utc_ms AS UpdatedAtUnixMilliseconds
+        FROM IncidentCheckpoint
+        WHERE session_id = @SessionId
+          AND participant_identity = @ParticipantIdentity;
         """;
 
     private Result<T> ReadApplicationQuery<T>(
@@ -135,8 +159,8 @@ internal sealed partial class SqliteStore
                         QueryIncident(connection, transaction, incident.Incident)),
                     GetIncidents incidents => ConvertResult<T, IReadOnlyList<StoredIncident>>(
                         QueryIncidents(connection, transaction, incidents.Session)),
-                    GetIncidentCheckpoint checkpoint => ConvertResult<T, StoreLookup<IncidentCheckpoint>>(
-                        QueryCheckpoint(connection, transaction, checkpoint.Session)),
+                    GetIncidentCheckpoints checkpoints => ConvertResult<T, IReadOnlyList<IncidentCheckpoint>>(
+                        QueryCheckpoints(connection, transaction, checkpoints.Session)),
                     _ => Result<T>.Failure(StoreErrors.UnsupportedRequest),
                 };
                 cancellationToken.ThrowIfCancellationRequested();
@@ -288,25 +312,28 @@ internal sealed partial class SqliteStore
         return Result<IReadOnlyList<StoredIncident>>.Success(incidents.AsReadOnly());
     }
 
-    private static Result<StoreLookup<IncidentCheckpoint>> QueryCheckpoint(
+    private static Result<IReadOnlyList<IncidentCheckpoint>> QueryCheckpoints(
         SqliteConnection connection,
         SqliteTransaction transaction,
         SessionIdentity session)
     {
-        var row = connection.QuerySingleOrDefault<IncidentCheckpointRow>(
-            SelectCheckpointSql,
+        var rows = connection.Query<IncidentCheckpointRow>(
+            SelectCheckpointsSql,
             new { SessionId = session.ToString() },
             transaction: transaction);
-        if (row is null)
+        var checkpoints = new List<IncidentCheckpoint>();
+        foreach (var row in rows)
         {
-            return Result<StoreLookup<IncidentCheckpoint>>.Success(
-                StoreLookup.Missing<IncidentCheckpoint>());
+            var mapped = MapCheckpoint(row);
+            if (!mapped.IsSuccess)
+            {
+                return Result<IReadOnlyList<IncidentCheckpoint>>.Failure(mapped.Error!);
+            }
+
+            checkpoints.Add(mapped.Value);
         }
 
-        var mapped = MapCheckpoint(row);
-        return mapped.IsSuccess
-            ? Result<StoreLookup<IncidentCheckpoint>>.Success(StoreLookup.Found(mapped.Value))
-            : Result<StoreLookup<IncidentCheckpoint>>.Failure(mapped.Error!);
+        return Result<IReadOnlyList<IncidentCheckpoint>>.Success(checkpoints.AsReadOnly());
     }
 
     private Result WriteApplicationCommand(IStoreCommand command, CancellationToken cancellationToken)
@@ -497,7 +524,11 @@ internal sealed partial class SqliteStore
         var current = connection.QuerySingleOrDefault<IncidentCheckpointRow>(
             CreateDapperCommand(
                 SelectCheckpointSql,
-                new { SessionId = command.NextCheckpoint.Session.ToString() },
+                new
+                {
+                    SessionId = command.NextCheckpoint.Session.ToString(),
+                    ParticipantIdentity = command.NextCheckpoint.ParticipantIdentity.Value,
+                },
                 transaction,
                 cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
@@ -512,9 +543,11 @@ internal sealed partial class SqliteStore
             ? connection.Execute(
                 """
                 INSERT INTO IncidentCheckpoint (
-                    session_id, counter_epoch, last_incident_points_total,
+                    session_id, participant_identity, counter_epoch, last_incident_points_total,
                     last_replay_session_number, last_replay_session_time_ms, updated_at_utc_ms)
-                VALUES (@SessionId, @CounterEpoch, @LastCounter, @SessionNumber, @SessionTime, @UpdatedAt);
+                VALUES (
+                    @SessionId, @ParticipantIdentity, @CounterEpoch, @LastCounter,
+                    @SessionNumber, @SessionTime, @UpdatedAt);
                 """,
                 CheckpointParameters(next),
                 transaction: transaction)
@@ -526,7 +559,8 @@ internal sealed partial class SqliteStore
                     last_replay_session_number = @SessionNumber,
                     last_replay_session_time_ms = @SessionTime,
                     updated_at_utc_ms = @UpdatedAt
-                WHERE session_id = @SessionId;
+                WHERE session_id = @SessionId
+                  AND participant_identity = @ParticipantIdentity;
                 """,
                 CheckpointParameters(next),
                 transaction: transaction);
@@ -543,7 +577,11 @@ internal sealed partial class SqliteStore
         var current = connection.QuerySingleOrDefault<IncidentCheckpointRow>(
             CreateDapperCommand(
                 SelectCheckpointSql,
-                new { SessionId = command.ExpectedCheckpoint.Session.ToString() },
+                new
+                {
+                    SessionId = command.ExpectedCheckpoint.Session.ToString(),
+                    ParticipantIdentity = command.ExpectedCheckpoint.ParticipantIdentity.Value,
+                },
                 transaction,
                 cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
@@ -557,12 +595,14 @@ internal sealed partial class SqliteStore
         var inserted = connection.Execute(
             """
             INSERT INTO Incident (
-                incident_id, session_id, replay_session_number, replay_session_time_ms,
+                incident_id, session_id, participant_identity, driver_name, team_name, car_number,
+                replay_session_number, replay_session_time_ms,
                 observed_at_utc_ms, incident_points_delta, incident_points_total,
                 counter_epoch, lap, lap_distance_percent, review_status,
                 classification, notes, created_at_utc_ms, updated_at_utc_ms)
             VALUES (
-                @IncidentId, @SessionId, @ReplaySessionNumber, @ReplaySessionTime,
+                @IncidentId, @SessionId, @ParticipantIdentity, @DriverName, @TeamName, @CarNumber,
+                @ReplaySessionNumber, @ReplaySessionTime,
                 @ObservedAt, @PointsDelta, @PointsTotal, @CounterEpoch, @Lap,
                 @LapDistance, @ReviewStatus, @Classification, @Notes, @CreatedAt, @UpdatedAt);
             """,
@@ -570,6 +610,10 @@ internal sealed partial class SqliteStore
             {
                 IncidentId = incident.Id.ToString(),
                 SessionId = incident.Session.ToString(),
+                ParticipantIdentity = incident.Participant.Identity.Value,
+                incident.Participant.DriverName,
+                incident.Participant.TeamName,
+                incident.Participant.CarNumber,
                 ReplaySessionNumber = incident.Position.SessionNumber.Value,
                 ReplaySessionTime = incident.Position.SessionTime.Milliseconds,
                 ObservedAt = incident.ObservedAt.UnixMilliseconds,
@@ -602,12 +646,14 @@ internal sealed partial class SqliteStore
                 last_replay_session_time_ms = @SessionTime,
                 updated_at_utc_ms = @UpdatedAt
             WHERE session_id = @SessionId
+              AND participant_identity = @ParticipantIdentity
               AND counter_epoch = @ExpectedCounterEpoch
               AND last_incident_points_total = @ExpectedCounter;
             """,
             new
             {
                 SessionId = command.NextCheckpoint.Session.ToString(),
+                ParticipantIdentity = command.NextCheckpoint.ParticipantIdentity.Value,
                 CounterEpoch = command.NextCheckpoint.CounterEpoch.Value,
                 LastCounter = command.NextCheckpoint.LastCounter.Value,
                 SessionNumber = command.NextCheckpoint.LastPosition.SessionNumber.Value,
@@ -676,6 +722,7 @@ internal sealed partial class SqliteStore
     private static object CheckpointParameters(IncidentCheckpoint checkpoint) => new
     {
         SessionId = checkpoint.Session.ToString(),
+        ParticipantIdentity = checkpoint.ParticipantIdentity.Value,
         CounterEpoch = checkpoint.CounterEpoch.Value,
         LastCounter = checkpoint.LastCounter.Value,
         SessionNumber = checkpoint.LastPosition.SessionNumber.Value,
@@ -749,6 +796,7 @@ internal sealed partial class SqliteStore
     {
         var id = IncidentId.TryParse(row.IncidentId);
         var session = SessionIdentity.TryParse(row.SessionId);
+        var participantIdentity = ParticipantIdentity.TryCreate(row.ParticipantIdentity);
         var sessionNumber = SessionNumber.TryCreate(row.ReplaySessionNumber);
         var sessionTime = SessionTime.TryCreateMilliseconds(row.ReplaySessionTimeMilliseconds);
         var observedAt = UtcInstant.TryCreateUnixMilliseconds(row.ObservedAtUnixMilliseconds);
@@ -762,7 +810,8 @@ internal sealed partial class SqliteStore
         var classification = row.Classification.HasValue
             ? IncidentClassification.TryCreate(row.Classification.Value)
             : null;
-        if (!id.IsSuccess || !session.IsSuccess || !sessionNumber.IsSuccess || !sessionTime.IsSuccess ||
+        if (!id.IsSuccess || !session.IsSuccess || !participantIdentity.IsSuccess ||
+            !sessionNumber.IsSuccess || !sessionTime.IsSuccess ||
             !observedAt.IsSuccess || !points.IsSuccess || !epoch.IsSuccess || !status.IsSuccess ||
             !createdAt.IsSuccess || !updatedAt.IsSuccess ||
             (lap is not null && !lap.IsSuccess) ||
@@ -773,8 +822,13 @@ internal sealed partial class SqliteStore
         }
 
         var position = ReplayPosition.TryCreate(sessionNumber.Value, sessionTime.Value);
+        var participant = IncidentParticipant.TryCreate(
+            participantIdentity.Value,
+            row.DriverName,
+            row.TeamName,
+            row.CarNumber);
         var annotation = IncidentAnnotation.TryCreate(row.Notes, classification?.Value);
-        if (!position.IsSuccess || !annotation.IsSuccess ||
+        if (!position.IsSuccess || !participant.IsSuccess || !annotation.IsSuccess ||
             updatedAt.Value.UnixMilliseconds < createdAt.Value.UnixMilliseconds)
         {
             return Result<StoredIncident>.Failure(StoreErrors.PersistenceFailure);
@@ -783,6 +837,7 @@ internal sealed partial class SqliteStore
         return Result<StoredIncident>.Success(StoredIncident.Create(
             id.Value,
             session.Value,
+            participant.Value,
             position.Value,
             observedAt.Value,
             points.Value,
@@ -798,12 +853,14 @@ internal sealed partial class SqliteStore
     private static Result<IncidentCheckpoint> MapCheckpoint(IncidentCheckpointRow row)
     {
         var session = SessionIdentity.TryParse(row.SessionId);
+        var participantIdentity = ParticipantIdentity.TryCreate(row.ParticipantIdentity);
         var epoch = CounterEpoch.TryCreate(row.CounterEpoch);
         var counter = IncidentCounter.TryCreate(row.LastIncidentPointsTotal);
         var number = SessionNumber.TryCreate(row.LastReplaySessionNumber);
         var time = SessionTime.TryCreateMilliseconds(row.LastReplaySessionTimeMilliseconds);
         var updatedAt = UtcInstant.TryCreateUnixMilliseconds(row.UpdatedAtUnixMilliseconds);
-        if (!session.IsSuccess || !epoch.IsSuccess || !counter.IsSuccess || !number.IsSuccess ||
+        if (!session.IsSuccess || !participantIdentity.IsSuccess || !epoch.IsSuccess ||
+            !counter.IsSuccess || !number.IsSuccess ||
             !time.IsSuccess || !updatedAt.IsSuccess)
         {
             return Result<IncidentCheckpoint>.Failure(StoreErrors.PersistenceFailure);
@@ -813,6 +870,7 @@ internal sealed partial class SqliteStore
         return position.IsSuccess
             ? IncidentCheckpoint.TryCreate(
                 session.Value,
+                participantIdentity.Value,
                 epoch.Value,
                 counter.Value,
                 position.Value,

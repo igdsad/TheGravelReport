@@ -22,7 +22,7 @@ internal static class ApplicationCommandFingerprint
             MarkIncidentReviewed => "incident.mark-reviewed",
             _ => throw new InvalidOperationException("The command has no application-store descriptor."),
         };
-        const int version = 1;
+        var version = command is EstablishIncidentCheckpoint or RecordDetectedIncident ? 2 : 1;
         var writer = new ArrayBufferWriter<byte>();
         WriteString(writer, kind);
         WriteInt32(writer, version);
@@ -70,6 +70,10 @@ internal static class ApplicationCommandFingerprint
     {
         WriteString(writer, value.Id.ToString());
         WriteString(writer, value.Session.ToString());
+        WriteString(writer, value.Participant.Identity.Value);
+        WriteOptionalString(writer, value.Participant.DriverName);
+        WriteOptionalString(writer, value.Participant.TeamName);
+        WriteOptionalString(writer, value.Participant.CarNumber);
         WriteInt32(writer, value.Position.SessionNumber.Value);
         WriteInt64(writer, value.Position.SessionTime.Milliseconds);
         WriteInt64(writer, value.ObservedAt.UnixMilliseconds);
@@ -101,6 +105,7 @@ internal static class ApplicationCommandFingerprint
     private static void WriteCheckpoint(ArrayBufferWriter<byte> writer, IncidentCheckpoint value)
     {
         WriteString(writer, value.Session.ToString());
+        WriteString(writer, value.ParticipantIdentity.Value);
         WriteInt32(writer, value.CounterEpoch.Value);
         WriteInt32(writer, value.LastCounter.Value);
         WriteInt32(writer, value.LastPosition.SessionNumber.Value);

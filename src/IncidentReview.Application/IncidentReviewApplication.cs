@@ -44,7 +44,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private SessionIdentity? _currentSession;
     private StoredSession? _activeSession;
     private SimulatorSessionDescriptor? _replayDescriptor;
-    private IncidentCheckpoint? _checkpoint;
+    private readonly Dictionary<ParticipantIdentity, IncidentCheckpoint> _checkpoints = [];
     private PendingStoreTransition? _pendingTransition;
 
     public IncidentReviewApplication(
@@ -366,7 +366,8 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
 
             seekAccepted = true;
-            var focus = await _replayController.FocusPlayerAsync(
+            var focus = await _replayController.FocusParticipantAsync(
+                    stored.Participant,
                     preferences.Value.PreferredCamera,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -561,7 +562,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 lock (_stateLock)
                 {
                     _activeSession = null;
-                    _checkpoint = null;
+                    _checkpoints.Clear();
                     _currentSession = null;
                     _onTrackState = OnTrackState.Unknown;
                     _replayDescriptor = null;
@@ -639,94 +640,122 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             return false;
         }
 
-        var observation = IncidentObservation.TryCreate(
-            session.Id,
-            sample.Position,
-            sample.IncidentCounter,
-            sample.Lap,
-            sample.LapDistance,
-            sample.ObservedAt);
-        if (!observation.IsSuccess)
+        foreach (var participantCounter in sample.IncidentCounters.OrderBy(
+                     static counter => counter.Participant.Identity.Value,
+                     StringComparer.Ordinal))
         {
-            SetUnavailable(observation.Error!);
-            return false;
-        }
-
-        IncidentCheckpoint? checkpoint;
-        lock (_stateLock)
-        {
-            checkpoint = _checkpoint;
-        }
-
-        var decision = IncidentCounterTransition.Evaluate(checkpoint, observation.Value);
-        if (!decision.IsSuccess)
-        {
-            SetUnavailable(decision.Error!);
-            return false;
-        }
-
-        switch (decision.Value)
-        {
-            case IncidentTransitionDecision.NoChange:
-                return true;
-            case IncidentTransitionDecision.EstablishBaseline baseline:
+            var observation = IncidentObservation.TryCreate(
+                session.Id,
+                participantCounter.Participant,
+                sample.Position,
+                participantCounter.IncidentCounter,
+                participantCounter.Lap,
+                participantCounter.LapDistance,
+                sample.ObservedAt);
+            if (!observation.IsSuccess)
             {
-                var command = EstablishIncidentCheckpoint.TryCreate(checkpoint, baseline.NextCheckpoint);
-                if (!command.IsSuccess)
-                {
-                    SetUnavailable(command.Error!);
-                    return false;
-                }
-
-                lock (_stateLock)
-                {
-                    _pendingTransition = new PendingStoreTransition(
-                        command.Value,
-                        baseline.NextCheckpoint,
-                        Incident: null);
-                }
-
-                return await CommitPendingTransitionAsync(cancellationToken).ConfigureAwait(false);
+                SetUnavailable(observation.Error!);
+                return false;
             }
-            case IncidentTransitionDecision.RecordIncrease increase:
+
+            IncidentCheckpoint? checkpoint;
+            lock (_stateLock)
             {
-                var emptyAnnotation = IncidentAnnotation.TryCreate(null, null).Value;
-                var incident = StoredIncident.Create(
-                    IncidentId.Generate(),
-                    session.Id,
-                    increase.Observation.Position,
-                    increase.Observation.ObservedAt,
-                    increase.Points,
-                    increase.NextCheckpoint.CounterEpoch,
-                    increase.Observation.Lap,
-                    increase.Observation.LapDistance,
-                    IncidentReviewStatus.Pending,
-                    emptyAnnotation,
-                    increase.Observation.ObservedAt,
-                    increase.Observation.ObservedAt);
-                var command = RecordDetectedIncident.TryCreate(
-                    incident,
-                    increase.ExpectedCheckpoint,
-                    increase.NextCheckpoint);
-                if (!command.IsSuccess)
-                {
-                    SetUnavailable(command.Error!);
-                    return false;
-                }
-
-                lock (_stateLock)
-                {
-                    _pendingTransition = new PendingStoreTransition(
-                        command.Value,
-                        increase.NextCheckpoint,
-                        incident);
-                }
-
-                return await CommitPendingTransitionAsync(cancellationToken).ConfigureAwait(false);
+                _ = _checkpoints.TryGetValue(
+                    participantCounter.Participant.Identity,
+                    out checkpoint);
             }
-            default:
-                throw new InvalidOperationException("The incident transition type is unsupported.");
+
+            var decision = IncidentCounterTransition.Evaluate(checkpoint, observation.Value);
+            if (!decision.IsSuccess)
+            {
+                SetUnavailable(decision.Error!);
+                return false;
+            }
+
+            if (decision.Value is IncidentTransitionDecision.NoChange)
+            {
+                continue;
+            }
+
+            var pendingResult = decision.Value switch
+            {
+                IncidentTransitionDecision.EstablishBaseline baseline =>
+                    CreatePendingBaseline(checkpoint, baseline),
+                IncidentTransitionDecision.RecordIncrease increase =>
+                    CreatePendingIncrease(session.Id, increase),
+                _ => throw new InvalidOperationException(
+                    "The incident transition type is unsupported."),
+            };
+
+            if (!pendingResult.IsSuccess)
+            {
+                SetUnavailable(pendingResult.Error!);
+                return false;
+            }
+
+            lock (_stateLock)
+            {
+                _pendingTransition = pendingResult.Value;
+            }
+
+            if (!await CommitPendingTransitionAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
         }
+
+        return true;
+    }
+
+    private static Result<PendingStoreTransition> CreatePendingBaseline(
+        IncidentCheckpoint? checkpoint,
+        IncidentTransitionDecision.EstablishBaseline baseline)
+    {
+        var command = EstablishIncidentCheckpoint.TryCreate(checkpoint, baseline.NextCheckpoint);
+        if (!command.IsSuccess)
+        {
+            return Result<PendingStoreTransition>.Failure(command.Error!);
+        }
+
+        return Result<PendingStoreTransition>.Success(new PendingStoreTransition(
+            command.Value,
+            baseline.NextCheckpoint,
+            Incident: null));
+    }
+
+    private static Result<PendingStoreTransition> CreatePendingIncrease(
+        SessionIdentity session,
+        IncidentTransitionDecision.RecordIncrease increase)
+    {
+        var emptyAnnotation = IncidentAnnotation.TryCreate(null, null).Value;
+        var incident = StoredIncident.Create(
+            IncidentId.Generate(),
+            session,
+            increase.Observation.Participant,
+            increase.Observation.Position,
+            increase.Observation.ObservedAt,
+            increase.Points,
+            increase.NextCheckpoint.CounterEpoch,
+            increase.Observation.Lap,
+            increase.Observation.LapDistance,
+            IncidentReviewStatus.Pending,
+            emptyAnnotation,
+            increase.Observation.ObservedAt,
+            increase.Observation.ObservedAt);
+        var command = RecordDetectedIncident.TryCreate(
+            incident,
+            increase.ExpectedCheckpoint,
+            increase.NextCheckpoint);
+        if (!command.IsSuccess)
+        {
+            return Result<PendingStoreTransition>.Failure(command.Error!);
+        }
+
+        return Result<PendingStoreTransition>.Success(new PendingStoreTransition(
+            command.Value,
+            increase.NextCheckpoint,
+            incident));
     }
 
     private async Task<StoredSession?> ResolveLiveSessionAsync(
@@ -815,12 +844,21 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             return null;
         }
 
-        var checkpoint = await _store.QueryAsync(
-            new GetIncidentCheckpoint(resolved.Id),
+        var checkpoints = await _store.QueryAsync(
+            new GetIncidentCheckpoints(resolved.Id),
             cancellationToken).ConfigureAwait(false);
-        if (!checkpoint.IsSuccess)
+        if (!checkpoints.IsSuccess)
         {
-            SetUnavailable(checkpoint.Error!);
+            SetUnavailable(checkpoints.Error!);
+            return null;
+        }
+
+        if (checkpoints.Value.Any(checkpoint => checkpoint.Session != resolved.Id) ||
+            checkpoints.Value.Select(static checkpoint => checkpoint.ParticipantIdentity)
+                .Distinct()
+                .Count() != checkpoints.Value.Count)
+        {
+            SetUnavailable(StoreErrors.PersistenceFailure);
             return null;
         }
 
@@ -828,7 +866,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         {
             _activeSession = resolved;
             _currentSession = resolved.Id;
-            _checkpoint = checkpoint.Value.Value;
+            _checkpoints.Clear();
+            foreach (var checkpoint in checkpoints.Value)
+            {
+                _checkpoints.Add(checkpoint.ParticipantIdentity, checkpoint);
+            }
         }
 
         Publish(new ReviewUpdate.SessionChanged(resolved.Id));
@@ -861,7 +903,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             else
             {
                 _activeSession = null;
-                _checkpoint = null;
+                _checkpoints.Clear();
                 _currentSession = null;
                 _replayDescriptor = null;
             }
@@ -996,7 +1038,8 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             _pendingTransition = null;
             if (_activeSession?.Id == pending.NextCheckpoint.Session)
             {
-                _checkpoint = pending.NextCheckpoint;
+                _checkpoints[pending.NextCheckpoint.ParticipantIdentity] =
+                    pending.NextCheckpoint;
             }
         }
 

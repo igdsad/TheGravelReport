@@ -1,7 +1,7 @@
 # GravelReview — System Design
 
 - **Status:** Accepted architecture; adaptive-themed runnable MVP implemented, distribution and live-simulator acceptance pending
-- **Document version:** 1.5
+- **Document version:** 1.6
 - **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
@@ -16,7 +16,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A depar
 
 ## 1. Executive summary
 
-GravelReview is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents the active session through a review UI, and lets the user review an incident at two seconds before, exactly at, or two seconds after its recorded time while focusing the local player and applying the stored playback state.
+GravelReview is a local Windows companion for iRacing. It observes the scored incident counters that iRacing exposes for eligible participants in a live field, records participant-scoped incident markers, presents the active session through a review UI, and lets the user review an incident at two seconds before, exactly at, or two seconds after its recorded time while focusing the participant recorded with that incident and applying the stored playback state.
 
 The WPF experience has three durable theme modes: follow the live Windows application theme, force Light, or force Dark. Native WPF semantic resource dictionaries provide the visual system; the configured preference and concrete resolved palette remain separate values in the same immutable presentation state as the rest of the screen.
 
@@ -57,11 +57,11 @@ Implemented at this revision:
 
 - validated domain values plus shared `Result`/`Result<T>` failure primitives;
 - simulator-neutral telemetry, replay, store, and application contract assemblies;
-- cumulative local-member incident detection, durable checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
+- field-wide eligible-participant scored incident detection, independent durable participant checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
 - the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and embedded checksum-pinned DbUp migrations, including the additive theme-preference upgrade;
 - a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, narrow session/driver/camera metadata extraction, and confirmed replay seek/camera/playback control;
 - one coherent `ReviewSnapshot` application read containing revisioned status, the active session and its incidents, stored preferences, and transient driver/camera context;
-- a WPF screen centered on the active session's chronological incident log, with `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, GravelReview branding, and a quiet bottom status bar;
+- a WPF screen centered on the active session's chronological incident log, with `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, GravelReview branding, and a quiet bottom status bar; the row layout remains unchanged and does not yet display the stored incident participant's driver, team, or car;
 - native light/dark WPF palettes plus a status-bar control for durable `FollowDesktop`, `Light`, and `Dark` selection, with live Windows-theme observation and pre-show application of the stored mode;
 - a single immutable `MainWindowState` reduced from explicit UI actions and replaced atomically for top-down WPF rendering; it owns the configured and resolved theme values, and its bounded tail-follow event stream and current status share the exact same event object;
 - a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
@@ -71,7 +71,7 @@ The official archive is evidence, not a linked native or managed runtime depende
 
 Not yet complete or accepted for a public release:
 
-- acceptance against a recorded current real iRacing build, including a permitted redacted session-information fixture;
+- acceptance against a recorded current real iRacing build, including a permitted redacted session-information fixture and field-wide participant-counter validation with `Max Cars = 63`;
 - packaged UI Automation through the independent protocol simulator, broad frame-mutation coverage, crash/power-loss campaigns, mutation/fuzz/stress runs, dependency inventory/SBOM automation, an installer/updater, and a persistent Release log sink;
 - WPF controls for annotations, classification, and explicit reviewed/dismissed state, even though annotation application support and reviewed-state store support already exist;
 - JSON export, remote storage, and synchronization.
@@ -82,7 +82,7 @@ No test result or live-simulator acceptance is implied by this document alone. T
 
 ### 2.1 Primary user outcome
 
-After completing or pausing an iRacing session, a driver can see the incidents observed in the active session, choose `-2 sec`, `0 sec`, or `+2 sec` on one row, and have iRacing move its replay to that explicit offset from the event with the local player and preferred—or current—camera group selected.
+After completing or pausing an iRacing session, a driver can see the scored incidents exposed for eligible participants in the active session, choose `-2 sec`, `0 sec`, or `+2 sec` on one row, and have iRacing move its replay to that explicit offset from the event with the participant recorded on the incident and preferred—or current—camera group selected.
 
 ### 2.2 Primary workflow
 
@@ -90,27 +90,29 @@ After completing or pausing an iRacing session, a driver can see the incidents o
 2. DbUp migrates the local SQLite database to the required schema.
 3. The application waits for iRacing telemetry.
 4. When iRacing connects, the application identifies the active session from validated SDK session evidence.
-5. The incident detector observes changes to `PlayerCarMyIncidentCount`, the local member's cumulative counter.
-6. A counter increase creates a durable incident record containing its replay position and useful session context.
+5. The adapter reads eligible `DriverInfo:Drivers` entries and their cumulative scored `TeamIncidentCount` values, then emits a deterministic participant-counter collection without exposing SDK field names through the telemetry contract.
+6. The detector evaluates every participant against an independent persisted checkpoint. A positive increase creates a durable incident record containing that participant's identity and optional driver/team/car context, its replay position, the new total, and the complete observed delta.
 7. The application publishes a revision and the UI obtains one coherent `ReviewSnapshot`; one reducer transition replaces the immutable top-level state and shows the incident.
 8. The user exits the car; the current policy requires an authoritative `NotOnTrack` sample before replay control.
 9. The user chooses `-2 sec`, `0 sec`, or `+2 sec` on an incident row; double-click means `0 sec`.
 10. The application applies the selected `ReplayOffset` to the stored incident time, clamping a negative result to zero, and preflights the current simulator/session state and stored playback representation before sending an external command.
 11. The replay controller seeks to the explicit target and waits for a later stable telemetry frame to confirm the requested session/time.
-12. The controller focuses the local player with the stored camera-group preference, or preserves the current group when no preference is set, and waits for camera confirmation.
+12. The controller resolves and focuses the participant stored with the incident using the stored camera-group preference, or preserves the current group when no preference is set, and waits for camera confirmation.
 13. The controller applies the stored pause or playback-speed compatibility preference and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
 
 Classification, notes, explicit reviewed/dismissed actions, and export remain follow-on UI capabilities; they are not steps in the current WPF workflow.
 
+The current WPF layout is intentionally unchanged by field-wide collection. Incident rows still show time, incident identity, replay/lap context, points, and review status; they do not yet show the stored driver, team, or car number. Presenting participant attribution is a separate UI enhancement.
+
 ### 2.3 Goals
 
-- Detect and persist incident-count increases for the local member.
+- Detect and persist cumulative scored incident-count increases independently for every eligible participant iRacing exposes in the current field.
 - Preserve the iRacing session number and session time required for exact replay seeking.
 - Present a fast, accessible Windows UI whose primary log contains only the active session's incidents and whose complete visible state arrives and renders as one coherent top-down value.
 - Render a consistent native WPF visual system in Follow desktop, Light, and Dark modes without introducing a third-party theme framework.
-- Show the transient active driver and live iRacing camera-group catalog without persisting simulator-owned display metadata.
+- Show the transient local active-driver header and live iRacing camera-group catalog without persisting that live snapshot context; participant display context captured on an incident remains durable even though the current row does not show it.
 - Seek iRacing replay through the official local SDK broadcast mechanism.
-- Focus the replay on the local player through an optional named camera-group preference.
+- Focus replay on the participant recorded with the incident through an optional named camera-group preference.
 - Report external replay control as successful only after stable telemetry confirms the requested state.
 - Preserve session and incident records across application restarts.
 - Make every behavioral dependency replaceable through a focused interface.
@@ -123,6 +125,8 @@ Classification, notes, explicit reviewed/dismissed actions, and export remain fo
 
 - Assigning fault or blame to drivers.
 - Automatically detecting every contact between every car in the field.
+- Claiming visibility into entrants or incidents that iRacing does not expose to the local client, including a `0x` contact that does not change a scored counter.
+- Displaying per-incident driver, team, or car attribution in the current WPF row layout; the durable model retains that context for a separate presentation enhancement.
 - Replacing iRacing's replay UI or rendering replay video ourselves.
 - Uploading data to a server or providing multi-device synchronization.
 - Calling the remote iRacing Data API.
@@ -142,14 +146,16 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 | IR-CON-001 | The application detects iRacing connection and disconnection without requiring a restart. |
 | IR-SES-001 | The application creates or resumes the correct local session record when telemetry identifies a session. |
 | IR-SES-002 | Valid durable simulator identity evidence resolves to the same application session across reconnect/restart; ambiguous evidence is never heuristically merged. |
-| IR-SES-003 | A malformed or inconsistent frame is transient unavailability, not a session boundary. Recovery before 30 seconds have elapsed since the last successfully decoded sample retains the same connection-scoped key, active application session, checkpoint, and recorded incidents. A real SDK disconnect or expiry of that deadline ends the provisional connection; valid evidence of another simulator session selects that session instead. |
-| IR-INC-001 | A positive increase in the applicable incident counter records one incident marker. |
+| IR-SES-003 | A malformed or inconsistent frame is transient unavailability, not a session boundary. Recovery before 30 seconds have elapsed since the last successfully decoded sample retains the same connection-scoped key, active application session, participant checkpoints, and recorded incidents. A real SDK disconnect or expiry of that deadline ends the provisional connection; valid evidence of another simulator session selects that session instead. |
+| IR-INC-001 | A positive increase in an eligible participant's applicable cumulative scored incident counter records one participant-scoped incident marker. |
 | IR-INC-002 | The marker records both the new total and the positive incident-point delta. |
-| IR-INC-003 | A counter decrease, session transition, or reconnect is handled as a state transition and never as a negative incident. |
+| IR-INC-003 | A participant counter decrease, session transition, or reconnect is handled as a state transition and never as a negative incident. A decrease establishes a new baseline and advances only that participant's counter epoch. |
 | IR-INC-004 | Duplicate or repeated telemetry samples do not create duplicate incident records. |
 | IR-INC-005 | Detector progress and its incident record are persisted atomically so failure, retry, or restart cannot silently lose or duplicate an incident. |
+| IR-INC-006 | Each eligible scored entry exposed in current `DriverInfo:Drivers` has an independent checkpoint keyed by a restart-deterministic participant identity derived from `CarIdx` plus positive `TeamID`, otherwise positive `UserID` only when the row explicitly has no positive team. Missing, malformed, or insufficient identity evidence omits that participant until canonical evidence returns. Changed positive canonical evidence creates a different identity; exact A→B→A reuse of the same canonical evidence is indistinguishable and reuses its checkpoint. One participant's appearance, omission, reset, or driver swap does not reset or corrupt another participant. |
+| IR-INC-007 | One observed positive jump creates one marker with the complete delta, while same-update jumps by different participants create independent markers. `PlayerCarMyIncidentCount` is never used. `PlayerCarTeamIncidentCount` may substitute only when the matching current-session player row supplies the same deterministic identity but lacks a usable row counter; otherwise the adapter emits no local observation and may emit an empty counter collection. A `0x` without a counter change is not observable, and field-wide coverage is bounded by the entries iRacing transmits to this client; intended coverage requires `Max Cars = 63`. |
 | IR-RPY-001 | A recorded incident contains a simulator-neutral replay position with session number and session time. |
-| IR-RPY-002 | Reviewing an incident accepts an explicit `-2 sec`, `0 sec`, or `+2 sec` offset, applies it to the recorded time with a zero lower bound, focuses the local player with the preferred/current camera group, and applies the stored playback state in that order. The compatibility overload without an explicit offset continues to use the stored lead-in. |
+| IR-RPY-002 | Reviewing an incident accepts an explicit `-2 sec`, `0 sec`, or `+2 sec` offset, applies it to the recorded time with a zero lower bound, focuses the participant recorded with the incident using the preferred/current camera group, and applies the stored playback state in that order. The compatibility overload without an explicit offset continues to use the stored lead-in. |
 | IR-RPY-003 | Replay actions unavailable in the current iRacing state are disabled or return a clear structured failure. |
 | IR-STR-001 | Sessions and incidents survive application restart. |
 | IR-STR-002 | Every application data mutation executes inside a transaction. |
@@ -373,17 +379,23 @@ public sealed class TelemetrySample
 {
     public SimulatorSessionDescriptor Session { get; }
     public ReplayPosition Position { get; }
-    public IncidentCounter IncidentCounter { get; }
-    public LapNumber? Lap { get; }
-    public LapDistance? LapDistance { get; }
+    public IReadOnlyList<ParticipantIncidentCounter> IncidentCounters { get; }
     public OnTrackState OnTrackState { get; }
     public UtcInstant ObservedAt { get; }
 
     public static Result<TelemetrySample> TryCreate(/* untrusted values */);
 }
+
+public sealed class ParticipantIncidentCounter
+{
+    public IncidentParticipant Participant { get; }
+    public IncidentCounter IncidentCounter { get; }
+    public LapNumber? Lap { get; }
+    public LapDistance? LapDistance { get; }
+}
 ```
 
-The event types have controlled constructors/factories and carry validated values/reasons omitted from the conceptual sketch. `TelemetrySample` is intentionally simulator-neutral. Raw variable names such as `PlayerCarMyIncidentCount`, memory offsets, YAML nodes, and SDK buffers remain internal to `IncidentReview.Iracing`.
+The event types have controlled constructors/factories and carry validated values/reasons omitted from the conceptual sketch. `TelemetrySample` is intentionally simulator-neutral and snapshots a bounded, ordered, identity-unique, possibly empty participant-counter collection. Raw variable names such as `DriverInfo:Drivers`, `TeamIncidentCount`, `TeamID`, and `UserID`, plus memory offsets, YAML nodes, and SDK buffers, remain internal to `IncidentReview.Iracing`.
 
 Connection, disconnection, transient unavailability, and samples are observable without using exceptions as routine stream messages. The adapter owns reconnection and emits state transitions in order. Cancellation ends enumeration with `OperationCanceledException`; an unexpected defect faults the stream and reaches the application runtime's top-level owner.
 
@@ -398,7 +410,8 @@ public interface IReplayController
         ReplayPosition position,
         CancellationToken cancellationToken);
 
-    ValueTask<Result> FocusPlayerAsync(
+    ValueTask<Result> FocusParticipantAsync(
+        IncidentParticipant participant,
         string? preferredCamera,
         CancellationToken cancellationToken);
 
@@ -427,7 +440,7 @@ public sealed class ReplayPosition
 }
 ```
 
-`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. `ReplayOffset` is a separately validated signed duration used for explicit relative navigation; applying it to `SessionTime` has a zero lower bound. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving it to the local player, group number, and camera number is the adapter's responsibility.
+`ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. `ReplayOffset` is a separately validated signed duration used for explicit relative navigation; applying it to `SessionTime` has a zero lower bound. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving the incident's stored participant identity to the current car index/raw car number and resolving the group/camera numbers are the adapter's responsibility.
 
 `IReplayContextReader` is a read-only, synchronous snapshot boundary over context already copied from the latest stable simulator frame. It MUST NOT issue commands, block waiting for telemetry, expose mutable adapter state, or leak raw iRacing YAML/indices. Its immutable `ReplayContext` contains only a validated optional driver display name, an ordered case-insensitively unique camera-group catalog, and an optional current group that is a member of that catalog. Unavailability is a structured `Result` failure. The application may deliberately substitute empty transient context while preserving durable incident/session state; the presentation never reaches into `IncidentReview.Iracing`.
 
@@ -465,7 +478,7 @@ public interface IStoreInitializer
 }
 ```
 
-Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetIncidents`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `AnnotateIncident`, `MarkIncidentReviewed`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
+Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetIncidents`, `GetIncidentCheckpoints`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `AnnotateIncident`, `MarkIncidentReviewed`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
 
 This RPC-shaped boundary is deliberate. One `ExecuteAsync` call is one coarse-grained atomic operation, whether it is handled locally by SQLite or sent to a future server. Arbitrary callbacks are forbidden because they cannot be transported honestly and would require a remote transaction to remain open while client code runs. A query executes against one consistent snapshot for its entire operation and returns a complete immutable result; callers do not assemble one logical read from a sequence of independently timed store calls.
 
@@ -567,6 +580,8 @@ Initial concepts:
 
 - `SessionIdentity`: application-owned stable identifier, generated before the session-creation command.
 - `SimulatorSessionDescriptor`: validated simulator-owned identity evidence, session number/mode, and whether that evidence is durable or connection-scoped.
+- `ParticipantIdentity`: bounded opaque identity scoped to one simulator session; only the owning adapter interprets how it was formed.
+- `IncidentParticipant`: a participant identity plus optional bounded driver, team, and car-number context captured with an observation/incident.
 - `IncidentId`: client-generated stable identity, preferably UUIDv7.
 - `Incident`: immutable core record plus controlled annotation/status transitions.
 - `ReplayPosition`: session number and session-relative time.
@@ -577,7 +592,7 @@ Initial concepts:
 - `IncidentAnnotation`: user notes and classification changes.
 - `UserPreferences`: validated durable review behavior such as lead-in, playback, optional camera preference, and the configured `ThemePreference` policy.
 
-Domain values validate themselves at creation through private constructors and `TryCreate`/factory methods returning `Result<T>`. This applies at every untrusted boundary: SDK decoding, database mapping, command-line/configuration input, and future wire decoding. Invalid session times, negative counters, NaN/out-of-range percentages, non-UTC instants, invalid lap numbers, and empty identities do not circulate through the system. Optional SDK data is represented explicitly—such as `LapNumber?` and `LapDistance?`—rather than by magic sentinel values.
+Domain values validate themselves at creation through private constructors and `TryCreate`/factory methods returning `Result<T>`. This applies at every untrusted boundary: SDK decoding, database mapping, command-line/configuration input, and future wire decoding. Invalid session times, negative counters, NaN/out-of-range percentages, non-UTC instants, invalid lap numbers, empty participant identities, and oversized/malformed display text do not circulate through the system. Optional SDK data is represented explicitly—such as `LapNumber?`, `LapDistance?`, and participant display context—rather than by magic sentinel values.
 
 The domain does not know how telemetry arrived, how replay commands are transmitted, how records are stored, or how views render them.
 
@@ -591,55 +606,62 @@ The application resolves the descriptor before incident detection: query `GetSes
 
 | Observation | Session identity action | Detector action |
 |---|---|---|
-| Repeated sample with the same validated durable simulator key and session number | Reuse current identity | Continue from current/persisted checkpoint |
-| Disconnect/reconnect in the same app run with the same durable key | Reuse identity | Reload/confirm checkpoint; do not synthesize an incident |
-| App restart while iRacing reports the same durable key | Resolve existing identity from SQLite | Resume from persisted checkpoint |
+| Repeated sample with the same validated durable simulator key and session number | Reuse current identity | Continue from current/persisted participant checkpoints |
+| Disconnect/reconnect in the same app run with the same durable key | Reuse identity | Reload/confirm participant checkpoints; do not synthesize an incident |
+| App restart while iRacing reports the same durable key | Resolve existing identity from SQLite | Resume from persisted participant checkpoints |
 | Replay session number changes | Resolve/create a new identity even when the enclosing subsession is unchanged | Finalize prior context and establish a new baseline |
 | Durable subsession/session-instance evidence changes | Resolve/create a new identity | Establish a new baseline |
 | Required identity evidence is missing, malformed, or contradictory | Create a clearly marked connection-scoped provisional identity; never guess a cross-restart match | Establish a baseline and surface degraded identity state |
 | Replay matches the same provisional connection key and session number | Retain the active provisional identity for that connection only; mode is not identity evidence | Pause incident detection; replay seeking remains available |
-| Malformed or inconsistent frame followed by recovery before the source's 30-second last-successfully-decoded-sample deadline | Report transient unavailability and retain the logical connection key and active application session | Retain the persisted checkpoint and incidents; resume from the next valid sample |
+| Malformed or inconsistent frame followed by recovery before the source's 30-second last-successfully-decoded-sample deadline | Report transient unavailability and retain the logical connection key and active application session | Retain persisted participant checkpoints and incidents; resume from the next valid sample |
 | Real SDK disconnect or expiry of the source's last-successfully-decoded-sample deadline, followed by reconnect with only provisional evidence | Create a new provisional identity unless future verified evidence proves continuity | Establish a baseline; do not merge records heuristically |
 | Replay mode matches an existing durable key | Reuse identity for review only | Pause incident detection; replay seeking remains available |
 | Standalone/unmatched replay playback | Use an ephemeral replay context | Do not persist inferred incidents or create a durable session automatically |
 
-Changing track/car display metadata does not change identity. Once a provisional session later gains trustworthy durable evidence, merging or re-keying records is not automatic in the first release; that workflow requires a separately tested command so uniqueness and user history cannot be corrupted silently.
+Changing session track/car display metadata does not change session identity. Once a provisional session later gains trustworthy durable evidence, merging or re-keying records is not automatic in the first release; that workflow requires a separately tested command so uniqueness and user history cannot be corrupted silently.
 
 ## 9. Incident detection
 
-After Section 8.1 resolves the simulator descriptor, `Application` maps the telemetry sample to a domain `IncidentObservation` carrying the application `SessionIdentity`. The MVP detector observes that ordered stream and the incident counter relevant to the local player/team.
+After Section 8.1 resolves the simulator descriptor, `Application` maps each member of the telemetry sample's ordered participant-counter collection to a domain `IncidentObservation` carrying the application `SessionIdentity` and `IncidentParticipant`. The detector evaluates every eligible participant independently.
 
 ```text
-first sample in session
-    → establish baseline; do not emit incident
+first observation for participant in session
+    → establish that participant's baseline; do not emit incident
 
-same session and current count == prior count
+same session/participant and current count == prior count
     → no change
 
-same session and current count > prior count
+same session/participant and current count > prior count
     → emit one marker with delta = current - prior
 
-current count < prior count
-    → treat as reset/discontinuity; establish new baseline
+participant omitted from one or more samples
+    → retain its checkpoint; do not synthesize a reset or incident
+
+same session/participant and current count < prior count
+    → treat as that participant's reset/discontinuity; advance its epoch and establish a new baseline
 
 session identity changes
-    → finalize old detector state; establish baseline for new session
+    → finalize all old detector state; establish independent baselines in the new session
 ```
 
-The marker time is initially the first observed sample containing the increased counter. A small in-memory telemetry ring buffer MAY later refine the event context, but that refinement must not change the persistence or replay interfaces.
+The iRacing adapter derives an opaque participant identity independently from every authoritative current roster row, so the value is reproducible after process restart: `car-index:{CarIdx}:team:{TeamID}` for a positive `TeamID`, otherwise `car-index:{CarIdx}:user:{UserID}` only when the row explicitly supplies no positive team and a positive user. Missing, malformed, or insufficient identity evidence omits the row instead of inventing a weaker identity or using process memory. Changed positive canonical evidence creates a different identity. Exact A→B→A reuse of the same `CarIdx` and canonical ID is indistinguishable from the earlier entrant with the available SDK fields and therefore reuses that checkpoint; distinguishing it requires another durable simulator identifier or persisted generation evidence. For a team entry, cumulative `TeamIncidentCount` and the positive team identity continue across a driver-only `UserID`/display change. Updated driver display text is incident context, not detector identity. The application/domain/store do not parse or reinterpret this adapter-owned format.
+
+The marker time is initially the first observed sample containing the increased counter. A jump of multiple scored points creates one marker with the complete positive delta; the detector does not invent timestamps for unobserved intermediate values. Multiple participants whose counters rise in the same sample create independent markers in deterministic participant-identity order. A small in-memory telemetry ring buffer MAY later refine the event context, but that refinement must not change the persistence or replay interfaces.
 
 The detector MUST be deterministic and pure with respect to an ordered input sequence. Connection management, persistence, and UI notification surround it but are not part of its decision logic. Its durable progress follows this protocol:
 
-1. On first observation or restart, load the session's persisted `IncidentCheckpoint` before evaluating new samples.
-2. For a new baseline or counter reset, create one `EstablishIncidentCheckpoint` command. A reset advances a monotonically increasing counter epoch.
+1. On first observation or restart, load all persisted `IncidentCheckpoint` values for the session before evaluating new samples; checkpoints are keyed by participant identity.
+2. For a new participant baseline or counter reset, create one `EstablishIncidentCheckpoint` command. A reset advances that participant's monotonically increasing counter epoch without changing another participant.
 3. For an increase, generate the `IncidentId` and `OperationId` once, then create one `RecordDetectedIncident` command containing the expected checkpoint, the complete incident, and the next checkpoint.
 4. The store compares the expected checkpoint, inserts the incident, updates the checkpoint, and records the completed operation in one transaction.
 5. The in-memory detector state advances only after success or after reconciliation proves an indeterminate commit succeeded. Until then, the same command remains pending; later telemetry cannot silently skip it.
 6. On restart or retry, the operation identifier and unique incident key make the transition idempotent. A genuine checkpoint mismatch returns a conflict for explicit reconciliation rather than guessing.
 
-The deterministic incident uniqueness key is `(session_id, counter_epoch, incident_points_total)`. A cumulative jump creates one marker with the complete positive delta; the app does not invent event timing for unobserved intermediate counter values.
+The deterministic incident uniqueness key is `(session_id, participant_identity, counter_epoch, incident_points_total)`. Temporary roster omission never deletes or rewrites a participant checkpoint. On reappearance, the next value is compared with the retained value: equality is unchanged, an increase records the complete delta, and a decrease establishes a reset baseline without an incident.
 
-Known limitation: the local SDK signals available and their semantics must be validated against actual iRacing session types. The first release must not claim reliable detection of every other driver's incident or assign causality.
+The adapter never uses `PlayerCarMyIncidentCount`, whose personal semantics cannot safely share a checkpoint with a team/car counter. When `SessionInfo:CurrentSessionNum` matches the raw live `SessionNum`, the matching player row supplies a deterministic canonical identity, and only that row's `TeamIncidentCount` is unavailable, the adapter may substitute `PlayerCarTeamIncidentCount` under that same identity because it has whole-team semantics. If current-session or identity evidence is unavailable, the adapter emits no local participant observation. A telemetry sample may therefore have no counters while still updating session, position, on-track state, health, and replay context. On later canonical reappearance, the durable checkpoint provides the comparison; no in-memory authority or alias state is required. Other temporarily omitted entrants remain absent from the sample while their application checkpoints are retained.
+
+Known limitation: this is field-wide tracking of *eligible scored counters exposed to this local client*, not direct contact detection and not proof of causality. Pace-car and spectator entries are excluded. A `0x` does not change `TeamIncidentCount` and is therefore invisible to this detector. [iRacing's documented incident-visibility policy](https://www.iracing.com/2016-season-3-release-notes/) restricts ordinary clients in a live race to their own team's count while admins can see the field; non-race and completed-race visibility is broader. Session type, admin/broadcaster context, and connection/server transmission still determine which entries this client receives. Intended field-wide use requires **Max Cars = 63**, but [iRacing explicitly warns](https://support.iracing.com/support/solutions/articles/31000149355-connection-type-max-cars) that 63 alone does not guarantee every car will be transmitted. These semantics still require recorded validation against current real iRacing builds, so the first release MUST NOT promise incidents that iRacing omits or withholds.
 
 ## 10. iRacing integration
 
@@ -653,11 +675,11 @@ Responsibilities:
 
 - Open and monitor the iRacing shared-memory mapping and synchronization event.
 - Copy telemetry frames promptly before processing to avoid holding SDK-owned buffers.
-- Parse only the session metadata needed by the application.
+- Parse only the session metadata needed for eligible participant counters, identity/display context, and replay focus.
 - Translate raw telemetry into immutable `TelemetrySample` values.
 - Detect connection, disconnection, moving or paused replay, and on-track state.
-- Resolve the local player's display/focus metadata and named camera groups from the current session information, then expose only validated simulator-neutral display context through `IReplayContextReader`.
-- Encode replay commands for session-time search, player/camera focus, pause, and playback speed.
+- Resolve the local player's transient header context, every focusable recorded participant, and named camera groups from current session information, then expose only validated simulator-neutral display context through public contracts.
+- Encode replay commands for session-time search, recorded-participant/camera focus, pause, and playback speed.
 - Convert the fire-and-forget Windows transport into applied-result semantics by confirming each command against a later stable telemetry frame.
 - Translate expected integration failures into stable `Result` errors.
 
@@ -690,7 +712,7 @@ Frame reads follow the official buffer-generation/tick protocol: copy the select
 
 iRacing session information is YAML-like text, not JSON. The adapter exposes only the few validated fields required by the application. A narrowly scoped decoder may be repository-owned and fixture/fuzz tested against the recorded official samples; it must not pretend to be a general YAML parser or use substring/line-splitting that ignores escaping and structure. If official fixtures demonstrate that a conforming YAML library is necessary, that library requires its own dependency ADR and supply-chain review before use.
 
-The telemetry reader and downstream processing are decoupled by a bounded single-reader channel. Its production capacity is 256 and validated configuration permits 2 through 4,096 pending meaningful events. The source publishes connection transitions and samples only when session, mode, on-track state, or incident counter changes; position-only frames are coalesced. A distinct transition is never silently dropped: capacity exhaustion drains already accepted events, reports the stable buffer-overflow error, and ends that observation. The producer is canceled and joined on enumeration cancellation, early consumer disposal, and adapter disposal.
+The telemetry reader and downstream processing are decoupled by a bounded single-reader channel. Its production capacity is 256 and validated configuration permits 2 through 4,096 pending meaningful events. The source publishes connection transitions and samples only when session, mode, on-track state, or the identity/counter projection of the participant set changes; position-only frames are coalesced. Roster omission or reappearance is therefore meaningful even when remaining counts are unchanged, including transitions to or from an empty participant set; repeated identical omissions coalesce. A distinct transition is never silently dropped: capacity exhaustion drains already accepted events, reports the stable buffer-overflow error, and ends that observation. The producer is canceled and joined on enumeration cancellation, early consumer disposal, and adapter disposal.
 
 Replay review behavior:
 
@@ -699,9 +721,9 @@ Replay review behavior:
 3. Preflight pause or playback speed through `ValidatePlayback`; an unrepresentable preference fails before any external command.
 4. Recheck that the incident's application session and replay session number are the ones currently loaded, including the stricter continuity rule for connection-scoped identities.
 5. Call `SeekAsync` and wait for a later stable frame whose replay session and time confirm the target. The iRacing adapter accepts a time within 250 milliseconds because search and frame publication are asynchronous.
-6. Call `FocusPlayerAsync`. The adapter resolves the local player's `CarNumberRaw` and requested camera group from current session information, selects the group's first camera for the command, then confirms the local player's car index and group. It deliberately does not require the same sub-camera number because an iRacing TV group may advance its shot automatically. With no preferred group, the adapter preserves the currently reported group/camera while focusing the local player.
+6. Call `FocusParticipantAsync` with the `IncidentParticipant` stored on the incident. The adapter first requires metadata `CurrentSessionNum` to equal both the raw live `SessionNum` and active `ReplaySessionNum`, then exact-matches the stored opaque identity against a freshly derived current roster identity to obtain `CarNumberRaw`. It resolves the requested camera group, selects its first camera, and confirms in a later frame that the same session and exact identity still resolve to the same car index/raw number and that the reported camera car index/group match. It deliberately does not require the same sub-camera number because an iRacing TV group may advance its shot automatically. With no preferred group, the adapter preserves the currently reported group/camera while focusing the recorded participant. Different current identity evidence, an absent or ambiguous participant, or a session mismatch fails before broadcasting or prevents confirmation rather than focusing a replacement or falling back by car index. Incidents migrated under `local-player` retain a narrowly scoped current-driver compatibility path under the same session guards.
 7. Call `SetPlaybackAsync` and confirm the requested speed and slow-motion flag in a later stable frame.
-8. Return one structured, actionable failure for the exact failed precondition or stage. Seek, camera, and playback confirmation have independent ten-second default windows and distinct codes: `iracing.replay.seek-timeout`, `iracing.replay.camera-timeout`, and `iracing.replay.playback-timeout`. Missing/ambiguous player or camera metadata and a named group absent from the current session are separate failures.
+8. Return one structured, actionable failure for the exact failed precondition or stage. Seek, camera, and playback confirmation have independent ten-second default windows and distinct codes: `iracing.replay.seek-timeout`, `iracing.replay.camera-timeout`, and `iracing.replay.playback-timeout`. Missing/ambiguous participant or camera metadata and a named group absent from the current session are separate failures.
 
 `ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
 
@@ -776,6 +798,10 @@ Session
 Incident
   incident_id                text primary key
   session_id                 text foreign key
+  participant_identity       text
+  driver_name                text/null
+  team_name                  text/null
+  car_number                 text/null
   replay_session_number      integer
   replay_session_time_ms     integer
   observed_at_utc_ms         integer
@@ -791,12 +817,14 @@ Incident
   updated_at_utc_ms          integer
 
 IncidentCheckpoint
-  session_id                 text primary key, foreign key
+  session_id                 text foreign key
+  participant_identity       text
   counter_epoch              integer
   last_incident_points_total integer
   last_replay_session_number integer
   last_replay_session_time_ms integer
   updated_at_utc_ms          integer
+  primary key (session_id, participant_identity)
 
 StoreOperation
   operation_id               text primary key
@@ -815,7 +843,7 @@ ApplicationPreferences
   updated_at_utc_ms          integer
 ```
 
-Identifiers use canonical lowercase UUID text initially; timestamps use UTC Unix milliseconds in `INTEGER` columns; booleans use constrained `0`/`1`; enums use explicitly assigned stable integer codes. Each command has a stable `command_kind` and positive schema version. The operation fingerprint is SHA-256 over that kind/version plus a handler-owned canonical, length-delimited binary encoding of the persisted fields—it does not introduce JSON into the store path. Encoding, field order, normalization, and version are release contracts protected by golden vectors. Existing command versions remain readable/reconcilable for every supported database upgrade; changing their encoding in place is forbidden, and a new shape receives a new version. `Incident` has a unique constraint on `(session_id, counter_epoch, incident_points_total)` in addition to its primary key. Check constraints enforce non-negative counters/times, positive deltas, valid percentages, and known status/preference values. Foreign keys specify deliberate delete behavior rather than relying on provider defaults.
+Identifiers use canonical lowercase UUID text initially; participant identities are bounded opaque text; timestamps use UTC Unix milliseconds in `INTEGER` columns; booleans use constrained `0`/`1`; enums use explicitly assigned stable integer codes. Each command has a stable `command_kind` and positive schema version. The operation fingerprint is SHA-256 over that kind/version plus a handler-owned canonical, length-delimited binary encoding of the persisted fields—it does not introduce JSON into the store path. Encoding, field order, normalization, and version are release contracts protected by golden vectors. Existing command versions remain readable/reconcilable for every supported database upgrade; changing their encoding in place is forbidden, and a new shape receives a new version. `Incident` has a unique constraint on `(session_id, participant_identity, counter_epoch, incident_points_total)` in addition to its primary key. `IncidentCheckpoint` has one row per `(session_id, participant_identity)`. Check constraints enforce non-negative counters/times, positive deltas, bounded participant/display text, valid percentages, and known status/preference values. Foreign keys specify deliberate delete behavior rather than relying on provider defaults.
 
 Client-generated identifiers, operation identifiers, and explicit timestamps preserve a credible path to remote synchronization. Application records remain separate from SQLite row models and future wire DTOs. Mutable user preferences—including theme policy—are durable application state and go through `IStore`; host/deployment settings such as database path, logging level, and diagnostic switches remain validated startup configuration and are not mixed with user preferences. A theme change rebuilds the complete validated `UserPreferences` value and executes one `UpdatePreferences` command, so replay lead-in, pause, speed, and camera cannot be lost by a partial preference write.
 
@@ -878,7 +906,7 @@ DbUp runs before the store is available to application use cases. The store may 
 
 DbUp is the deliberate migration path outside normal `IStore.ExecuteAsync`; it runs before application writes and owns its own transaction semantics.
 
-The current manifest contains checksum-pinned `001_InitialSchema.sql` and `002_AddThemePreference.sql`. Migration `002` adds the constrained, non-null `theme_preference` column with numeric default `0` (`FollowDesktop`) and advances `PRAGMA user_version` to 2. It does not rewrite migration `001`; applying it to a version-1 database preserves every existing replay-preference field. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
+The current manifest contains checksum-pinned `001_InitialSchema.sql`, `002_AddThemePreference.sql`, and `003_AddIncidentParticipants.sql`. Migration `002` adds the constrained, non-null `theme_preference` column with numeric default `0` (`FollowDesktop`) and advances `PRAGMA user_version` to 2. Migration `003` adds incident participant identity plus optional driver/team/car context, replaces the old session-only checkpoint with a composite `(session_id, participant_identity)` checkpoint, replaces incident uniqueness with the participant-scoped key, maps existing incidents/checkpoints to the compatibility identity `local-player`, and advances `PRAGMA user_version` to 3. Neither migration rewrites an earlier script; upgrades preserve existing incident, checkpoint, and replay-preference data. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
 
 ### 11.7 Export
 
@@ -994,7 +1022,7 @@ Concrete implementations are `internal sealed`. Each implementation assembly exp
 
 The host explicitly adds code defaults, the `INCIDENTREVIEW_`-prefixed environment provider, and command-line configuration, then binds and validates typed options. It registers those options before calling implementation modules; adapter assemblies do not accept a general-purpose `IConfiguration` object or select configuration sections themselves.
 
-WPF requires an STA entry thread. The host executable owns that constraint. Container validation, store initialization, migration, and schema/capability validation finish before entering the WPF dispatcher. Session/checkpoint state is loaded lazily as telemetry and UI queries require it. Synchronous joins needed to preserve STA startup are confined to the composition root before a UI synchronization context exists.
+WPF requires an STA entry thread. The host executable owns that constraint. Container validation, store initialization, migration, and schema/capability validation finish before entering the WPF dispatcher. Session/participant-checkpoint state is loaded lazily as telemetry and UI queries require it. Synchronous joins needed to preserve STA startup are confined to the composition root before a UI synchronization context exists.
 
 ### 13.2 Container rules
 
@@ -1100,7 +1128,7 @@ The implemented GravelReview UI contains:
 
 - the `assets/branding/logo-simplified.png` GravelReview mark, product name, and transient active-driver display name in a compact raised header/toolbar; the host executable/window uses `assets/branding/favicon-simplified.ico`;
 - one primary chronological incident log derived only from `ReviewSnapshot.ActiveSession`, with its own horizontal and vertical scrolling and no historical-session selector;
-- recorded time, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and review status for each incident; the full stable incident ID remains the command identity and is available as a tooltip;
+- recorded time, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and review status for each incident; the full stable incident ID remains the command identity and is available as a tooltip; the stored participant's driver/team/car context is deliberately not shown in the unchanged row layout yet;
 - `-2 sec`, `0 sec`, and `+2 sec` actions on each incident row; double-click dispatches the `0 sec` action;
 - no Notes column and no annotation/classification controls in the primary UI, while those durable domain/store capabilities remain intact for future workflows;
 - a collapsed-by-default **Advanced** panel containing a timestamped bounded event stream with horizontal/vertical scrolling and tail-follow behavior, plus a live iRacing camera-group dropdown and Save action;
@@ -1231,10 +1259,10 @@ Traceability does not replace assertions. A test must fail for a meaningful viol
 Production behavior is tested through the same contracts used by consumers where the current suite provides that coverage.
 
 - `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
-- The SQLite suite validates observable on-disk behavior against real temporary databases, including fresh schema version 2, version-1-to-version-2 theme migration, default `FollowDesktop`, invalid persisted enum rejection, preference round-trip, command fingerprints, and preservation of all replay preferences.
-- The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed-input recovery without session-key rotation, persistent invalid input across reader recreation and the source-level deadline, moving and paused-session-screen replay classification, replay suppression, and bounded-buffer behavior against an independent process.
-- Replay tests exercise intent validation, representability, availability, bounded/validated transient driver and camera context, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Contract-shape tests require `IReplayContextReader` to remain a command-free simulator-neutral read boundary. Independently authored packed-message vectors cover seek, camera focus, and playback.
-- Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, explicit negative/zero/positive offsets, coherent snapshot anchor retry, transient-context degradation, monotonically increasing revisions, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
+- The SQLite suite validates observable on-disk behavior against real temporary databases, including fresh schema version 3, historical theme and participant migrations, independent participant checkpoints and uniqueness, default `FollowDesktop`, invalid persisted enum rejection, preference round-trip, command fingerprints, and preservation of all replay preferences.
+- The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed-input recovery without session-key rotation, persistent invalid input across reader recreation and the source-level deadline, moving and paused-session-screen replay classification, eligible participant filtering, deterministic identity omission/change/recreation, opponent-only counter publication, roster-reorder coalescing, empty participant sets, safe local team-scalar substitution without personal-scalar mixing, replay suppression, and bounded-buffer behavior against an independent process.
+- Replay tests exercise intent validation, representability, availability, bounded/validated transient driver and camera context, exact canonical recorded-participant resolution, opponent focus, explicit identity-change refusal, live/replay session-metadata mismatch refusal, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Contract-shape tests require `IReplayContextReader` to remain a command-free simulator-neutral read boundary. Independently authored packed-message vectors cover seek, participant camera focus, and playback.
+- Application identity/workflow tests cover durable and provisional session identity, independent participant checkpoints, counter transitions/reset/omission, batched and simultaneous participant increases, replay-only suppression, reconciliation, recorded-participant replay focus, explicit negative/zero/positive offsets, coherent snapshot anchor retry, transient-context degradation, monotonically increasing revisions, and runtime lifecycle. The full real-store and real-simulator identity matrix remains an acceptance goal.
 - Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, selection retention, selector idempotence, unchanged collection identity, dirty camera-draft preservation across automatic refresh, bounded eviction, reference identity between `CurrentStatusEvent` and the event-log tail, all theme mappings/cycle transitions, live desktop changes in Follow desktop, and ignored desktop changes in forced modes. Theme-controller/source tests independently cover registry interpretation, safe fallback, subscription disposal, resolution, and single-palette resource replacement. View-model/desktop-startup tests verify that stored policy seeds state before display, render-time selector write-back cannot feed back into state, an isolated shown window survives populated incident/camera refresh with Advanced expanded, successful persistence preserves replay preferences, and persistence failure restores the prior state before emitting its exact error, without constructing a second visible state. Shown-window crash probes run in a child process with a hard timeout because fatal runtime failures such as stack overflow cannot be caught by the test host.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
@@ -1322,10 +1350,11 @@ SQLite integration tests include at least:
 - golden command fingerprints and same-`OperationId` reconciliation across every supported command/database version upgrade;
 - snapshot-consistent aggregate queries during concurrent reads/writes;
 - checkpoint conflict, persistence failure, restart, and retry without a lost or duplicate incident;
+- independent participant omission, reappearance, reset, driver-swap, batched-delta, and same-sample multi-participant transitions without cross-contamination;
 - hostile-looking values containing quotes, semicolons, comments, SQL keywords, and Unicode, stored verbatim through parameters;
 - large note text and boundary numeric values.
 
-The current suite covers the core successful/rollback/idempotency/indeterminate/cancellation/constraint/migration/schema/hostile-value cases. It does not yet satisfy every item above—especially OS locking, read-only/full/corrupt storage, every occurrence sweep, historical multi-version upgrades, concurrent snapshot stress, or process termination—so this remains the release matrix rather than a claim of completion.
+The current suite covers the core successful/rollback/idempotency/indeterminate/cancellation/constraint/migration/schema/hostile-value cases, including focused participant-scoped storage cases. It does not yet satisfy every item above—especially OS locking, read-only/full/corrupt storage, every occurrence sweep, all historical multi-version paths, concurrent snapshot stress, or process termination—so this remains the release matrix rather than a claim of completion.
 
 For the transaction reliability kernel, process-termination tests MUST use a child-process harness in Release verification so abrupt termination is not simulated merely by throwing an exception. The explicit crash matrix terminates at least at these named checkpoints:
 
@@ -1360,9 +1389,9 @@ A mutation run/catalog is not implemented yet. A third-party mutation tool such 
 
 The current deliverable tests launch the Release host executable with `--verify-startup` and a unique temporary database and inspect its compiled identity metadata. They exercise the real Generic Host registrations, SQLitePCL initialization, DbUp migration, schema validation, application runtime start/stop, host shutdown, database creation, copied iRacing third-party notice, `GravelReview` product/title metadata, and preservation of the `IncidentReview.Host.Wpf` assembly identity. They assert a successful exit and clean only their owned temporary directory. This is useful startup/identity evidence, but it is not a packaged install test and does not drive the WPF UI.
 
-`IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process, including a coalesced telemetry frame that confirms an outstanding seek. Separately, replay tests verify packing through the implementation's recording-sender testing facade and independent golden vectors, and a Windows-only test sends the production broadcast to a hidden native top-level receiver and asserts the exact delivered `wParam`/`lParam`. The protocol simulator and native receiver are not yet combined into one packaged end-to-end peer.
+`IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, participant-bearing session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process, including opponent-only participant changes and a coalesced telemetry frame that confirms an outstanding seek. Separately, replay tests verify packing through the implementation's recording-sender testing facade and independent golden vectors, and a Windows-only test sends the production broadcast to a hidden native top-level receiver and asserts the exact delivered `wParam`/`lParam`. The protocol simulator and native receiver are not yet combined into one packaged end-to-end peer.
 
-The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; use compatibility-stable WPF `IncidentReview.*` Automation IDs to invoke each of the `-2 sec`, `0 sec`, and `+2 sec` actions; independently validate the corresponding seek offset plus camera/playback broadcasts; and publish later confirming telemetry for each stage. It must also verify the active-session-only incident log, compact/full incident identity pair, transient driver header, live camera dropdown, collapsed Advanced panel, tail-follow behavior, and same-object event-tail/current-status invariant. Theme acceptance MUST cover keyboard activation and automation naming, all three persisted modes across restart, both palettes and interaction states, live desktop switching only in Follow desktop, persistence-failure rollback, common Windows scaling levels, and high-contrast behavior. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
+The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against one OS-level protocol peer; publish independent participant-counter changes; use compatibility-stable WPF `IncidentReview.*` Automation IDs to invoke each of the `-2 sec`, `0 sec`, and `+2 sec` actions; independently validate the corresponding seek offset plus recorded-participant camera/playback broadcasts; and publish later confirming telemetry for each stage. It must also verify the active-session-only incident log, its deliberately unchanged rows without participant attribution, compact/full incident identity pair, transient driver header, live camera dropdown, collapsed Advanced panel, tail-follow behavior, and same-object event-tail/current-status invariant. Theme acceptance MUST cover keyboard activation and automation naming, all three persisted modes across restart, both palettes and interaction states, live desktop switching only in Follow desktop, persistence-failure rollback, common Windows scaling levels, and high-contrast behavior. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
 
 Real iRacing acceptance follows a versioned checklist with captured Windows, simulator, SDK-baseline, and app versions. It supplements automated protocol tests; it does not replace them, and it has not yet been completed for this revision.
 
@@ -1759,14 +1788,14 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 ### Milestone 2 — Simulator-neutral application slice
 
 - Implement domain identities, incident detector, and application use cases.
-- Use scripted telemetry, recording replay, deterministic IDs/clocks, and in-memory store.
-- Verify the complete detect → store → list → review workflow without iRacing.
+- Use scripted multi-participant telemetry, recording replay, deterministic IDs/clocks, and in-memory store.
+- Verify the complete participant-scoped detect → store → list → review workflow without iRacing.
 - Supply presentation consumers with one revisioned `ReviewSnapshot`; retry reads when their application anchor changes and support explicit signed `ReplayOffset` navigation.
 
 ### Milestone 3 — iRacing adapter
 
-- Implement and fixture-test shared-memory decoding.
-- Implement replay seek, local-player camera focus, and playback encoding with later stable-telemetry confirmation.
+- Implement and fixture-test shared-memory decoding plus bounded `DriverInfo:Drivers[].TeamIncidentCount` extraction, eligible-entry filtering, and opaque participant identity.
+- Implement replay seek, recorded-participant camera focus, and playback encoding with later stable-telemetry confirmation.
 - Implement `IReplayContextReader` over the latest stable frame for bounded simulator-neutral active-driver and live camera-group context.
 - Build the external protocol simulator used by packaged-deliverable tests.
 - Validate connection/reconnect and simulator-state behavior.
@@ -1775,7 +1804,7 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 ### Milestone 4 — GravelReview WPF experience
 
 - Render only `MainWindowState` from the root; route data-only actions through a pure reducer and replace the complete immutable state on the dispatcher.
-- Show the active-session incident log, transient driver header, compact/full identity pair, and per-row `-2 sec`, `0 sec`, and `+2 sec` actions.
+- Show the active-session incident log, transient local-driver header, compact/full incident identity pair, and per-row `-2 sec`, `0 sec`, and `+2 sec` actions. Keep the current row layout unchanged; incident participant attribution is a later UI enhancement.
 - Provide the collapsed Advanced panel with bounded tail-follow events and the live iRacing camera selector; derive current status from the exact event-log-tail object.
 - Preserve dirty camera drafts across automatic snapshots, reject stale revisions, and retain hidden playback/pause/lead-in compatibility values.
 - Keep session history and Notes out of the primary UI while retaining their lower-layer contracts and durable records.
@@ -1844,7 +1873,7 @@ A feature is not done until:
 - Architecture and resolved-dependency allowlist results.
 - Locked restore, vulnerability audit, licenses, and SBOM.
 - Hashes proving the tested and shipped artifacts are the same bytes.
-- Real-iRacing acceptance checklist with Windows, iRacing, SDK, and app versions.
+- Real-iRacing acceptance checklist with Windows, iRacing, SDK, and app versions; `Max Cars = 63`; solo/team/hosted/admin visibility; eligible field roster; identifier loss/recovery, explicit identity change, and exact-canonical slot-reuse ambiguity; local team-scalar substitution and restart-safe abstention; omission/reappearance; counter reset; driver swap; batched and simultaneous deltas; `0x` non-detection; and exact recorded-participant replay focus/session-refusal evidence.
 
 ## 22. Initial architecture decisions
 
@@ -1869,7 +1898,7 @@ A feature is not done until:
 
 ## 23. Open questions requiring evidence or product decisions
 
-1. Which exact iRacing incident counters are reliable in solo, team, hosted, and replay sessions?
+1. In current real iRacing builds, which eligible `DriverInfo:Drivers[].TeamIncidentCount` entries are transmitted in solo, team, hosted, admin, and broadcaster contexts with `Max Cars = 63`, and what visibility differences must be communicated to users?
 2. How much delay exists between the physical event and incident-counter update, and should the marker time be refined from a telemetry ring buffer?
 3. Which preferred camera and hidden playback/pause compatibility defaults should ship, and when may the legacy configured-lead-in review overload be retired?
 4. Do live current builds validate the ten-second per-stage timeout and 250-millisecond seek tolerance across short and long replay searches?

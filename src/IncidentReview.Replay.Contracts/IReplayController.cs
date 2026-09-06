@@ -26,13 +26,15 @@ public interface IReplayController
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Focuses the replay camera on the local player and waits for confirmation.
+    /// Focuses the replay camera on the participant associated with an incident
+    /// and waits for confirmation.
     /// </summary>
     /// <remarks>
     /// A null preference preserves the currently reported camera. A non-null
     /// preference names an iRacing camera group and selects its first camera.
     /// </remarks>
-    public ValueTask<Result> FocusPlayerAsync(
+    public ValueTask<Result> FocusParticipantAsync(
+        IncidentParticipant participant,
         string? preferredCamera,
         CancellationToken cancellationToken);
 

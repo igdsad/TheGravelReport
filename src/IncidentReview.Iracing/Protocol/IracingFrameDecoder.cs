@@ -21,7 +21,6 @@ internal static class IracingFrameDecoder
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         if (!TryReadBoolean(snapshot, IracingProtocol.IsReplayPlayingVariable, out var isReplayPlaying) ||
-            !TryReadInt32(snapshot, IracingProtocol.MyIncidentCountVariable, out var incidentCountValue) ||
             !TryReadBoolean(snapshot, IracingProtocol.IsOnTrackVariable, out var isOnTrack))
         {
             return Invalid();
@@ -58,11 +57,10 @@ internal static class IracingFrameDecoder
 
         var sessionNumber = SessionNumber.TryCreate(sessionNumberValue);
         var sessionTime = SessionTime.TryCreateMilliseconds(sessionMilliseconds);
-        var incidentCounter = IncidentCounter.TryCreate(incidentCountValue);
         var observedAt = UtcInstant.TryCreateUnixMilliseconds(
             timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         if (!sessionNumber.IsSuccess || !sessionTime.IsSuccess ||
-            !incidentCounter.IsSuccess || !observedAt.IsSuccess)
+            !observedAt.IsSuccess)
         {
             return Invalid();
         }
@@ -95,15 +93,120 @@ internal static class IracingFrameDecoder
             return Invalid();
         }
 
+        var incidentMetadata = IracingSessionInfoDecoder.ReadIncidentMetadata(
+            snapshot.SessionInfo);
+        var hasLiveSessionNumber = TryReadInt32(
+            snapshot,
+            IracingProtocol.SessionNumberVariable,
+            out var liveSessionNumber);
+        var rosterMatchesFrame = incidentMetadata.CurrentSessionNumber is not null &&
+            hasLiveSessionNumber &&
+            incidentMetadata.CurrentSessionNumber.Value == liveSessionNumber;
+        if (!TryCreateIncidentCounters(
+                snapshot,
+                incidentMetadata,
+                rosterMatchesFrame,
+                lap,
+                lapDistance,
+                out var incidentCounters))
+        {
+            return Invalid();
+        }
+
         var sample = TelemetrySample.TryCreate(
             descriptor.Value,
             position.Value,
-            incidentCounter.Value,
-            lap,
-            lapDistance,
+            incidentCounters,
             isOnTrack ? OnTrackState.OnTrack : OnTrackState.NotOnTrack,
             observedAt.Value);
         return sample.IsSuccess ? sample : Invalid();
+    }
+
+    private static bool TryCreateIncidentCounters(
+        IracingFrameSnapshot snapshot,
+        IracingIncidentMetadata metadata,
+        bool rosterMatchesFrame,
+        LapNumber? localLap,
+        LapDistance? localLapDistance,
+        out IReadOnlyList<ParticipantIncidentCounter> counters)
+    {
+        if (!rosterMatchesFrame)
+        {
+            counters = [];
+            return true;
+        }
+
+        var result = new List<ParticipantIncidentCounter>();
+        foreach (var source in metadata.Participants)
+        {
+            var isLocal = metadata.PlayerCarIndex == source.CarIndex;
+            var rawIncidentCount = source.IncidentCount;
+            if (rawIncidentCount is null &&
+                isLocal &&
+                TryReadInt32(
+                    snapshot,
+                    IracingProtocol.TeamIncidentCountVariable,
+                    out var localTeamIncidentCount))
+            {
+                rawIncidentCount = localTeamIncidentCount;
+            }
+
+            if (rawIncidentCount is not { } incidentCountValue)
+            {
+                continue;
+            }
+
+            var identity = ParticipantIdentity.TryCreate(source.Identity);
+            var participant = identity.IsSuccess
+                ? TryCreateParticipantWithSafeDisplayMetadata(
+                    identity.Value,
+                    source.DriverName,
+                    source.TeamName,
+                    source.CarNumber)
+                : null;
+            var incidentCounter = IncidentCounter.TryCreate(incidentCountValue);
+            var counter = ParticipantIncidentCounter.TryCreate(
+                participant,
+                incidentCounter.IsSuccess ? incidentCounter.Value : null,
+                isLocal ? localLap : null,
+                isLocal ? localLapDistance : null);
+            if (counter.IsSuccess)
+            {
+                result.Add(counter.Value);
+            }
+        }
+
+        counters = result.AsReadOnly();
+        return true;
+    }
+
+    private static IncidentParticipant? TryCreateParticipantWithSafeDisplayMetadata(
+        ParticipantIdentity identity,
+        string? driverName,
+        string? teamName,
+        string? carNumber)
+    {
+        var driverProbe = IncidentParticipant.TryCreate(
+            identity,
+            driverName,
+            teamName: null,
+            carNumber: null);
+        var teamProbe = IncidentParticipant.TryCreate(
+            identity,
+            driverName: null,
+            teamName,
+            carNumber: null);
+        var numberProbe = IncidentParticipant.TryCreate(
+            identity,
+            driverName: null,
+            teamName: null,
+            carNumber);
+        var result = IncidentParticipant.TryCreate(
+            identity,
+            driverProbe.IsSuccess ? driverProbe.Value.DriverName : null,
+            teamProbe.IsSuccess ? teamProbe.Value.TeamName : null,
+            numberProbe.IsSuccess ? numberProbe.Value.CarNumber : null);
+        return result.IsSuccess ? result.Value : null;
     }
 
     private static bool TryReadOptionalLap(IracingFrameSnapshot snapshot, out LapNumber? lap)

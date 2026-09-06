@@ -260,7 +260,7 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
             GetSessionDetails or
             GetIncident or
             GetIncidents or
-            GetIncidentCheckpoint)
+            GetIncidentCheckpoints)
         {
             return ReadApplicationQuery(query, cancellationToken);
         }

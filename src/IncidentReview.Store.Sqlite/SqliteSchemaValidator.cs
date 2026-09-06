@@ -9,7 +9,7 @@ namespace IncidentReview.Store.Sqlite;
 
 internal sealed class SqliteSchemaValidator
 {
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private static readonly Version MinimumSqliteVersion = new(3, 8, 0);
 
     private static readonly string[] RequiredTables =
@@ -37,10 +37,11 @@ internal sealed class SqliteSchemaValidator
             "observed_at_utc_ms", "incident_points_delta", "incident_points_total",
             "counter_epoch", "lap", "lap_distance_percent", "review_status",
             "classification", "notes", "created_at_utc_ms", "updated_at_utc_ms",
+            "participant_identity", "driver_name", "team_name", "car_number",
         ]),
         ("IncidentCheckpoint",
         [
-            "session_id", "counter_epoch", "last_incident_points_total",
+            "session_id", "participant_identity", "counter_epoch", "last_incident_points_total",
             "last_replay_session_number", "last_replay_session_time_ms", "updated_at_utc_ms",
         ]),
         ("StoreOperation",
@@ -64,8 +65,8 @@ internal sealed class SqliteSchemaValidator
 
     private static readonly RequiredIndex IncidentUniqueKey = new(
         "Incident",
-        "ux_incident_session_epoch_total",
-        ["session_id", "counter_epoch", "incident_points_total"],
+        "ux_incident_session_participant_epoch_total",
+        ["session_id", "participant_identity", "counter_epoch", "incident_points_total"],
         NormalizedWherePredicate: null);
 
     private readonly ILogger _logger;
@@ -134,6 +135,11 @@ internal sealed class SqliteSchemaValidator
             ("incident unique key", () => HasRequiredIndex(
                 connection,
                 IncidentUniqueKey,
+                cancellationToken)),
+            ("checkpoint primary key", () => HasRequiredPrimaryKey(
+                connection,
+                "IncidentCheckpoint",
+                ["session_id", "participant_identity"],
                 cancellationToken)),
             ("incident foreign key", () => HasCascadeForeignKey(
                 connection,
@@ -298,8 +304,8 @@ internal sealed class SqliteSchemaValidator
         command.CommandText = expected.Name switch
         {
             "ux_session_simulator_key" => "PRAGMA index_xinfo('ux_session_simulator_key');",
-            "ux_incident_session_epoch_total" =>
-                "PRAGMA index_xinfo('ux_incident_session_epoch_total');",
+            "ux_incident_session_participant_epoch_total" =>
+                "PRAGMA index_xinfo('ux_incident_session_participant_epoch_total');",
             _ => throw new InvalidOperationException("The schema manifest contains an unknown index."),
         };
 
@@ -463,6 +469,39 @@ internal sealed class SqliteSchemaValidator
 
         cancellationToken.ThrowIfCancellationRequested();
         return foreignKeyCount == 1 && hasRequiredDefinition;
+    }
+
+    private bool HasRequiredPrimaryKey(
+        SqliteConnection connection,
+        string table,
+        IReadOnlyList<string> expectedColumns,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = _busyTimeoutSeconds;
+        command.CommandText = table switch
+        {
+            "IncidentCheckpoint" => "PRAGMA table_info('IncidentCheckpoint');",
+            _ => throw new ArgumentOutOfRangeException(nameof(table)),
+        };
+
+        using var reader = command.ExecuteReader();
+        var primaryKeyColumns = new SortedDictionary<long, string>();
+        while (reader.Read())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ordinal = reader.GetInt64(5);
+            if (ordinal > 0 && !primaryKeyColumns.TryAdd(ordinal, reader.GetString(1)))
+            {
+                return false;
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return primaryKeyColumns.Keys.SequenceEqual(
+                   Enumerable.Range(1, expectedColumns.Count).Select(static value => (long)value)) &&
+               primaryKeyColumns.Values.SequenceEqual(expectedColumns, StringComparer.Ordinal);
     }
 
     private bool HasNoForeignKeyViolations(

@@ -19,6 +19,8 @@
                       LogicalName="IncidentReview.Store.Sqlite.Migrations.001_InitialSchema.sql" />
     <EmbeddedResource Include="Migrations/002_AddThemePreference.sql"
                       LogicalName="IncidentReview.Store.Sqlite.Migrations.002_AddThemePreference.sql" />
+    <EmbeddedResource Include="Migrations/003_AddIncidentParticipants.sql"
+                      LogicalName="IncidentReview.Store.Sqlite.Migrations.003_AddIncidentParticipants.sql" />
   </ItemGroup>
 
   <ItemGroup>

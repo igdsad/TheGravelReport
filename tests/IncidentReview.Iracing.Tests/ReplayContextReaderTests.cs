@@ -1,3 +1,4 @@
+using IncidentReview.Domain;
 using IncidentReview.Iracing.Testing;
 using IncidentReview.Replay.Contracts;
 using IncidentReview.Results;
@@ -42,8 +43,14 @@ public sealed class ReplayContextReaderTests
 
         var missingContext = missing.ContextReader.Read();
         var duplicateContext = duplicate.ContextReader.Read();
-        var missingFocus = await missing.Controller.FocusPlayerAsync("TV1", CancellationToken.None);
-        var duplicateFocus = await duplicate.Controller.FocusPlayerAsync("TV1", CancellationToken.None);
+        var missingFocus = await missing.Controller.FocusParticipantAsync(
+            LocalPlayer(),
+            "TV1",
+            CancellationToken.None);
+        var duplicateFocus = await duplicate.Controller.FocusParticipantAsync(
+            LocalPlayer(),
+            "TV1",
+            CancellationToken.None);
 
         Assert.IsTrue(missingContext.IsSuccess);
         Assert.IsNull(missingContext.Value.DriverDisplayName);
@@ -86,6 +93,7 @@ public sealed class ReplayContextReaderTests
     public void MalformedCameraMetadataDoesNotSuppressValidDriver(string cameraBody)
     {
         var sessionInfo = string.Concat(
+            SessionHeader,
             "DriverInfo:\n",
             " DriverCarIdx: 4\n",
             " Drivers:\n",
@@ -144,6 +152,7 @@ public sealed class ReplayContextReaderTests
     }
 
     private static string SessionInfoWithDriverEntry(string displayNameLines) => string.Concat(
+        SessionHeader,
         "DriverInfo:\n",
         " DriverCarIdx: 4\n",
         " Drivers:\n",
@@ -153,6 +162,7 @@ public sealed class ReplayContextReaderTests
         CameraInfo);
 
     private static string SessionInfoWithRawPlayerEntry(string playerEntry) => string.Concat(
+        SessionHeader,
         "DriverInfo:\n",
         " DriverCarIdx: 4\n",
         " Drivers:\n",
@@ -175,6 +185,8 @@ public sealed class ReplayContextReaderTests
         SessionInfo: sessionInfo);
 
     private const string ValidContextSessionInfo = """
+        SessionInfo:
+         CurrentSessionNum: 0
         DriverInfo:
          DriverCarIdx: 4
          Drivers:
@@ -196,6 +208,8 @@ public sealed class ReplayContextReaderTests
            - CameraNum: 20
         """;
 
+    private const string SessionHeader = "SessionInfo:\n CurrentSessionNum: 0\n";
+
     private const string CameraInfo = """
         CameraInfo:
          Groups:
@@ -208,4 +222,11 @@ public sealed class ReplayContextReaderTests
            Cameras:
            - CameraNum: 20
         """;
+
+    private static IncidentParticipant LocalPlayer() =>
+        IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("local-player").Value,
+            driverName: null,
+            teamName: null,
+            carNumber: null).Value;
 }

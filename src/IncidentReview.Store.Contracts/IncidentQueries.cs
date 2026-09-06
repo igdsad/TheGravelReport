@@ -24,9 +24,9 @@ public sealed record GetIncidents : IStoreQuery<IReadOnlyList<StoredIncident>>
     public SessionIdentity Session { get; }
 }
 
-public sealed record GetIncidentCheckpoint : IStoreQuery<StoreLookup<IncidentCheckpoint>>
+public sealed record GetIncidentCheckpoints : IStoreQuery<IReadOnlyList<IncidentCheckpoint>>
 {
-    public GetIncidentCheckpoint(SessionIdentity session)
+    public GetIncidentCheckpoints(SessionIdentity session)
     {
         ArgumentNullException.ThrowIfNull(session);
         Session = session;

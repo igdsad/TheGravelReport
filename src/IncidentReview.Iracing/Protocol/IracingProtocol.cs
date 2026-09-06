@@ -12,6 +12,7 @@ internal static class IracingProtocol
     public const int MaximumVariables = 4096;
     public const int MaximumBufferLength = 16 * 1024 * 1024;
     public const int MaximumSessionInfoLength = 16 * 1024 * 1024;
+    public const int MaximumCarIndex = 63;
     public static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(30);
 
     public const int HeaderSize = 112;
@@ -24,7 +25,7 @@ internal static class IracingProtocol
 
     public const string SessionNumberVariable = "SessionNum";
     public const string SessionTimeVariable = "SessionTime";
-    public const string MyIncidentCountVariable = "PlayerCarMyIncidentCount";
+    public const string TeamIncidentCountVariable = "PlayerCarTeamIncidentCount";
     public const string LapVariable = "Lap";
     public const string LapDistanceVariable = "LapDistPct";
     public const string IsOnTrackVariable = "IsOnTrack";

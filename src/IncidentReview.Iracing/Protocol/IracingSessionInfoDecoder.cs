@@ -27,6 +27,7 @@ internal static class IracingSessionInfoDecoder
     public static IracingReplayContextMetadata ReadReplayContextMetadata(string sessionInfo)
     {
         ArgumentNullException.ThrowIfNull(sessionInfo);
+        var currentSessionNumber = ReadCurrentSessionNumber(sessionInfo);
         IracingPlayerMetadata? player = null;
         if (TryTokenizeSection(sessionInfo, "DriverInfo", out var driverLines) &&
             TryReadPlayer(
@@ -47,7 +48,356 @@ internal static class IracingSessionInfoDecoder
             _ = TryReadCameraGroups(cameraLines, out cameraGroups);
         }
 
-        return new IracingReplayContextMetadata(player, cameraGroups);
+        var participants = ReadReplayParticipants(sessionInfo);
+
+        return new IracingReplayContextMetadata(
+            currentSessionNumber,
+            player,
+            cameraGroups,
+            participants);
+    }
+
+    public static IracingIncidentMetadata ReadIncidentMetadata(string sessionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(sessionInfo);
+
+        int? currentSessionNumber = null;
+        if (TryTokenizeSection(sessionInfo, "SessionInfo", out var sessionLines))
+        {
+            if (!TryGetDirectIndent(sessionLines, out var sessionIndent) ||
+                !TryGetOptionalInteger(
+                    sessionLines,
+                    sessionIndent,
+                    "CurrentSessionNum",
+                    allowNegative: false,
+                    out currentSessionNumber))
+            {
+                return IracingIncidentMetadata.Empty;
+            }
+        }
+
+        if (!TryTokenizeSection(sessionInfo, "DriverInfo", out var driverLines) ||
+            !TryGetDirectIndent(driverLines, out var directIndent) ||
+            !TryGetOptionalInteger(
+                driverLines,
+                directIndent,
+                "PaceCarIdx",
+                allowNegative: true,
+                out var paceCarIndex) ||
+            !TryGetOptionalInteger(
+                driverLines,
+                directIndent,
+                "DriverCarIdx",
+                allowNegative: true,
+                out var playerCarIndex) ||
+            !TryGetUniqueEmptyMapping(driverLines, directIndent, "Drivers", out var driversIndex))
+        {
+            return new IracingIncidentMetadata(currentSessionNumber, null, []);
+        }
+
+        paceCarIndex = paceCarIndex is >= 0 and <= IracingProtocol.MaximumCarIndex
+            ? paceCarIndex
+            : null;
+        playerCarIndex = playerCarIndex is >= 0 and <= IracingProtocol.MaximumCarIndex
+            ? playerCarIndex
+            : null;
+
+        var participants = new List<IracingParticipantIncidentMetadata>();
+        var seenCarIndexes = new HashSet<int>();
+        for (var index = driversIndex + 1; index < driverLines.Count; index++)
+        {
+            var line = driverLines[index];
+            if (!line.IsSequence ||
+                !string.Equals(line.Key, "CarIdx", StringComparison.Ordinal) ||
+                line.Indent < directIndent)
+            {
+                continue;
+            }
+
+            var entryEnd = FindNextSequenceAtOrAbove(driverLines, index + 1, line.Indent);
+            if (!TryParseSupportedCarIndex(line.Scalar, out var carIndex))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (!seenCarIndexes.Add(carIndex))
+            {
+                return new IracingIncidentMetadata(currentSessionNumber, playerCarIndex, []);
+            }
+
+            var hasUsableIncidentCount = TryGetOptionalInteger(
+                driverLines,
+                index + 1,
+                entryEnd,
+                line.Indent + 1,
+                "TeamIncidentCount",
+                allowNegative: false,
+                out var incidentCount);
+            if (!TryGetOptionalBoolean(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "CarIsPaceCar",
+                    out var isPaceCar) ||
+                !TryGetOptionalBoolean(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "IsSpectator",
+                    out var isSpectator))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (isPaceCar || isSpectator ||
+                paceCarIndex is >= 0 && paceCarIndex.Value == carIndex)
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (!TryReadCanonicalParticipantIdentity(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    carIndex,
+                    out var identity,
+                    out var teamId,
+                    out var userId))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if ((!hasUsableIncidentCount || incidentCount is null) &&
+                playerCarIndex != carIndex)
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            _ = TryGetOptionalInteger(
+                driverLines,
+                index + 1,
+                entryEnd,
+                line.Indent + 1,
+                "CarNumberRaw",
+                allowNegative: false,
+                out var carNumberRaw);
+
+            participants.Add(new IracingParticipantIncidentMetadata(
+                carIndex,
+                identity,
+                hasUsableIncidentCount ? incidentCount : null,
+                teamId,
+                userId,
+                ReadOptionalScalar(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "UserName"),
+                ReadOptionalScalar(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "TeamName"),
+                ReadOptionalScalar(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "CarNumber"),
+                carNumberRaw));
+            index = entryEnd - 1;
+        }
+
+        participants.Sort(static (left, right) => left.CarIndex.CompareTo(right.CarIndex));
+        return new IracingIncidentMetadata(
+            currentSessionNumber,
+            playerCarIndex,
+            participants.AsReadOnly());
+    }
+
+    private static IracingReplayParticipantMetadata[] ReadReplayParticipants(
+        string sessionInfo)
+    {
+        if (!TryTokenizeSection(sessionInfo, "DriverInfo", out var driverLines) ||
+            !TryGetDirectIndent(driverLines, out var directIndent) ||
+            !TryGetOptionalInteger(
+                driverLines,
+                directIndent,
+                "PaceCarIdx",
+                allowNegative: true,
+                out var paceCarIndex) ||
+            !TryGetUniqueEmptyMapping(driverLines, directIndent, "Drivers", out var driversIndex))
+        {
+            return [];
+        }
+
+        paceCarIndex = paceCarIndex is >= 0 and <= IracingProtocol.MaximumCarIndex
+            ? paceCarIndex
+            : null;
+
+        var participants = new List<IracingReplayParticipantMetadata>();
+        var seenCarIndexes = new HashSet<int>();
+        for (var index = driversIndex + 1; index < driverLines.Count; index++)
+        {
+            var line = driverLines[index];
+            if (!line.IsSequence ||
+                !string.Equals(line.Key, "CarIdx", StringComparison.Ordinal) ||
+                line.Indent < directIndent)
+            {
+                continue;
+            }
+
+            var entryEnd = FindNextSequenceAtOrAbove(driverLines, index + 1, line.Indent);
+            if (!TryParseSupportedCarIndex(line.Scalar, out var carIndex))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (!seenCarIndexes.Add(carIndex))
+            {
+                return [];
+            }
+
+            if (!TryGetOptionalBoolean(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "CarIsPaceCar",
+                    out var isPaceCar) ||
+                !TryGetOptionalBoolean(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "IsSpectator",
+                    out var isSpectator) ||
+                isPaceCar ||
+                isSpectator ||
+                paceCarIndex is >= 0 && paceCarIndex.Value == carIndex ||
+                !TryGetOptionalInteger(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "CarNumberRaw",
+                    allowNegative: false,
+                    out var carNumberRaw) ||
+                carNumberRaw is null)
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (!TryReadCanonicalParticipantIdentity(
+                    driverLines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    carIndex,
+                    out var identity,
+                    out var teamId,
+                    out var userId))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            participants.Add(new IracingReplayParticipantMetadata(
+                identity,
+                carIndex,
+                carNumberRaw.Value,
+                teamId is > 0 ? teamId : null,
+                userId is > 0 ? userId : null));
+            index = entryEnd - 1;
+        }
+
+        participants.Sort(static (left, right) => left.CarIndex.CompareTo(right.CarIndex));
+        return [.. participants];
+    }
+
+    private static int? ReadCurrentSessionNumber(string sessionInfo)
+    {
+        if (!TryTokenizeSection(sessionInfo, "SessionInfo", out var sessionLines) ||
+            !TryGetDirectIndent(sessionLines, out var directIndent) ||
+            !TryGetOptionalInteger(
+                sessionLines,
+                directIndent,
+                "CurrentSessionNum",
+                allowNegative: false,
+                out var currentSessionNumber))
+        {
+            return null;
+        }
+
+        return currentSessionNumber;
+    }
+
+    private static bool TryReadCanonicalParticipantIdentity(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        int carIndex,
+        out string identity,
+        out int? teamId,
+        out int? userId)
+    {
+        identity = string.Empty;
+        userId = null;
+        if (!TryGetOptionalInteger(
+                lines,
+                start,
+                end,
+                minimumIndent,
+                "TeamID",
+                allowNegative: true,
+                out teamId) ||
+            teamId is null)
+        {
+            return false;
+        }
+
+        if (teamId is > 0)
+        {
+            _ = TryGetOptionalInteger(
+                lines,
+                start,
+                end,
+                minimumIndent,
+                "UserID",
+                allowNegative: true,
+                out userId);
+            identity = $"car-index:{carIndex}:team:{teamId.Value}";
+            return true;
+        }
+
+        if (!TryGetOptionalInteger(
+                lines,
+                start,
+                end,
+                minimumIndent,
+                "UserID",
+                allowNegative: true,
+                out userId) ||
+            userId is not > 0)
+        {
+            return false;
+        }
+
+        identity = $"car-index:{carIndex}:user:{userId.Value}";
+        return true;
     }
 
     private static bool TryTokenizeSection(
@@ -149,7 +499,7 @@ internal static class IracingSessionInfoDecoder
         driverDisplayName = null;
         if (!TryGetDirectIndent(lines, out var directIndent) ||
             !TryGetUniqueInteger(lines, directIndent, "DriverCarIdx", out playerCarIndex) ||
-            playerCarIndex < 0 ||
+            playerCarIndex is < 0 or > IracingProtocol.MaximumCarIndex ||
             !TryGetUniqueEmptyMapping(lines, directIndent, "Drivers", out var driversIndex))
         {
             return false;
@@ -163,7 +513,7 @@ internal static class IracingSessionInfoDecoder
             if (!line.IsSequence ||
                 !string.Equals(line.Key, "CarIdx", StringComparison.Ordinal) ||
                 line.Indent < directIndent ||
-                !TryParseNonNegativeInt(line.Scalar, out var carIndex))
+                !TryParseSupportedCarIndex(line.Scalar, out var carIndex))
             {
                 continue;
             }
@@ -436,6 +786,129 @@ internal static class IracingSessionInfoDecoder
         return TryParseNonNegativeInt(scalar, out value);
     }
 
+    private static bool TryGetOptionalInteger(
+        IReadOnlyList<YamlLine> lines,
+        int indent,
+        string key,
+        bool allowNegative,
+        out int? value)
+    {
+        value = null;
+        var found = false;
+        foreach (var line in lines)
+        {
+            if (line.IsSequence ||
+                line.Indent != indent ||
+                !string.Equals(line.Key, key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (found ||
+                !TryParseInteger(line.Scalar, allowNegative, out var parsed))
+            {
+                value = null;
+                return false;
+            }
+
+            value = parsed;
+            found = true;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetOptionalInteger(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key,
+        bool allowNegative,
+        out int? value)
+    {
+        value = null;
+        var found = false;
+        for (var index = start; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.IsSequence ||
+                line.Indent < minimumIndent ||
+                !string.Equals(line.Key, key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (found || !TryParseInteger(line.Scalar, allowNegative, out var parsed))
+            {
+                value = null;
+                return false;
+            }
+
+            value = parsed;
+            found = true;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseInteger(
+        string scalar,
+        bool allowNegative,
+        out int value) =>
+        int.TryParse(
+            Unquote(scalar.AsSpan()),
+            allowNegative ? NumberStyles.AllowLeadingSign : NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out value) &&
+        (allowNegative || value >= 0);
+
+    private static bool TryGetOptionalBoolean(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key,
+        out bool value)
+    {
+        value = false;
+        if (!TryGetOptionalInteger(
+                lines,
+                start,
+                end,
+                minimumIndent,
+                key,
+                allowNegative: false,
+                out var raw))
+        {
+            return false;
+        }
+
+        if (raw is null)
+        {
+            return true;
+        }
+
+        if (raw is not (0 or 1))
+        {
+            return false;
+        }
+
+        value = raw == 1;
+        return true;
+    }
+
+    private static string? ReadOptionalScalar(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key) =>
+        TryGetUniqueScalar(lines, start, end, minimumIndent, key, out var value) &&
+        !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
+
     private static bool TryGetUniqueScalar(
         IReadOnlyList<YamlLine> lines,
         int start,
@@ -530,6 +1003,10 @@ internal static class IracingSessionInfoDecoder
             NumberStyles.None,
             CultureInfo.InvariantCulture,
             out value) && value >= 0;
+
+    private static bool TryParseSupportedCarIndex(string scalar, out int value) =>
+        TryParseNonNegativeInt(scalar, out value) &&
+        value <= IracingProtocol.MaximumCarIndex;
 
     private static bool TryTokenize(string sessionInfo, out IReadOnlyList<YamlLine> lines)
     {

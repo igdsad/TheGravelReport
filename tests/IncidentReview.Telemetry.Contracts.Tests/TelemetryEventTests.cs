@@ -52,9 +52,7 @@ public sealed class TelemetryEventTests
         var sample = TelemetrySample.TryCreate(
             TelemetryContractFixtures.CreateSession(),
             TelemetryContractFixtures.CreatePosition(),
-            TelemetryContractFixtures.CreateCounter(),
-            lap: null,
-            lapDistance: null,
+            [TelemetryContractFixtures.CreateParticipantCounter()],
             OnTrackState.OnTrack,
             TelemetryContractFixtures.CreateObservedAt()).Value;
 

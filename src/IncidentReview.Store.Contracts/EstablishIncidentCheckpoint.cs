@@ -28,6 +28,7 @@ public sealed record EstablishIncidentCheckpoint : IStoreCommand
             (expectedCheckpoint is null && nextCheckpoint.CounterEpoch.Value != 0) ||
             (expectedCheckpoint is not null &&
              (expectedCheckpoint.Session != nextCheckpoint.Session ||
+              expectedCheckpoint.ParticipantIdentity != nextCheckpoint.ParticipantIdentity ||
               expectedCheckpoint.CounterEpoch.Value == int.MaxValue ||
               nextCheckpoint.CounterEpoch.Value != expectedCheckpoint.CounterEpoch.Value + 1 ||
               nextCheckpoint.LastCounter.Value >= expectedCheckpoint.LastCounter.Value ||

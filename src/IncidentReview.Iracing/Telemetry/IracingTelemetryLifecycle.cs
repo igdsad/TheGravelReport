@@ -53,12 +53,19 @@ internal sealed record IracingLogicalConnection(
 
 internal sealed record IracingTelemetryTransitionProjection(
     SimulatorSessionDescriptor Session,
-    IncidentCounter IncidentCounter,
+    string IncidentCounterSet,
     OnTrackState OnTrackState)
 {
     public static IracingTelemetryTransitionProjection From(TelemetrySample sample) => new(
         sample.Session,
-        sample.IncidentCounter,
+        string.Concat(sample.IncidentCounters
+            .OrderBy(
+                static counter => counter.Participant.Identity.Value,
+                StringComparer.Ordinal)
+            .Select(static counter =>
+                $"{counter.Participant.Identity.Value.Length}:" +
+                $"{counter.Participant.Identity.Value}:" +
+                $"{counter.IncidentCounter.Value};")),
         sample.OnTrackState);
 }
 

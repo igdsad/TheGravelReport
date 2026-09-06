@@ -7,10 +7,11 @@ public sealed record IncidentObservation
 {
     private static readonly Error InvalidError = DomainValidationError.Create(
         "domain.incident-observation.invalid",
-        "An incident observation requires session, replay position, counter, and UTC time values.");
+        "An incident observation requires session, participant, replay position, counter, and UTC time values.");
 
     private IncidentObservation(
         SessionIdentity session,
+        IncidentParticipant participant,
         ReplayPosition position,
         IncidentCounter incidentCounter,
         LapNumber? lap,
@@ -18,6 +19,7 @@ public sealed record IncidentObservation
         UtcInstant observedAt)
     {
         Session = session;
+        Participant = participant;
         Position = position;
         IncidentCounter = incidentCounter;
         Lap = lap;
@@ -27,6 +29,9 @@ public sealed record IncidentObservation
 
     /// <summary>Gets the resolved application session identity.</summary>
     public SessionIdentity Session { get; }
+
+    /// <summary>Gets the participant whose cumulative counter was observed.</summary>
+    public IncidentParticipant Participant { get; }
 
     /// <summary>Gets the replay position where this counter value was first observed.</summary>
     public ReplayPosition Position { get; }
@@ -46,18 +51,21 @@ public sealed record IncidentObservation
     /// <summary>Combines validated observation values.</summary>
     public static Result<IncidentObservation> TryCreate(
         SessionIdentity? session,
+        IncidentParticipant? participant,
         ReplayPosition? position,
         IncidentCounter? incidentCounter,
         LapNumber? lap,
         LapDistance? lapDistance,
         UtcInstant? observedAt) =>
         session is not null &&
+        participant is not null &&
         position is not null &&
         incidentCounter is not null &&
         observedAt is not null
             ? Result<IncidentObservation>.Success(
                 new IncidentObservation(
                     session,
+                    participant,
                     position,
                     incidentCounter,
                     lap,

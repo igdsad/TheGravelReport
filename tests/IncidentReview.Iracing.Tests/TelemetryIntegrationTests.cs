@@ -17,6 +17,7 @@ public sealed class TelemetryIntegrationTests
     [TestProperty("Requirement", "IR-CON-001")]
     [TestProperty("Requirement", "IR-SES-001")]
     [TestProperty("Requirement", "IR-SES-002")]
+    [TestProperty("Requirement", "IR-INC-006")]
     [TestProperty("Requirement", "QR-TST-001")]
     public async Task ObserveAsyncDecodesLiveReplayIdentityAndReconnectTransitions()
     {
@@ -33,12 +34,22 @@ public sealed class TelemetryIntegrationTests
         Assert.AreEqual(SessionMode.Live, initial.Session.Mode);
         Assert.AreEqual(2, initial.Position.SessionNumber.Value);
         Assert.AreEqual(12_345, initial.Position.SessionTime.Milliseconds);
+        Assert.HasCount(2, initial.IncidentCounters);
+        var opponent = Counter(initial, "car-index:2:team:22");
+        var player = Counter(initial, "car-index:4:user:444");
         Assert.AreEqual(
-            4,
-            initial.IncidentCounter.Value,
-            "The independent frame carries team=9; only local-member count=4 is valid here.");
-        Assert.AreEqual(7, initial.Lap?.Value);
-        Assert.AreEqual(0.25d, initial.LapDistance?.Value);
+            9,
+            player.IncidentCounter.Value,
+            "The scored team/car counter comes from the eligible DriverInfo roster entry.");
+        Assert.AreEqual("René Test Driver", player.Participant.DriverName);
+        Assert.AreEqual("Local Team", player.Participant.TeamName);
+        Assert.AreEqual("023", player.Participant.CarNumber);
+        Assert.AreEqual(7, player.Lap?.Value);
+        Assert.AreEqual(0.25d, player.LapDistance?.Value);
+        Assert.AreEqual(2, opponent.IncidentCounter.Value);
+        Assert.AreEqual("012", opponent.Participant.CarNumber);
+        Assert.IsNull(opponent.Lap);
+        Assert.IsNull(opponent.LapDistance);
         Assert.AreEqual(OnTrackState.OnTrack, initial.OnTrackState);
         Assert.AreEqual(ObservedAt.ToUnixTimeMilliseconds(), initial.ObservedAt.UnixMilliseconds);
         Assert.AreEqual(SimulatorIdentityScope.Durable, initial.Session.IdentityScope);
@@ -46,11 +57,13 @@ public sealed class TelemetryIntegrationTests
             "v1:subsession:987654321:session:2",
             initial.Session.SessionKey.Value);
 
-        await simulator.SendAsync("publish 6 13.999999");
+        await simulator.SendAsync("team-publish 10 13.999999");
         var fractional = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
         Assert.AreEqual(13_999, fractional.Position.SessionTime.Milliseconds);
-        Assert.AreEqual(6, fractional.IncidentCounter.Value);
+        Assert.AreEqual(
+            10,
+            Counter(fractional, "car-index:4:user:444").IncidentCounter.Value);
 
         await simulator.SendAsync("replay 5 22.2229 8");
         var replay = Assert.IsInstanceOfType<TelemetrySampleObserved>(
@@ -58,6 +71,11 @@ public sealed class TelemetryIntegrationTests
         Assert.AreEqual(SessionMode.Replay, replay.Session.Mode);
         Assert.AreEqual(5, replay.Position.SessionNumber.Value);
         Assert.AreEqual(22_222, replay.Position.SessionTime.Milliseconds);
+        Assert.HasCount(2, replay.IncidentCounters);
+        Assert.AreEqual(
+            10,
+            Counter(replay, "car-index:4:user:444").IncidentCounter.Value,
+            "CurrentSessionNum is compared with live SessionNum, not ReplaySessionNum.");
         Assert.AreEqual(
             "v1:subsession:987654321:session:5",
             replay.Session.SessionKey.Value);
@@ -82,6 +100,231 @@ public sealed class TelemetryIntegrationTests
         Assert.AreNotEqual(scoped.Session.SessionKey, reconnected.Session.SessionKey);
 
         await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task OpponentCounterChangesPublishWhileRosterReorderingCoalesces()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var copiedFrames = new SemaphoreSlim(0);
+        var source = CreateSource(simulator, () => copiedFrames.Release());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
+        var initial = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(2, Counter(initial, "car-index:2:team:22").IncidentCounter.Value);
+        while (copiedFrames.Wait(0))
+        {
+        }
+
+        await simulator.SendAsync("reorder-roster");
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+        await simulator.SendAsync("opponent-publish 3 13.5");
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+
+        var changed = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(3, Counter(changed, "car-index:2:team:22").IncidentCounter.Value);
+        Assert.AreEqual(9, Counter(changed, "car-index:4:user:444").IncidentCounter.Value);
+
+        await simulator.SendAsync("invalid-opponent-display-publish 4 14.0");
+        var sanitized = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        var sanitizedOpponent = Counter(sanitized, "car-index:2:team:22");
+        Assert.AreEqual(4, sanitizedOpponent.IncidentCounter.Value);
+        Assert.IsNull(sanitizedOpponent.Participant.DriverName);
+        Assert.AreEqual("Opponent Team", sanitizedOpponent.Participant.TeamName);
+        Assert.AreEqual("012", sanitizedOpponent.Participant.CarNumber);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task MismatchedSessionInfoEmitsNoParticipantObservationUntilRecovery()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var copiedFrames = new SemaphoreSlim(0);
+        var source = CreateSource(simulator, () => copiedFrames.Release());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+        while (copiedFrames.Wait(0))
+        {
+        }
+
+        await simulator.SendAsync("roster-session 7");
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+
+        var fallback = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.IsEmpty(
+            fallback.IncidentCounters,
+            "Mismatched DriverInfo cannot supply a current deterministic identity.");
+
+        await simulator.SendAsync("team-publish 11 23.0");
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("roster-session 2");
+        var restored = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            11,
+            Counter(restored, "car-index:4:user:444").IncidentCounter.Value);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task MissingIdentityEvidenceOmitsParticipantAndExplicitChangesAreDeterministic()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var source = CreateSource(simulator);
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        var initial = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(2, Counter(initial, "car-index:2:team:22").IncidentCounter.Value);
+
+        await simulator.SendAsync("opponent-evidence-publish 0 0 3 13.0");
+        var missing = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.IsFalse(missing.IncidentCounters.Any(counter =>
+            counter.Participant.Identity.Value.StartsWith(
+                "car-index:2:",
+                StringComparison.Ordinal)));
+
+        await simulator.SendAsync("opponent-evidence-publish 22 999 4 14.0");
+        var recoveredAfterDriverSwap = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            4,
+            Counter(recoveredAfterDriverSwap, "car-index:2:team:22").IncidentCounter.Value);
+
+        await simulator.SendAsync("opponent-evidence-publish 23 999 5 15.0");
+        var newTeamEntrant = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            5,
+            Counter(newTeamEntrant, "car-index:2:team:23").IncidentCounter.Value);
+
+        await simulator.SendAsync("player-evidence-publish 0 0 10 16.0");
+        var missingPlayerEvidence = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.IsFalse(missingPlayerEvidence.IncidentCounters.Any(counter =>
+            counter.Participant.Identity.Value.StartsWith(
+                "car-index:4:",
+                StringComparison.Ordinal)));
+
+        await simulator.SendAsync("player-evidence-publish 0 444 11 17.0");
+        var recoveredPlayerEvidence = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            11,
+            Counter(recoveredPlayerEvidence, "car-index:4:user:444").IncidentCounter.Value);
+
+        await simulator.SendAsync("player-evidence-publish 0 445 12 18.0");
+        var newPlayerEntrant = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            12,
+            Counter(newPlayerEntrant, "car-index:4:user:445").IncidentCounter.Value);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FreshAdapterWithMismatchedRosterDoesNotInventLocalIdentity()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        await simulator.SendAsync("roster-session 7");
+        var source = CreateSource(simulator);
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        var fallback = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.IsEmpty(fallback.IncidentCounters);
+
+        await simulator.SendAsync("roster-session 2");
+        var authoritative = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(
+            9,
+            Counter(authoritative, "car-index:4:user:444").IncidentCounter.Value);
+        Assert.IsFalse(authoritative.IncidentCounters.Any(counter =>
+            string.Equals(counter.Participant.Identity.Value, "local-player", StringComparison.Ordinal)));
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task LocalTeamScalarFallbackIsDeterministicAcrossSourceRecreation()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var copiedFrames = new SemaphoreSlim(0);
+        var source = CreateSource(simulator, () => copiedFrames.Release());
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using (var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator())
+        {
+            _ = await NextAsync(observer);
+            _ = await NextAsync(observer);
+            while (copiedFrames.Wait(0))
+            {
+            }
+
+            await simulator.SendAsync("omit-player-roster-counter");
+            Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+            await simulator.SendAsync("publish 99 13.0");
+            Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+            await simulator.SendAsync("team-publish 10 14.0");
+
+            var fallback = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+                await NextAsync(observer)).Sample;
+            Assert.AreEqual(
+                10,
+                Counter(fallback, "car-index:4:user:444").IncidentCounter.Value,
+                "The local fallback must read the whole-team scalar, never My incidents.");
+        }
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+
+        var recreatedSource = CreateSource(simulator);
+        await using var recreatedObserver = recreatedSource
+            .ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+        _ = await NextAsync(recreatedObserver);
+        var recreated = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(recreatedObserver)).Sample;
+        Assert.AreEqual(
+            10,
+            Counter(recreated, "car-index:4:user:444").IncidentCounter.Value);
+        Assert.IsFalse(recreated.IncidentCounters.Any(counter =>
+            string.Equals(counter.Participant.Identity.Value, "local-player", StringComparison.Ordinal)));
+
+        await ((IAsyncDisposable)recreatedSource).DisposeAsync();
     }
 
     [TestMethod]
@@ -642,7 +885,7 @@ public sealed class TelemetryIntegrationTests
         _ = await NextAsync(observer);
         _ = await NextAsync(observer);
         Volatile.Write(ref throwOnNextFrame, 1);
-        await simulator.SendAsync("publish 6 13.0");
+        await simulator.SendAsync("team-publish 10 13.0");
         _ = await NextAsync(observer);
 
         var exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
@@ -699,11 +942,11 @@ public sealed class TelemetryIntegrationTests
         Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
 
-        await simulator.SendAsync("publish 4 12.9");
+        await simulator.SendAsync("team-publish 9 12.9");
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
-        await simulator.SendAsync("publish 0 13.0");
+        await simulator.SendAsync("team-publish 0 13.0");
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
-        await simulator.SendAsync("publish 2 14.0");
+        await simulator.SendAsync("team-publish 2 14.0");
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
 
         var initial = Assert.IsInstanceOfType<TelemetrySampleObserved>(
@@ -712,9 +955,9 @@ public sealed class TelemetryIntegrationTests
             await NextAsync(observer)).Sample;
         var rise = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
-        Assert.AreEqual(4, initial.IncidentCounter.Value);
-        Assert.AreEqual(0, reset.IncidentCounter.Value);
-        Assert.AreEqual(2, rise.IncidentCounter.Value);
+        Assert.AreEqual(9, Counter(initial, "car-index:4:user:444").IncidentCounter.Value);
+        Assert.AreEqual(0, Counter(reset, "car-index:4:user:444").IncidentCounter.Value);
+        Assert.AreEqual(2, Counter(rise, "car-index:4:user:444").IncidentCounter.Value);
 
         await ((IAsyncDisposable)source).DisposeAsync();
     }
@@ -739,17 +982,17 @@ public sealed class TelemetryIntegrationTests
         Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
 
-        await simulator.SendAsync("publish 0 13.0");
+        await simulator.SendAsync("team-publish 0 13.0");
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
-        await simulator.SendAsync("publish 2 14.0");
+        await simulator.SendAsync("team-publish 2 14.0");
         Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
 
         var initial = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
         var reset = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
-        Assert.AreEqual(4, initial.IncidentCounter.Value);
-        Assert.AreEqual(0, reset.IncidentCounter.Value);
+        Assert.AreEqual(9, Counter(initial, "car-index:4:user:444").IncidentCounter.Value);
+        Assert.AreEqual(0, Counter(reset, "car-index:4:user:444").IncidentCounter.Value);
         var unavailable = Assert.IsInstanceOfType<TelemetryUnavailable>(
             await NextAsync(observer));
         Assert.AreEqual(IracingErrorCodes.TelemetryBufferOverflow, unavailable.Error.Code);
@@ -786,11 +1029,28 @@ public sealed class TelemetryIntegrationTests
             new FixedTimeProvider(ObservedAt),
             FastOptions());
 
+    private static ITelemetrySource CreateSource(
+        SimulatorProcess simulator,
+        Action stableFrameCopied) => IracingTestingRegistration.CreateTelemetrySource(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            new FixedTimeProvider(ObservedAt),
+            FastOptions(),
+            stableFrameCopied);
+
     private static IracingOptions FastOptions(int eventBufferCapacity = 256) =>
         IracingOptions.TryCreate(
             TimeSpan.FromMilliseconds(10),
             TimeSpan.FromMilliseconds(25),
             eventBufferCapacity).Value;
+
+    private static ParticipantIncidentCounter Counter(
+        TelemetrySample sample,
+        string identity) => sample.IncidentCounters.Single(counter =>
+            string.Equals(
+                counter.Participant.Identity.Value,
+                identity,
+                StringComparison.Ordinal));
 
     private static async Task<TelemetryEvent> NextAsync(
         IAsyncEnumerator<TelemetryEvent> observer)

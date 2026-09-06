@@ -56,6 +56,7 @@ public sealed class TelemetryApiTests
             {
                 typeof(ITelemetrySource),
                 typeof(OnTrackState),
+                typeof(ParticipantIncidentCounter),
                 typeof(TelemetryConnected),
                 typeof(TelemetryDisconnected),
                 typeof(TelemetryErrorCodes),

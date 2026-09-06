@@ -8,25 +8,24 @@ namespace IncidentReview.Telemetry.Contracts;
 /// </summary>
 public sealed record TelemetrySample
 {
+    /// <summary>Gets the maximum number of participant counters in one sample.</summary>
+    public const int MaximumIncidentCounterCount = 256;
+
     private static readonly Error InvalidSampleError = Error.Create(
         TelemetryErrorCodes.InvalidSample,
         ErrorKind.Validation,
-        "A telemetry sample requires consistent validated session, position, counter, state, and time values.");
+        "A telemetry sample requires consistent validated session, position, participant counters, state, and time values.");
 
     private TelemetrySample(
         SimulatorSessionDescriptor session,
         ReplayPosition position,
-        IncidentCounter incidentCounter,
-        LapNumber? lap,
-        LapDistance? lapDistance,
+        IReadOnlyList<ParticipantIncidentCounter> incidentCounters,
         OnTrackState onTrackState,
         UtcInstant observedAt)
     {
         Session = session;
         Position = position;
-        IncidentCounter = incidentCounter;
-        Lap = lap;
-        LapDistance = lapDistance;
+        IncidentCounters = incidentCounters;
         OnTrackState = onTrackState;
         ObservedAt = observedAt;
     }
@@ -37,14 +36,10 @@ public sealed record TelemetrySample
     /// <summary>Gets the simulator-neutral replay position.</summary>
     public ReplayPosition Position { get; }
 
-    /// <summary>Gets the cumulative incident counter.</summary>
-    public IncidentCounter IncidentCounter { get; }
-
-    /// <summary>Gets the current lap when the source can determine it.</summary>
-    public LapNumber? Lap { get; }
-
-    /// <summary>Gets normalized lap progress when the source can determine it.</summary>
-    public LapDistance? LapDistance { get; }
+    /// <summary>
+    /// Gets participant counters in the deterministic order supplied by the telemetry source.
+    /// </summary>
+    public IReadOnlyList<ParticipantIncidentCounter> IncidentCounters { get; }
 
     /// <summary>Gets whether the observed participant is actively on track.</summary>
     public OnTrackState OnTrackState { get; }
@@ -58,15 +53,13 @@ public sealed record TelemetrySample
     public static Result<TelemetrySample> TryCreate(
         SimulatorSessionDescriptor? session,
         ReplayPosition? position,
-        IncidentCounter? incidentCounter,
-        LapNumber? lap,
-        LapDistance? lapDistance,
+        IEnumerable<ParticipantIncidentCounter>? incidentCounters,
         OnTrackState onTrackState,
         UtcInstant? observedAt)
     {
         if (session is null ||
             position is null ||
-            incidentCounter is null ||
+            incidentCounters is null ||
             observedAt is null ||
             !Enum.IsDefined(onTrackState) ||
             session.SessionNumber != position.SessionNumber)
@@ -74,12 +67,24 @@ public sealed record TelemetrySample
             return Result<TelemetrySample>.Failure(InvalidSampleError);
         }
 
+        var copiedCounters = new List<ParticipantIncidentCounter>();
+        var identities = new HashSet<ParticipantIdentity>();
+        foreach (var counter in incidentCounters)
+        {
+            if (counter is null ||
+                copiedCounters.Count == MaximumIncidentCounterCount ||
+                !identities.Add(counter.Participant.Identity))
+            {
+                return Result<TelemetrySample>.Failure(InvalidSampleError);
+            }
+
+            copiedCounters.Add(counter);
+        }
+
         return Result<TelemetrySample>.Success(new TelemetrySample(
             session,
             position,
-            incidentCounter,
-            lap,
-            lapDistance,
+            Array.AsReadOnly(copiedCounters.ToArray()),
             onTrackState,
             observedAt));
     }

@@ -18,7 +18,7 @@ public sealed class ApplicationStoreContractTests
             typeof(GetSessionDetails),
             typeof(GetIncident),
             typeof(GetIncidents),
-            typeof(GetIncidentCheckpoint),
+            typeof(GetIncidentCheckpoints),
             typeof(EnsureSession),
             typeof(EstablishIncidentCheckpoint),
             typeof(RecordDetectedIncident),
@@ -66,14 +66,22 @@ public sealed class ApplicationStoreContractTests
         var next = CreateCheckpoint(firstSession, counter: 3);
         var wrongSession = CreateIncident(secondSession, total: 3, delta: 2);
         var wrongTotal = CreateIncident(firstSession, total: 2, delta: 1);
+        var wrongParticipant = CreateIncident(
+            firstSession,
+            total: 3,
+            delta: 2,
+            participantIdentity: "participant-2");
 
         var crossSession = RecordDetectedIncident.TryCreate(wrongSession, expected, next);
         var inconsistentTotal = RecordDetectedIncident.TryCreate(wrongTotal, expected, next);
+        var crossParticipant = RecordDetectedIncident.TryCreate(wrongParticipant, expected, next);
 
         Assert.IsFalse(crossSession.IsSuccess);
         Assert.AreEqual(StoreErrorCodes.InvalidCommand, crossSession.Error!.Code);
         Assert.IsFalse(inconsistentTotal.IsSuccess);
         Assert.AreEqual(StoreErrorCodes.InvalidCommand, inconsistentTotal.Error!.Code);
+        Assert.IsFalse(crossParticipant.IsSuccess);
+        Assert.AreEqual(StoreErrorCodes.InvalidCommand, crossParticipant.Error!.Code);
     }
 
     [TestMethod]
@@ -155,11 +163,20 @@ public sealed class ApplicationStoreContractTests
 
         Assert.IsTrue(EstablishIncidentCheckpoint.TryCreate(null, initial).IsSuccess);
         Assert.IsTrue(EstablishIncidentCheckpoint.TryCreate(initial, reset).IsSuccess);
+        AssertInvalidBaseline(
+            initial,
+            CreateCheckpoint(
+                session,
+                counter: 1,
+                epoch: 1,
+                time: 2_000,
+                participantIdentity: "participant-2"));
         AssertInvalidBaseline(null, CreateCheckpoint(session, counter: 4, epoch: 1, time: 1_000));
         AssertInvalidBaseline(initial, CreateCheckpoint(session, counter: 5, epoch: 1, time: 2_000));
         AssertInvalidBaseline(initial, CreateCheckpoint(session, counter: 1, epoch: 2, time: 2_000));
         var otherSessionNumber = IncidentCheckpoint.TryCreate(
             session,
+            ParticipantIdentity.TryCreate("participant-1").Value,
             CounterEpoch.TryCreate(1).Value,
             IncidentCounter.TryCreate(1).Value,
             ReplayPosition.TryCreate(
@@ -188,9 +205,11 @@ public sealed class ApplicationStoreContractTests
         int counter,
         int epoch = 0,
         long? time = null,
-        int positionSessionNumber = 1) =>
+        int positionSessionNumber = 1,
+        string participantIdentity = "participant-1") =>
         IncidentCheckpoint.TryCreate(
             session,
+            ParticipantIdentity.TryCreate(participantIdentity).Value,
             CounterEpoch.TryCreate(epoch).Value,
             IncidentCounter.TryCreate(counter).Value,
             ReplayPosition.TryCreate(
@@ -205,13 +224,19 @@ public sealed class ApplicationStoreContractTests
         int epoch = 0,
         long? positionTime = null,
         long? observedAt = null,
-        int positionSessionNumber = 1)
+        int positionSessionNumber = 1,
+        string participantIdentity = "participant-1")
     {
         var positionMilliseconds = positionTime ?? total * 1_000L;
         var instant = UtcInstant.TryCreateUnixMilliseconds(observedAt ?? positionMilliseconds).Value;
         return StoredIncident.Create(
             IncidentId.Generate(),
             session,
+            IncidentParticipant.TryCreate(
+                ParticipantIdentity.TryCreate(participantIdentity).Value,
+                driverName: "Driver",
+                teamName: "Team",
+                carNumber: "7").Value,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(positionSessionNumber).Value,
                 SessionTime.TryCreateMilliseconds(positionMilliseconds).Value).Value,

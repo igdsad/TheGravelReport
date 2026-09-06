@@ -19,6 +19,13 @@ public sealed class IncidentReviewApplicationWorkflowTests
     private static readonly string[] SeekOnlyCommandOrder = ["seek"];
     private static readonly string[] SeekAndFocusCommandOrder = ["seek", "focus-player"];
     private static readonly string[] ReplayCameraGroups = ["Cockpit", "TV1"];
+    private static readonly ParticipantIdentity DefaultParticipantIdentity =
+        ParticipantIdentity.TryCreate("local-player").Value;
+    private static readonly IncidentParticipant DefaultParticipant = IncidentParticipant.TryCreate(
+        DefaultParticipantIdentity,
+        "Test Driver",
+        "Test Team",
+        "01").Value;
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
@@ -228,6 +235,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
     [TestProperty("Requirement", "IR-INC-003")]
     [TestProperty("Requirement", "IR-INC-004")]
     [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "IR-INC-007")]
     public async Task DetectionHandlesBaselineDuplicateResetAndIncreaseWithoutFalseIncidents()
     {
         await using var host = new TestHost();
@@ -251,6 +259,131 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(1, recorded.Incident.CounterEpoch.Value);
         Assert.AreEqual(recorded.ExpectedCheckpoint, host.Store.Baselines[^1].NextCheckpoint);
         Assert.AreEqual(recorded.Incident.Position, recorded.NextCheckpoint.LastPosition);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    public async Task EqualCounterIncreasesForTwoParticipantsProduceTwoIncidents()
+    {
+        var first = CreateParticipant("car-index:4:team:41", "Driver One", "Team One", "14");
+        var second = CreateParticipant("car-index:9:team:92", "Driver Two", "Team Two", "29");
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            incidentCounters:
+            [
+                CreateParticipantCounter(first, 0),
+                CreateParticipantCounter(second, 0),
+            ]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 2);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            incidentCounters:
+            [
+                CreateParticipantCounter(second, 2),
+                CreateParticipantCounter(first, 2),
+            ]));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 2);
+
+        CollectionAssert.AreEqual(
+            new[] { first.Identity, second.Identity },
+            host.Store.RecordAttempts
+                .Select(record => record.Incident.Participant.Identity)
+                .ToArray());
+        Assert.IsTrue(host.Store.RecordAttempts.All(record =>
+            record.Incident.Points.Total == 2 && record.Incident.Points.Delta == 2));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    public async Task MissingParticipantRetainsTeamCheckpointAcrossDriverSwap()
+    {
+        var originalDriver = CreateParticipant(
+            "car-index:4:team:41",
+            "Driver One",
+            "Endurance Team",
+            "14");
+        var replacementDriver = CreateParticipant(
+            "car-index:4:team:41",
+            "Driver Two",
+            "Endurance Team",
+            "14");
+        var other = CreateParticipant("car-index:9:user:92", "Other Driver", null, "29");
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            incidentCounters:
+            [
+                CreateParticipantCounter(originalDriver, 5),
+                CreateParticipantCounter(other, 0),
+            ]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 2);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_500,
+            incidentCounters: [CreateParticipantCounter(other, 0)]));
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            incidentCounters:
+            [
+                CreateParticipantCounter(replacementDriver, 7),
+                CreateParticipantCounter(other, 0),
+            ]));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+
+        var incident = host.Store.LastRecord!.Incident;
+        Assert.AreEqual(2, incident.Points.Delta);
+        Assert.AreEqual("Driver Two", incident.Participant.DriverName);
+        Assert.AreEqual(originalDriver.Identity, incident.Participant.Identity);
+        Assert.AreEqual(2, host.Store.BaselineCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    public async Task ReusedCarSlotWithNewEntrantStartsANewBaseline()
+    {
+        var originalEntrant = CreateParticipant(
+            "car-index:4:team:41",
+            "Driver One",
+            "First Team",
+            "14");
+        var replacementEntrant = CreateParticipant(
+            "car-index:4:team:42",
+            "Driver Two",
+            "Second Team",
+            "14");
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            incidentCounters: [CreateParticipantCounter(originalEntrant, 5)]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            incidentCounters: [CreateParticipantCounter(replacementEntrant, 1)]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 2);
+
+        Assert.AreEqual(0, host.Store.RecordAttemptCount);
+        CollectionAssert.AreEquivalent(
+            new[] { originalEntrant.Identity, replacementEntrant.Identity },
+            host.Store.Baselines
+                .Select(baseline => baseline.NextCheckpoint.ParticipantIdentity)
+                .ToArray());
     }
 
     [TestMethod]
@@ -287,6 +420,50 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(1, host.Store.BaselineCount);
         Assert.AreEqual(originalSession, host.Store.Session.Id);
         Assert.AreEqual(0, host.Store.RecordAttemptCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-STR-001")]
+    public async Task RestartReloadsEveryParticipantCheckpoint()
+    {
+        var first = CreateParticipant("car-index:4:team:41", "Driver One", "Team One", "14");
+        var second = CreateParticipant("car-index:9:team:92", "Driver Two", "Team Two", "29");
+        var store = new StatefulStore();
+
+        await using (var recordingHost = new TestHost(store))
+        {
+            await recordingHost.StartConnectedAsync();
+            await recordingHost.Telemetry.PublishAsync(CreateSample(
+                counter: 0,
+                time: 1_000,
+                scope: SimulatorIdentityScope.Durable,
+                incidentCounters:
+                [
+                    CreateParticipantCounter(first, 2),
+                    CreateParticipantCounter(second, 5),
+                ]));
+            await WaitUntilAsync(() => store.BaselineCount == 2);
+            await recordingHost.StopAsync();
+        }
+
+        await using var restartedHost = new TestHost(store);
+        await restartedHost.StartConnectedAsync();
+        await restartedHost.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            scope: SimulatorIdentityScope.Durable,
+            incidentCounters:
+            [
+                CreateParticipantCounter(first, 2),
+                CreateParticipantCounter(second, 7),
+            ]));
+        await WaitUntilAsync(() => store.RecordAttemptCount == 1);
+
+        Assert.AreEqual(2, store.BaselineCount);
+        Assert.AreEqual(second.Identity, store.LastRecord!.Incident.Participant.Identity);
+        Assert.AreEqual(2, store.LastRecord.Incident.Points.Delta);
     }
 
     [TestMethod]
@@ -760,6 +937,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
         Assert.IsTrue(result.IsSuccess);
         Assert.AreEqual(0, host.Replay.LastSeek!.SessionTime.Milliseconds);
+        Assert.AreEqual(incident.Participant, host.Replay.LastFocusedParticipant);
         Assert.AreEqual("TV1", host.Replay.LastPreferredCamera);
         Assert.IsFalse(host.Replay.LastPlayback!.IsPaused);
         Assert.AreEqual(0.5, host.Replay.LastPlayback.PlaybackRate);
@@ -1472,7 +1650,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
         SimulatorIdentityScope? scope = null,
         OnTrackState onTrackState = OnTrackState.OnTrack,
         string sessionKey = "test-session",
-        int sessionNumber = 2)
+        int sessionNumber = 2,
+        IReadOnlyList<ParticipantIncidentCounter>? incidentCounters = null)
     {
         var validatedSessionNumber = SessionNumber.TryCreate(sessionNumber).Value;
         var descriptor = SimulatorSessionDescriptor.TryCreate(
@@ -1487,13 +1666,38 @@ public sealed class IncidentReviewApplicationWorkflowTests
         var sample = TelemetrySample.TryCreate(
             descriptor,
             position,
-            IncidentCounter.TryCreate(counter).Value,
-            LapNumber.TryCreate(1).Value,
-            LapDistance.TryCreate(0.5).Value,
+            incidentCounters ??
+            [
+                CreateParticipantCounter(
+                    DefaultParticipant,
+                    counter,
+                    lap: 1,
+                    lapDistance: 0.5),
+            ],
             onTrackState,
             UtcInstant.TryCreateUnixMilliseconds(10_000 + time).Value).Value;
         return TelemetrySampleObserved.Create(sample);
     }
+
+    private static ParticipantIncidentCounter CreateParticipantCounter(
+        IncidentParticipant participant,
+        int counter,
+        int? lap = null,
+        double? lapDistance = null) => ParticipantIncidentCounter.TryCreate(
+            participant,
+            IncidentCounter.TryCreate(counter).Value,
+            lap.HasValue ? LapNumber.TryCreate(lap.Value).Value : null,
+            lapDistance.HasValue ? LapDistance.TryCreate(lapDistance.Value).Value : null).Value;
+
+    private static IncidentParticipant CreateParticipant(
+        string identity,
+        string? driverName,
+        string? teamName,
+        string? carNumber) => IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate(identity).Value,
+            driverName,
+            teamName,
+            carNumber).Value;
 
     private static StoredIncident CreateStoredIncident(long positionMilliseconds)
     {
@@ -1501,6 +1705,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
         return StoredIncident.Create(
             IncidentId.Generate(),
             SessionIdentity.Generate(),
+            DefaultParticipant,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(2).Value,
                 SessionTime.TryCreateMilliseconds(positionMilliseconds).Value).Value,
@@ -1652,6 +1857,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public Result PlaybackResult { get; init; } = Result.Success();
         public Result ValidationResult { get; init; } = Result.Success();
         public ReplayPosition? LastSeek { get; private set; }
+        public IncidentParticipant? LastFocusedParticipant { get; private set; }
         public string? LastPreferredCamera { get; private set; }
         public ReplayPlayback? LastPlayback { get; private set; }
         public IReadOnlyList<string> DeliveredCommands => _deliveredCommands;
@@ -1678,12 +1884,15 @@ public sealed class IncidentReviewApplicationWorkflowTests
             return ValueTask.FromResult(SeekResult);
         }
 
-        public ValueTask<Result> FocusPlayerAsync(
+        public ValueTask<Result> FocusParticipantAsync(
+            IncidentParticipant participant,
             string? preferredCamera,
             CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(participant);
             cancellationToken.ThrowIfCancellationRequested();
             FocusCount++;
+            LastFocusedParticipant = participant;
             LastPreferredCamera = preferredCamera;
             _deliveredCommands.Add("focus-player");
             return ValueTask.FromResult(FocusResult);
@@ -1722,6 +1931,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
         private readonly List<StoredIncident> _incidents = [];
         private readonly List<EstablishIncidentCheckpoint> _baselines = [];
         private readonly List<RecordDetectedIncident> _recordAttempts = [];
+        private readonly Dictionary<ParticipantIdentity, IncidentCheckpoint> _checkpoints = [];
         private int _ensureSessionCount;
         private int _checkpointQueryCount;
         private int _sessionLookupCount;
@@ -1755,7 +1965,16 @@ public sealed class IncidentReviewApplicationWorkflowTests
         private TaskCompletionSource ContinueSessionLookup { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public StoredSession? Session { get; private set; }
-        public IncidentCheckpoint? Checkpoint { get; private set; }
+        public IncidentCheckpoint? Checkpoint
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _checkpoints.GetValueOrDefault(DefaultParticipantIdentity);
+                }
+            }
+        }
         public MarkIncidentReviewed? LastMarkedReviewed { get; private set; }
         public AnnotateIncident? LastAnnotation { get; private set; }
         public UpdatePreferences? LastPreferencesUpdate { get; private set; }
@@ -1902,7 +2121,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
                         Array.AsReadOnly(_incidents
                             .Where(item => item.Session == incidents.Session)
                             .ToArray())),
-                    GetIncidentCheckpoint checkpoint => QueryCheckpoint(checkpoint),
+                    GetIncidentCheckpoints checkpoints => QueryCheckpoints(checkpoints),
                     ListSessions => QuerySessions(),
                     _ => Result<T>.Failure(TestError),
                 };
@@ -1983,13 +2202,16 @@ public sealed class IncidentReviewApplicationWorkflowTests
                     _incidents.Where(item => item.Session == query.Session))));
         }
 
-        private Result<StoreLookup<IncidentCheckpoint>> QueryCheckpoint(GetIncidentCheckpoint query)
+        private Result<IReadOnlyList<IncidentCheckpoint>> QueryCheckpoints(
+            GetIncidentCheckpoints query)
         {
             Interlocked.Increment(ref _checkpointQueryCount);
-            return Result<StoreLookup<IncidentCheckpoint>>.Success(
-                Checkpoint?.Session == query.Session
-                    ? StoreLookup.Found(Checkpoint)
-                    : StoreLookup.Missing<IncidentCheckpoint>());
+            IReadOnlyList<IncidentCheckpoint> checkpoints = Array.AsReadOnly(
+                _checkpoints.Values
+                    .Where(checkpoint => checkpoint.Session == query.Session)
+                    .OrderBy(checkpoint => checkpoint.ParticipantIdentity.Value, StringComparer.Ordinal)
+                    .ToArray());
+            return Result<IReadOnlyList<IncidentCheckpoint>>.Success(checkpoints);
         }
 
         private Result<IReadOnlyList<StoredSessionSummary>> QuerySessions()
@@ -2034,12 +2256,15 @@ public sealed class IncidentReviewApplicationWorkflowTests
         private Result EstablishBaseline(EstablishIncidentCheckpoint command)
         {
             _baselines.Add(command);
-            if (Checkpoint != command.ExpectedCheckpoint)
+            _ = _checkpoints.TryGetValue(
+                command.NextCheckpoint.ParticipantIdentity,
+                out var currentCheckpoint);
+            if (currentCheckpoint != command.ExpectedCheckpoint)
             {
                 return Result.Failure(StoreErrors.CheckpointConflict);
             }
 
-            Checkpoint = command.NextCheckpoint;
+            _checkpoints[command.NextCheckpoint.ParticipantIdentity] = command.NextCheckpoint;
             _committedOperations.Add(command.OperationId);
             return Result.Success();
         }
@@ -2075,13 +2300,16 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
         private Result ApplyIncident(RecordDetectedIncident command)
         {
-            if (Checkpoint != command.ExpectedCheckpoint)
+            _ = _checkpoints.TryGetValue(
+                command.NextCheckpoint.ParticipantIdentity,
+                out var currentCheckpoint);
+            if (currentCheckpoint != command.ExpectedCheckpoint)
             {
                 return Result.Failure(StoreErrors.CheckpointConflict);
             }
 
             _incidents.Add(command.Incident);
-            Checkpoint = command.NextCheckpoint;
+            _checkpoints[command.NextCheckpoint.ParticipantIdentity] = command.NextCheckpoint;
             _committedOperations.Add(command.OperationId);
             return Result.Success();
         }
@@ -2098,6 +2326,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             _incidents[index] = StoredIncident.Create(
                 incident.Id,
                 incident.Session,
+                incident.Participant,
                 incident.Position,
                 incident.ObservedAt,
                 incident.Points,
