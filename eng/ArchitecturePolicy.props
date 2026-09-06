@@ -1,0 +1,333 @@
+<Project>
+  <!--
+    This file is the machine-readable source of truth for repository boundaries.
+    Directory.Build.targets and IncidentReview.Architecture.Tests consume these
+    items directly. Do not copy this allowlist into another build or test file.
+  -->
+  <PropertyGroup>
+    <ArchitecturePolicyVersion>1</ArchitecturePolicyVersion>
+  </PropertyGroup>
+
+  <ItemGroup Label="Projects">
+    <ArchitectureProject Include="IncidentReview.Results">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Results</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Domain">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Domain</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.Contracts">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Store.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Telemetry.Contracts">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Telemetry.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Replay.Contracts">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Replay.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Application.Contracts">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Application.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Application">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Application</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.Sqlite">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Store.Sqlite</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Iracing">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Iracing</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Desktop.Wpf">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Desktop.Wpf</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Host.Wpf">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Host.Wpf</RootNamespace>
+      <NoPublicApi>true</NoPublicApi>
+    </ArchitectureProject>
+
+    <ArchitectureProject Include="IncidentReview.Export.Contracts">
+      <Kind>DeferredProduction</Kind>
+      <RootNamespace>IncidentReview.Export.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Export.Json">
+      <Kind>DeferredProduction</Kind>
+      <RootNamespace>IncidentReview.Export.Json</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.Remote">
+      <Kind>DeferredProduction</Kind>
+      <RootNamespace>IncidentReview.Store.Remote</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.Sync">
+      <Kind>DeferredProduction</Kind>
+      <RootNamespace>IncidentReview.Store.Sync</RootNamespace>
+    </ArchitectureProject>
+
+    <ArchitectureProject Include="IncidentReview.TestKit">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.TestKit</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Architecture.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Architecture.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Results.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Results.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Domain.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Domain.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Application.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Application.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.ContractTests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Store.ContractTests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Store.Sqlite.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Store.Sqlite.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Iracing.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Iracing.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Desktop.Wpf.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Desktop.Wpf.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Deliverable.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Deliverable.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Iracing.ProtocolSimulator">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Iracing.ProtocolSimulator</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Analyzers.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Analyzers.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Verification.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.Verification.Tests</RootNamespace>
+    </ArchitectureProject>
+
+    <ArchitectureProject Include="IncidentReview.Analyzers">
+      <Kind>Tool</Kind>
+      <RootNamespace>IncidentReview.Analyzers</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Verification">
+      <Kind>Tool</Kind>
+      <RootNamespace>IncidentReview.Verification</RootNamespace>
+    </ArchitectureProject>
+  </ItemGroup>
+
+  <ItemGroup Label="Production project-reference allowlist">
+    <AllowedProjectReference Include="IncidentReview.Domain"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Store.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Telemetry.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Telemetry.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Replay.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Replay.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Iracing"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Application</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Desktop.Wpf</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Store.Sqlite</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Iracing</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Export.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Export.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Export.Json"><To>IncidentReview.Export.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Export.Json"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Export.Json"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Remote"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Remote"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Remote"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sync"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sync"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sync"><To>IncidentReview.Results</To></AllowedProjectReference>
+  </ItemGroup>
+
+  <ItemGroup Label="Test and tool project-reference allowlist">
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.TestKit"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Results.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Domain.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Domain.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Domain.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.Store.Sqlite</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Store.Sqlite.Tests"><To>IncidentReview.Store.ContractTests</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Iracing</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Desktop.Wpf</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Deliverable.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Analyzers.Tests"><To>IncidentReview.Analyzers</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Verification.Tests"><To>IncidentReview.Verification</To></AllowedProjectReference>
+  </ItemGroup>
+
+  <ItemGroup Label="Owned infrastructure packages">
+    <PackageOwner Include="Dapper"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="dbup-core"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="dbup-sqlite"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="SQLitePCLRaw.bundle_winsqlite3"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+
+    <PackageOwner Include="Microsoft.Extensions.Hosting"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Configuration.Binder"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Configuration.CommandLine"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Configuration.EnvironmentVariables"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Options.ConfigurationExtensions"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Application</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Iracing</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Application</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Iracing</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+
+    <PackageOwner Include="Microsoft.CodeAnalysis.CSharp"><Project>IncidentReview.Analyzers</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.CodeAnalysis.Analyzers"><Project>IncidentReview.Analyzers</Project></PackageOwner>
+
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Architecture.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Results.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Domain.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Application.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.ContractTests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Iracing.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Desktop.Wpf.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Deliverable.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Analyzers.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Verification.Tests</Project></PackageOwner>
+  </ItemGroup>
+
+  <ItemGroup Label="Public API ownership">
+    <AllowedPublicNamespace Include="IncidentReview.Results"><Namespace>IncidentReview.Results</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Domain"><Namespace>IncidentReview.Domain</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Contracts"><Namespace>IncidentReview.Store.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Telemetry.Contracts"><Namespace>IncidentReview.Telemetry.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Replay.Contracts"><Namespace>IncidentReview.Replay.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Application.Contracts"><Namespace>IncidentReview.Application.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+
+    <AllowedPublicNamespace Include="IncidentReview.Application"><Namespace>IncidentReview.Application</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Application"><Namespace>IncidentReview.Application.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite.Options</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite.Testing</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Iracing"><Namespace>IncidentReview.Iracing</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Iracing"><Namespace>IncidentReview.Iracing.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Iracing"><Namespace>IncidentReview.Iracing.Options</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Iracing"><Namespace>IncidentReview.Iracing.Testing</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Desktop.Wpf"><Namespace>IncidentReview.Desktop.Wpf</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+
+    <AllowedPublicNamespace Include="IncidentReview.Export.Contracts"><Namespace>IncidentReview.Export.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Export.Json"><Namespace>IncidentReview.Export.Json</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Export.Json"><Namespace>IncidentReview.Export.Json.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Remote"><Namespace>IncidentReview.Store.Remote</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Remote"><Namespace>IncidentReview.Store.Remote.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sync"><Namespace>IncidentReview.Store.Sync</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.Store.Sync"><Namespace>IncidentReview.Store.Sync.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+
+    <ForbiddenProductionNamespace Include="*.Testing" />
+    <TestingFacadeOwner Include="IncidentReview.Store.Sqlite.Testing">
+      <Project>IncidentReview.Store.Sqlite</Project>
+      <BridgeFile>SqliteTestingRegistration.cs</BridgeFile>
+    </TestingFacadeOwner>
+    <TestingFacadeOwner Include="IncidentReview.Iracing.Testing">
+      <Project>IncidentReview.Iracing</Project>
+      <BridgeFile>IracingTestingRegistration.cs</BridgeFile>
+    </TestingFacadeOwner>
+
+    <PlatformPublicAssembly Include="mscorlib" />
+    <PlatformPublicAssembly Include="netstandard" />
+    <PlatformPublicAssembly Include="WindowsBase" />
+    <PlatformPublicAssembly Include="PresentationCore" />
+    <PlatformPublicAssembly Include="PresentationFramework" />
+    <PlatformPublicAssembly Include="System.Xaml" />
+    <PlatformPublicAssemblyPrefix Include="System." />
+
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Application</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Store.Sqlite</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Iracing</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></AllowedExternalPublicAssembly>
+  </ItemGroup>
+</Project>
