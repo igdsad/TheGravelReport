@@ -1,12 +1,12 @@
 # iRacing Incident Review — System Design
 
-- **Status:** Accepted implementation baseline; implementation in progress
-- **Document version:** 1.1
+- **Status:** Accepted architecture; runnable MVP implemented, distribution and live-simulator acceptance pending
+- **Document version:** 1.2
 - **Last updated:** 2026-09-06
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
 
-This document is the architectural contract for the iRacing Incident Review application. It records the product goal, project boundaries, public contracts, storage and transaction model, error model, startup model, dependency policy, and testing philosophy agreed before implementation.
+This document is the architectural contract and implementation record for the iRacing Incident Review application. It records the product goal, project boundaries, public contracts, storage and transaction model, error model, startup model, dependency policy, testing philosophy, and the line between the implemented MVP and remaining release work.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A departure from a MUST or MUST NOT requires an architecture decision record (ADR), accompanying tests, and explicit review.
 
@@ -14,13 +14,55 @@ The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A depar
 
 The application is a local Windows companion for iRacing. It observes live iRacing telemetry, records incident markers, presents them in a review UI, and lets the user select an incident to seek the iRacing replay to the relevant session time.
 
-The system will be built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
+The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
 
 SQLite is the initial durable store. Every application mutation is an immutable `IStore` command with idempotent committed effects whose implementation owns one transaction; application code never receives a database connection or transaction. Dapper performs parameterized SQL mapping, and DbUp applies immutable, ordered schema migrations before normal startup.
 
 Expected failures cross boundaries through the shared `Result` and `Result<T>` types with stable error codes. Exceptions are retained for cancellation, programmer defects, and broken invariants; provider exceptions are translated and logged at infrastructure boundaries.
 
 Testing follows the philosophy Richard Hipp described in *Reliability Lessons From SQLite* at SSW 2026: design for testability from the beginning, assume untested behavior does not work, test through the same public interfaces used in production, inject faults deterministically, exercise boundary conditions and independent decisions, verify the tests themselves, and test the actual Release deliverable.
+
+### 1.1 Current implementation snapshot
+
+The repository now contains a runnable end-to-end MVP, not only scaffolding. The current production path is:
+
+```text
+iRacing shared memory/event
+    → IncidentReview.Iracing
+    → ITelemetrySource
+    → IncidentReview.Application
+    → typed IStore commands/queries
+    → IncidentReview.Store.Sqlite
+    → SQLite
+
+WPF UI
+    → IIncidentReviewService
+    → IReplayController
+    → official iRacing replay broadcast message
+```
+
+Implemented at this revision:
+
+- validated domain values plus shared `Result`/`Result<T>` failure primitives;
+- simulator-neutral telemetry, replay, store, and application contract assemblies;
+- cumulative local-member incident detection, durable checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
+- the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and an embedded checksum-pinned DbUp migration;
+- a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, session-information extraction, and replay seek/playback broadcasts;
+- a WPF screen for connection state, session history, incident selection, Review, and durable replay preferences;
+- a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
+- automated domain, contract, application, SQLite, architecture, adapter/protocol-simulator, view-model, and Release-host-startup tests.
+
+The official archive is evidence, not a linked native or managed runtime dependency. The pinned `irsdk-1-20.zip` is 102,658 bytes with SHA-256 `af4948cc8efe03fa7c99332a63da1ab9d7b34e5b6107540c176ed682e48a2d79`. It was inspected without adding the upstream source to this repository. Exact reviewed entry hashes, ABI decisions, URLs, and licensing scope are recorded in [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md); the distributable copies [`vendor/third_party/iracing-sdk-1.20/NOTICE.md`](vendor/third_party/iracing-sdk-1.20/NOTICE.md).
+
+Not yet complete or accepted for a public release:
+
+- acceptance against a recorded current real iRacing build, including a permitted redacted session-information fixture;
+- authoritative handling of a replay that the user entered and paused manually outside the app-owned review workflow;
+- packaged UI Automation through the independent protocol simulator, broad frame-mutation coverage, crash/power-loss campaigns, mutation/fuzz/stress runs, dependency inventory/SBOM automation, an installer/updater, and a persistent Release log sink;
+- WPF controls for annotations, classification, and explicit reviewed/dismissed state, even though annotation application support and reviewed-state store support already exist;
+- JSON export, remote storage, synchronization, and camera selection behavior.
+
+No test result or live-simulator acceptance is implied by this document alone. The exact commands in the root `README.md` produce the evidence for the current checkout.
 
 ## 2. Product definition
 
@@ -33,20 +75,21 @@ After completing or pausing an iRacing session, a driver can see the incidents o
 1. The desktop application starts and validates its configuration.
 2. DbUp migrates the local SQLite database to the required schema.
 3. The application waits for iRacing telemetry.
-4. When iRacing connects, the application identifies the active session and local driver/team.
-5. The incident detector observes changes to the applicable incident counter.
+4. When iRacing connects, the application identifies the active session from validated SDK session evidence.
+5. The incident detector observes changes to `PlayerCarMyIncidentCount`, the local member's cumulative counter.
 6. A counter increase creates a durable incident record containing its replay position and useful session context.
 7. The UI updates to show the incident.
-8. The user exits the car or otherwise enters a state in which replay commands are accepted.
+8. The user exits the car; the current policy requires an authoritative `NotOnTrack` sample before replay control.
 9. The user selects an incident and chooses Review.
 10. The application asks the replay controller to seek to the incident time minus the configured lead-in.
-11. The user may classify the incident, add notes, or dismiss it. Export is a post-MVP extension.
+
+Classification, notes, explicit reviewed/dismissed actions, and export remain follow-on UI capabilities; they are not steps in the current WPF workflow.
 
 ### 2.3 Goals
 
-- Detect and persist incident-count increases for the local driver/team.
+- Detect and persist incident-count increases for the local member.
 - Preserve the iRacing session number and session time required for exact replay seeking.
-- Present a fast, accessible Windows UI with connection, session, and replay state.
+- Present a fast, accessible Windows UI with connection, session-history, incident, and replay-preference state.
 - Seek iRacing replay through the official local SDK broadcast mechanism.
 - Preserve session and incident records across application restarts.
 - Make every behavioral dependency replaceable through a focused interface.
@@ -157,7 +200,7 @@ The application runs locally under the user's Windows account. SQLite is embedde
 
 ## 6. Solution and project structure
 
-Every item below is a separate SDK-style project with its own `.csproj`.
+Every project below currently exists as a separate SDK-style project with its own `.csproj`.
 
 ```text
 IncidentReview.slnx
@@ -176,12 +219,6 @@ src/
   IncidentReview.Iracing/
   IncidentReview.Desktop.Wpf/
   IncidentReview.Host.Wpf/
-
-  # Deferred until needed
-  IncidentReview.Export.Contracts/
-  IncidentReview.Export.Json/
-  IncidentReview.Store.Remote/
-  IncidentReview.Store.Sync/
 
 tests/
   IncidentReview.TestKit/
@@ -204,21 +241,14 @@ tools/
   IncidentReview.Analyzers/
   IncidentReview.Verification/
 
-requirements/
-  requirements.md
-  release-checklist.md
-
-test-assets/
-  telemetry/
-  databases/
-  replay-commands/
-
 eng/
   ArchitecturePolicy.props
   build.ps1
   test.ps1
   verify.ps1
 ```
+
+`Export.Contracts`, `Export.Json`, `Store.Remote`, and `Store.Sync` are reserved in the architecture policy but have not been created. Dedicated machine-readable requirement/release evidence and reusable fixture directories are also planned, not present. Until those assets exist, `DESIGN.md`, test metadata, the SDK baseline, and the code are the available evidence sources.
 
 ### 6.1 Project responsibilities
 
@@ -236,8 +266,8 @@ eng/
 | `Desktop.Wpf` | Views, view models, UI mapping, dispatcher interaction | Registration module and WPF application surface |
 | `Host.Wpf` | Executable, composition root, startup and shutdown | Process entry point |
 | `Analyzers` | Compile-time enforcement that needs semantic source analysis | Roslyn diagnostics only; no runtime API |
-| `Verification` | Traceability, dependency, migration-manifest, artifact, and release-evidence checks | Repository CLI only; never shipped |
-| `Iracing.ProtocolSimulator` | External shared-memory/event/window-message simulator for packaged tests | Test executable only; never shipped |
+| `Verification` | Reserved home for traceability, dependency, migration-manifest, artifact, and release-evidence checks; currently a no-op CLI scaffold | Repository CLI only; never shipped |
+| `Iracing.ProtocolSimulator` | Independent out-of-process shared-memory/event simulator used by adapter integration tests | Test executable only; never shipped |
 
 ### 6.2 Allowed dependency direction
 
@@ -283,8 +313,8 @@ Boundaries are enforced independently at several levels:
 3. `eng/ArchitecturePolicy.props` is the single canonical dependency matrix. Both MSBuild targets and architecture tests MUST consume it; neither may maintain a second allowlist.
 4. Architecture tests inspect compiled assembly references against that canonical allowlist.
 5. Architecture tests inspect exported public APIs recursively, including base types, attributes, generic arguments, constraints, parameters, and return types.
-6. Repository analyzers reject known escape hatches: service location, nested `BuildServiceProvider`, interpolated/concatenated SQL, and Dapper mutations without an explicit transaction.
-7. `IncidentReview.Verification` checks requirement/test links, migration manifests, the resolved dependency graph, release hashes, and retained evidence.
+6. Repository analyzers currently reject nested `BuildServiceProvider`, runtime-constructed Dapper SQL (including supported private forwarding paths), and Dapper mutations without an explicit transaction, including `CommandDefinition` overloads. Broader service-locator detection remains a documented container rule enforced by review until analyzer coverage exists.
+7. `IncidentReview.Verification` is the designated future home for requirement/test links, migration manifests, resolved dependency graphs, release hashes, and retained evidence. Its current executable is a scaffold that returns success without performing those checks; it must not be cited as release evidence yet.
 8. Code review checks the semantic quality of interfaces, which automated dependency checks cannot determine.
 
 ## 7. Core contracts
@@ -335,11 +365,13 @@ Connection, disconnection, transient unavailability, and samples are observable 
 ```csharp
 public interface IReplayController
 {
-    Task<Result> SeekAsync(
+    Result ValidatePlayback(ReplayPlayback playback);
+
+    Result Seek(
         ReplayPosition position,
         CancellationToken cancellationToken);
 
-    Task<Result> SetPlaybackAsync(
+    Result SetPlayback(
         ReplayPlayback playback,
         CancellationToken cancellationToken);
 }
@@ -353,6 +385,8 @@ public sealed class ReplayPosition
 ```
 
 `ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. The replay contract speaks in intent and does not expose iRacing broadcast enums or Windows message packing.
+
+`ValidatePlayback` is a pure capability preflight. The application calls it before seeking so a persisted playback preference that cannot be represented by the pinned iRacing protocol cannot produce a half-completed “seek succeeded, playback failed validation” workflow.
 
 ### 7.3 Store
 
@@ -384,7 +418,7 @@ public interface IStoreInitializer
 }
 ```
 
-Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetIncidents`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `AnnotateIncident`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
+Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetIncidents`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `AnnotateIncident`, `MarkIncidentReviewed`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
 
 This RPC-shaped boundary is deliberate. One `ExecuteAsync` call is one coarse-grained atomic operation, whether it is handled locally by SQLite or sent to a future server. Arbitrary callbacks are forbidden because they cannot be transported honestly and would require a remote transaction to remain open while client code runs. A query executes against one consistent snapshot for its entire operation and returns a complete immutable result; callers do not assemble one logical read from a sequence of independently timed store calls.
 
@@ -411,6 +445,9 @@ UI-facing use cases are expressed through application contracts such as:
 ```csharp
 public interface IIncidentReviewService
 {
+    Task<Result<ReviewServiceStatus>> GetStatusAsync(
+        CancellationToken cancellationToken);
+
     Task<Result<ReviewSession>> GetCurrentSessionAsync(
         CancellationToken cancellationToken);
 
@@ -533,7 +570,7 @@ Known limitation: the local SDK signals available and their semantics must be va
 
 `IncidentReview.Iracing` is the only project that understands the local SDK protocol.
 
-The implementation source of truth is the SDK/header distribution obtained from iRacing's official member/support channel. The exact upstream artifact version, cryptographic hash, source location, and applicable license/redistribution terms are recorded with any vendored definitions or generated bindings. Public GitHub mirrors may help discovery, but they are not authoritative and cannot silently update the protocol baseline.
+The implementation source of truth is iRacing SDK 1.20, acquired through iRacing's authenticated official member-forum distribution. The downloaded archive is `irsdk-1-20.zip`, 102,658 bytes, SHA-256 `af4948cc8efe03fa7c99332a63da1ab9d7b34e5b6107540c176ed682e48a2d79`. The upstream C/C++ archive was inspected as protocol evidence and is not extracted, compiled, linked, or redistributed by this repository. Exact source URLs, reviewed-entry hashes, ABI layouts, and the limited upstream licensing conclusion are maintained in [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md). Public GitHub mirrors may help discovery, but they are not authoritative and cannot silently update the protocol baseline.
 
 The initial adapter is repository-owned and uses .NET/Windows interop directly; it does not add an unreviewed iRacing wrapper package. Named memory mappings/events use BCL primitives where they match the protocol. Required User32 calls use source-generated `LibraryImport` declarations with fixed-width validated packing. `unsafe` code, if unavoidable for copied frame decoding, is enabled only in `IncidentReview.Iracing`, kept in small reviewed methods, and covered by malformed-buffer and bounds tests.
 
@@ -551,7 +588,7 @@ Frame reads follow the official buffer-generation/tick protocol: copy the select
 
 iRacing session information is YAML-like text, not JSON. The adapter exposes only the few validated fields required by the application. A narrowly scoped decoder may be repository-owned and fixture/fuzz tested against the recorded official samples; it must not pretend to be a general YAML parser or use substring/line-splitting that ignores escaping and structure. If official fixtures demonstrate that a conforming YAML library is necessary, that library requires its own dependency ADR and supply-chain review before use.
 
-The telemetry reader and downstream processing are decoupled by a bounded channel or equivalent controlled buffer. The policy must be explicitly tested. Dropping arbitrary counter-transition observations is forbidden; the cumulative counter permits coalescing only when the resulting positive delta is preserved.
+The telemetry reader and downstream processing are decoupled by a bounded single-reader channel. Its production capacity is 256 and validated configuration permits 2 through 4,096 pending meaningful events. The source publishes connection transitions and samples only when session, mode, on-track state, or incident counter changes; position-only frames are coalesced. A distinct transition is never silently dropped: capacity exhaustion drains already accepted events, reports the stable buffer-overflow error, and ends that observation. The producer is canceled and joined on enumeration cancellation, early consumer disposal, and adapter disposal.
 
 Replay review behavior:
 
@@ -559,12 +596,14 @@ Replay review behavior:
 2. Subtract the configured lead-in and clamp to zero.
 3. Confirm telemetry indicates a state in which iRacing can accept replay control.
 4. Ask `IReplayController` to seek to the target session/time.
-5. Optionally select the local car/camera and pause or start slow playback according to user settings.
+5. Pause or start an exactly representable playback speed according to user settings.
 6. Return a structured failure if iRacing is disconnected or does not expose a usable replay state.
 
-`ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification is a separate explicit store command initiated by the UI, so the user is never told a cross-system action was atomic when it was not.
+`ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
 
-Replay command registration, command identifiers, field widths, signedness, and parameter packing are derived from the pinned official header and protected by golden-vector tests. SDK broadcast commands are fire-and-forget at the operating-system boundary. A successful `SeekAsync` means the command was valid and handed to the Windows broadcast mechanism; it does not falsely claim that iRacing applied it. Where telemetry provides corresponding state, the adapter SHOULD observe it to offer a separately defined confirmation state.
+The current application prevents detection during its own seek/playback command and keeps that suppression active until telemetry authoritatively reports the car back on track. `IsReplayPlaying` identifies moving replay, but the official SDK field is false for a paused replay. A manually entered, manually paused replay outside the app-owned workflow therefore remains a live-simulator acceptance gap; the adapter does not invent a heuristic.
+
+Replay command registration, command identifiers, field widths, signedness, and parameter packing are derived from the pinned official header and protected by golden-vector tests. SDK broadcast commands are fire-and-forget at the operating-system boundary. Replay-controller handoff is deliberately synchronous: a successful `Seek` means the command was valid and handed to the Windows broadcast mechanism before the method returned; it does not falsely claim that iRacing applied it. Implementations must not defer delivery or call back into the application. Where telemetry provides corresponding state, the adapter SHOULD observe it to offer a separately defined confirmation state.
 
 ## 11. Storage design
 
@@ -595,7 +634,7 @@ SQLite stores durable application state. Ephemeral process objects—windows, ca
 
 Operational constraints:
 
-- SQLite permits one writer at a time. The first implementation uses one bounded, single-consumer executor for all queries and commands, keeping transactions short and behavior deterministic.
+- SQLite permits one writer at a time. The current implementation uses one bounded, single-consumer executor for all queries and commands, keeping transactions short and behavior deterministic. Its default queue capacity is 64 and validated range is 1 through 1,024.
 - Network calls and replay commands MUST NOT execute inside a database transaction.
 - Enable and verify foreign-key enforcement on every connection.
 - Use WAL only after tests confirm the desired local read/write behavior; never combine it with shared-cache mode.
@@ -607,9 +646,11 @@ Operational constraints:
 - A consistent backup uses the provider's online backup API; it does not copy only the main file while WAL may be active.
 - `Microsoft.Data.Sqlite` asynchronous ADO.NET methods execute synchronously. SQLite work therefore runs through that dedicated executor and never blocks the WPF dispatcher. The executor owns queue-capacity/backpressure, cancellation-before-start, shutdown draining, and its worker lifetime. The public contract remains asynchronous because dispatch is asynchronous and a future remote store performs real network I/O.
 
+The implemented connection policy uses private cache, disables pooling, enables foreign keys, uses `journal_mode=DELETE` and `synchronous=FULL`, and applies a five-second default busy/command timeout. Initialization validates the engine version, schema version, required tables/columns/indexes/foreign keys, pragmas, and `PRAGMA integrity_check` before opening the store gate. Changing these values is a measured storage decision, not a host/UI concern.
+
 ### 11.3 Initial logical schema
 
-The physical schema will be introduced through migrations, but its initial logical records are:
+The physical schema is introduced through migrations. Its initial logical records are:
 
 ```text
 Session
@@ -730,6 +771,8 @@ DbUp runs before the store is available to application use cases. The store may 
 
 DbUp is the deliberate migration path outside normal `IStore.ExecuteAsync`; it runs before application writes and owns its own transaction semantics.
 
+The current manifest contains `001_InitialSchema.sql` and pins its SHA-256 in `MigrationManifest.cs`. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
+
 ### 11.7 Export
 
 Export is a separate application capability, not a method on `IStore` and not a copy of database tables.
@@ -844,7 +887,7 @@ Concrete implementations are `internal sealed`. Each implementation assembly exp
 
 The host explicitly adds code defaults, the `INCIDENTREVIEW_`-prefixed environment provider, and command-line configuration, then binds and validates typed options. It registers those options before calling implementation modules; adapter assemblies do not accept a general-purpose `IConfiguration` object or select configuration sections themselves.
 
-WPF requires an STA entry thread. The host executable owns that constraint. Container validation, store initialization, migration, and durable-state loading finish before entering the WPF dispatcher. If asynchronous initialization must be synchronously joined to preserve STA startup, that join is confined to the composition root before a UI synchronization context exists.
+WPF requires an STA entry thread. The host executable owns that constraint. Container validation, store initialization, migration, and schema/capability validation finish before entering the WPF dispatcher. Session/checkpoint state is loaded lazily as telemetry and UI queries require it. Synchronous joins needed to preserve STA startup are confined to the composition root before a UI synchronization context exists.
 
 ### 13.2 Container rules
 
@@ -867,37 +910,16 @@ Startup uses a host-owned internal `BootstrapCoordinator` plus the `IApplication
 [STAThread]
 public static int Main(string[] args)
 {
-    try
-    {
-        return RunOnStaThread(args);
-    }
-    catch (OperationCanceledException) when (ShutdownWasRequested())
-    {
-        return ExitCodes.Success;
-    }
-    catch (Exception exception)
-    {
-        return ReportFatalStartupOrRuntimeFailure(exception);
-    }
-}
-
-private static int RunOnStaThread(string[] args)
-{
     using var singleInstance = SingleInstanceGuard.TryAcquire();
     if (!singleInstance.IsAcquired) return ExitCodes.AlreadyRunning;
 
     IHost host = BuildHost(args); // ValidateOnBuild + ValidateScopes
-    IApplicationRuntime? runtime = null;
-    var hostStarted = false;
-    var shutdownCompleted = false;
-    ExceptionDispatchInfo? primaryFailure = null;
+    IApplicationRuntime runtime;
     try
     {
-        host.StartAsync(ProcessShutdown.Token).GetAwaiter().GetResult();
-        // ValidateOnStart has run; no application worker has started.
-        hostStarted = true;
+        host.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
 
-        using (var startup = CreateLinkedStartupTimeout(ProcessShutdown.Token))
+        using (var startup = new CancellationTokenSource(ValidatedStartupTimeout))
         {
             var bootstrap = host.Services.GetRequiredService<BootstrapCoordinator>();
             RequireSuccess(bootstrap.InitializeAsync(startup.Token).GetAwaiter().GetResult());
@@ -906,47 +928,40 @@ private static int RunOnStaThread(string[] args)
 
             runtime = host.Services.GetRequiredService<IApplicationRuntime>();
             RequireSuccess(runtime.StartAsync(startup.Token).GetAwaiter().GetResult());
-            // load preferences/checkpoints/session state, then start telemetry processing
+            // Start the supervised telemetry/application worker only after the store gate opens.
         }
 
-        var app = host.Services.GetRequiredService<App>();
+        if (VerifyStartupWasRequested(args))
+        {
+            StopRuntimeAndHost(runtime, host);
+            return ExitCodes.Success;
+        }
+
+        var app = host.Services.GetRequiredService<IncidentReviewDesktopApplication>();
         using var supervisor = RuntimeSupervisor.Attach(runtime, app.Dispatcher);
-        var uiExitCode = app.Run(host.Services.GetRequiredService<MainWindow>());
+        var uiExitCode = app.Run();
 
         supervisor.BeginExpectedStop();
-        ShutdownCoordinator.StopObserveAndDispose(runtime, host, hostStarted);
-        // StopAsync and Completion are both awaited; any pre-stop worker fault is rethrown.
-        shutdownCompleted = true;
+        StopRuntimeAndHost(runtime, host);
         return uiExitCode;
-    }
-    catch (Exception exception)
-    {
-        primaryFailure = ExceptionDispatchInfo.Capture(exception);
-        throw;
     }
     finally
     {
-        if (!shutdownCompleted)
-        {
-            var cleanupFailure = ShutdownCoordinator.TryStopObserveAndDispose(
-                runtime, host, hostStarted);
-
-            if (primaryFailure is null)
-                cleanupFailure?.Throw();
-            else
-                LogSecondaryCleanupFailure(primaryFailure, cleanupFailure);
-        }
+        // The implementation independently attempts runtime stop/completion,
+        // host stop, and async host disposal even when an earlier phase fails.
     }
 }
 ```
 
-The code is normative pseudocode: helper details may change, but the ordering and ownership may not. `ProcessShutdown.Token` is owned by the process lifetime; the separate linked startup token adds a validated finite startup timeout and is disposed immediately after startup. The single-instance guard is acquired before any database open or migration. `Host.StartAsync` may run framework lifetime/validation components only; no application service may observe telemetry, open the database, or mutate state during that call. `BootstrapCoordinator` owns all ordered initialization and is the only gate to `IApplicationRuntime.StartAsync`.
+The code is condensed pseudocode matching the implemented phase order; detailed failure preservation is omitted. The single-instance guard is acquired before any database open or migration. `Host.StartAsync` starts only the deliberately registered framework services; no application service observes telemetry, opens the database, or mutates state during that call. `BootstrapCoordinator` owns ordered store initialization and is the only gate to `IApplicationRuntime.StartAsync`.
 
-`RuntimeSupervisor` observes `IApplicationRuntime.Completion`. An unexpected fault or unrequested completion posts shutdown to the WPF dispatcher, causing `App.Run` to return. On every normal return from `App.Run`, the coordinator first marks shutdown as expected, then calls and awaits `StopAsync`, awaits/inspects `Completion`, stops the host, and disposes it before returning the UI exit code. Thus a worker fault in the race before or during stop is still surfaced through the outer fatal boundary.
+The validated startup timeout defaults to 30 seconds and permits 1 through 120 seconds. It bounds the cancellable phase as a whole and is checked between native migration/schema operations. It cannot forcibly preempt a synchronous native call that is already in progress. Process-wide Ctrl+C/session-ending cancellation is not currently wired into WPF startup and remains lifecycle hardening work.
+
+`RuntimeSupervisor` observes `IApplicationRuntime.Completion`. An unexpected fault or unrequested completion posts shutdown to the WPF dispatcher, causing `App.Run` to return. On every normal return from `App.Run`, the host first marks shutdown as expected, then calls and awaits `StopAsync`, awaits/inspects `Completion`, stops the Generic Host, and disposes it before returning the UI exit code. Thus a worker fault in the race before or during stop is still surfaced through the outer fatal boundary.
 
 On an exceptional path, `ExceptionDispatchInfo` preserves the primary stack. Cleanup still attempts runtime stop/completion observation, host stop, and disposal. Cleanup diagnostics are attached/logged without replacing an existing primary exception; when there is no primary exception, cleanup/worker failure becomes the thrown failure. No background `Task` is fire-and-forgotten or left unobserved.
 
-Each expected startup step returns `Result`; `RequireSuccess` converts a failed startup result into one host-owned fatal-startup path without discarding its stable code. SQLitePCL initialization occurs before any `SqliteConnection` or DbUp use and is verified in the packaged-artifact smoke test. Failure stops later phases, logs diagnostics, presents one safe fatal-startup message when possible, and shuts the host down cleanly. Unexpected exceptions are caught only at this process boundary.
+Each expected startup step returns `Result`; `RequireSuccess` converts a failed startup result into one host-owned fatal-startup path without discarding its safe message. SQLitePCL initialization occurs before any `SqliteConnection` or DbUp use and is exercised by the Release-host startup smoke test. Failure stops later phases, traces diagnostics, presents one safe fatal-startup message when not in headless verification mode, and shuts the host down cleanly. Unexpected exceptions are caught only at this process boundary.
 
 Shutdown reverses ownership:
 
@@ -959,20 +974,21 @@ disable/close UI
     → dispose host
 ```
 
-JSON configuration is not used in the first release. Deployment settings use code defaults, prefixed environment variables, and command-line arguments. Durable user preferences belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
+JSON configuration is not used in the current application. Deployment settings use code defaults, `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database is `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
 
 ## 14. UI design boundary
 
-The first UI should contain:
+The implemented MVP UI contains:
 
 - global iRacing connection indicator;
-- active session/track/car summary;
+- current and historical session selection;
 - chronological incident list showing time, lap, delta, total, and review status;
 - Review action for the selected incident;
-- optional lead-in control with a safe default;
-- notes, classification, reviewed, and dismissed controls;
+- editable durable lead-in, pause/playback-speed, and preferred-camera preference fields;
 - nonblocking status/error surface;
 - explicit unavailable state when replay control cannot be used.
+
+The incident grid displays stored notes but does not yet edit notes/classification or expose reviewed/dismissed actions. Preferred camera is persisted for forward compatibility but is not applied by the current replay adapter. These controls must not be described as implemented until the application contract, WPF interaction, and adapter behavior are connected and tested.
 
 View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry, or encode replay commands.
 
@@ -1023,9 +1039,11 @@ Packaged-deliverable smoke tests
 Real-iRacing acceptance checklist
 ```
 
+The repository currently implements the first six layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, application workflow tests with suite-local fakes, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, replay golden-vector tests, and WPF view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
+
 ### 15.3 Requirements traceability
 
-Every externally observable requirement and critical invariant receives a stable ID. Its record includes observable acceptance criteria, failure behavior, boundaries, criticality, owning contract, and implementation/verification status. MSTest cases attach IDs with `TestProperty` or an equivalent repository-owned attribute. CI produces or verifies a matrix showing:
+Every externally observable requirement and critical invariant receives a stable ID. Its record includes observable acceptance criteria, failure behavior, boundaries, criticality, owning contract, and implementation/verification status. MSTest cases currently attach IDs with `TestProperty`. The planned repository verifier/CI matrix will show:
 
 - requirements with no tests;
 - tests with no requirement/invariant rationale;
@@ -1036,37 +1054,29 @@ Traceability does not replace assertions. A test must fail for a meaningful viol
 
 ### 15.4 Public-interface and contract testing
 
-Production behavior is tested through the same contracts used by consumers.
+Production behavior is tested through the same contracts used by consumers where the current suite provides that coverage.
 
-- Every `IStore` implementation runs the same `Store.ContractTests` suite.
-- The SQLite suite additionally validates observable on-disk behavior against a real temporary database.
-- Telemetry implementations run common connect/disconnect/cancellation/ordering contracts where applicable.
-- Replay implementations run command and state contracts.
-- Application identity tests exercise every row in the Section 8.1 table, including restart against a real store and replay-only suppression.
+- `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
+- The SQLite suite validates observable on-disk behavior against real temporary databases.
+- The iRacing suite exercises connect/disconnect/reconnect, cancellation, ordering, malformed input, replay suppression, and bounded-buffer behavior against an independent process.
+- Replay tests exercise intent validation, representability, availability, delivery outcomes, and independently authored packed-message vectors.
+- Application identity/workflow tests cover durable and provisional identity, checkpoints, counter transitions, replay-only suppression, reconciliation, and runtime lifecycle. The full real-store identity matrix remains an acceptance goal.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
 
 ### 15.5 Deterministic test implementations
 
-The testing toolkit includes first-class implementations rather than ad hoc mocks:
+The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, dispatcher, and service fakes. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, and a recording replay sender.
 
-- `ScriptedTelemetrySource`;
-- `RecordingReplayController`;
-- `InMemoryStore`;
-- `ManualTimeProvider` built on the BCL `TimeProvider` abstraction;
-- `DeterministicIdGenerator`;
-- deterministic scheduler/channel controls where concurrency matters;
-- `DeterministicFaultInjector`.
+`IncidentReview.TestKit` currently establishes only the permitted public-contract dependency direction; it does not yet contain shared implementations. Reusable `ScriptedTelemetrySource`, `RecordingReplayController`, `InMemoryStore`, manual time/identity helpers, scheduler controls, and a general occurrence-based fault injector remain planned. When duplication or a second adapter/store makes them useful, they move into `TestKit` without privileged implementation access.
 
-These reusable fakes and recorders live in `IncidentReview.TestKit`. The test kit depends on public contracts and does not gain privileged access to production internals.
+Randomized, property, and fuzz-style tests must record the seed and minimized input required to reproduce a failure. Those campaigns are not implemented yet. Existing concurrency tests prefer deterministic barriers and bounded outer timeouts over sleep-based assertions.
 
-Randomized, property, and fuzz-style tests record the seed and minimized input required to reproduce a failure. Wall-clock time and nondeterministic delays are not used as assertions.
-
-Lifecycle tests use deterministic barriers to fault or complete a runtime worker before `App.Run` returns, between UI return and expected-stop marking, and during `StopAsync`. They prove the dispatcher is asked to shut down, `Completion` is observed, primary exceptions retain their stack, secondary cleanup failures are preserved diagnostically, and no successful process exit hides a worker fault.
+Current lifecycle tests cover application start/stop/completion, early telemetry completion/faults, cancellation, WPF monitoring, dirty-edit/selection preservation, and view-model disposal while an operation is active. The complete host/UI race matrix—faulting between UI return, expected-stop marking, runtime stop, host stop, and disposal—remains release-hardening work.
 
 ### 15.6 Fault injection
 
-Infrastructure is designed with narrow fault probes at meaningful state transitions, for example:
+The target reliability design uses narrow fault probes at meaningful state transitions, for example:
 
 ```text
 Sqlite.BeforeBegin
@@ -1081,13 +1091,13 @@ Replay.BeforeBroadcast
 Replay.AfterBroadcast
 ```
 
-Each adapter defines a deliberately public controller/facade and registration overload in an implementation-specific `.Testing` namespace within the same Release assembly. Internal runtime services know only an internal fault-probe contract outside that namespace. The one registration bridge in the owning assembly adapts the public controller to that internal contract. Normal production registration unconditionally supplies an internal no-op implementation and exposes no configuration, environment variable, command-line, reflection, or ordinary DI override that can replace it. Only implementation/reliability test projects may call the explicit `Add...ForTesting(controller)` overload. `eng/ArchitecturePolicy.props`, source analyzers, and architecture tests allow the single owning bridge but reject `.Testing` references from every other production source/assembly. Concrete adapters and probe invocation sites remain internal. This narrow facade is a documented exception to the registration/options-only public-surface rule, not `InternalsVisibleTo`.
+The current SQLite `.Testing` facade can select normal, indeterminate-before-commit, indeterminate-after-commit, and cleanup-failure outcomes; cancel after operation lookup; inject test migrations; and coordinate a blocked migration. The current iRacing `.Testing` facade creates a real reader over isolated object names, opens a focused frame-copy probe, supplies controlled replay-delivery outcomes, and exposes the narrow session-key extractor. These facades exercise the compiled implementation and are inaccessible to ordinary production consumers under the architecture policy. There is no user-activatable test mode.
 
-Tests choose the exact probe and occurrence that fails. For every critical SQLite/I/O fault class, the reliability suite MUST sweep occurrences: fail occurrence 1 and verify, then occurrence 2 and verify, continuing until one complete operation reaches no later eligible fault point. Test-control code exercises the same compiled production paths and must not replace the behavior being tested.
+A general named-probe controller and occurrence sweep across every critical I/O point do not exist yet. Reliability work MUST add them only through similarly explicit implementation-owned testing surfaces, keep normal registration on no-op/production behavior, and prove that test controls do not replace the code being tested.
 
-These coordination probes verify our state machine around provider calls; they do not claim to reproduce a native filesystem or SQLite VFS failure inside `fsync`/commit. Real-provider tests separately cause supported failures through locks, read-only files, `max_page_count`/full conditions, invalid paths, corruption fixtures, and abrupt child-process termination.
+These coordination probes verify our state machine around provider calls; they do not claim to reproduce a native filesystem or SQLite VFS failure inside `fsync`/commit. Existing real-provider tests cover invalid paths, migration failure/rollback, newer or incompatible schema, initialization gating, provider/pragma/schema validation, idempotency, cancellation, conflicts, cleanup, and indeterminate reconciliation. Locks, read-only files, `max_page_count`/full conditions, corruption fixtures, and abrupt child-process termination remain in the required reliability matrix.
 
-The internal commit-boundary wrapper has two test-controller outcomes for the otherwise hard-to-reproduce ambiguous branch: report indeterminate without invoking native commit, and invoke the real native commit then withhold its outcome from the transaction executor. Both return `store.commit.indeterminate` to the caller and force reconciliation on a fresh connection, covering respectively absent and present operation records. This is a state-machine simulation of an unknown outcome, not evidence of physical power-loss behavior. By contrast, a fault at `AfterConfirmedCommit` cannot change a known success into failure; it is recorded as diagnostic/test evidence and the command still returns success.
+The internal commit-boundary wrapper has two test-controller outcomes for the otherwise hard-to-reproduce ambiguous branch: report indeterminate without invoking native commit, and invoke the real native commit then withhold its outcome from the transaction executor. Both return `store.commit.indeterminate` to the caller and force reconciliation on a fresh connection, covering respectively absent and present operation records. This is a state-machine simulation of an unknown outcome, not evidence of physical power-loss behavior. A separately named `AfterConfirmedCommit` occurrence probe is part of the future general fault sweep, not current evidence.
 
 For each injected store failure, tests close and reopen the database. Failure before commit must leave the pre-transaction state; success after a confirmed commit must leave the complete post-transaction state. An indeterminate commit is covered by present/absent reconciliation and idempotent-retry tests. Partial state is never acceptable.
 
@@ -1106,7 +1116,7 @@ Critical hand-written logic requires complete decision/branch coverage:
 
 Compound conditions receive decision-table tests showing that each condition can independently affect the outcome. A line percentage alone is insufficient. Generated WPF code and trivial generated boilerplate are excluded transparently; exclusions cannot hide application decisions.
 
-`Microsoft.Testing.Extensions.CodeCoverage` is the initial collector. After the locked build, CI creates an empty run-ID-specific output directory and manifest, enumerates every expected test application, and invokes Microsoft Testing Platform with `dotnet test --no-restore --no-build --coverage --coverage-output-format cobertura`. `IncidentReview.Verification` accepts only reports named in the current successful run manifest, reads every resulting Cobertura file, applies an explicit reliability-kernel assembly include list, and fails the build below complete reachable branch coverage. It unions branch identities across reports only when invocation ID, module identity, PDB identity, and the recorded binary hash match; it never scans an ambient directory or averages percentages. A missing test application/required assembly, stale or unmanifested report, mismatched binary, unsuccessful producer process, unreadable report, or branch with no executed outcome fails closed. Every source/document exclusion is reviewed. Source/IL branch coverage plus decision tables is evidence of independent-condition testing; it is not proof of machine-code MC/DC under C# async lowering, JIT compilation, or other code generation. Coverage scenarios are rerun against the uninstrumented Release artifact because instrumented code is not the deliverable.
+`Microsoft.Testing.Extensions.CodeCoverage` is the selected collector and is directly pinned in every MSTest project. The current `eng/verify.ps1` performs a locked build, runs the test suite, and invokes a no-op verification scaffold; it does not yet collect, merge, or enforce coverage. The required future pipeline creates an empty run-ID-specific output directory and manifest, enumerates every expected test application, and invokes Microsoft Testing Platform with `dotnet test --no-restore --no-build --coverage --coverage-output-format cobertura`. `IncidentReview.Verification` will accept only reports named in the current successful run manifest, read every resulting Cobertura file, apply an explicit reliability-kernel assembly include list, and fail the build below complete reachable branch coverage. It must union branch identities across reports only when invocation ID, module identity, PDB identity, and the recorded binary hash match; it must never scan an ambient directory or average percentages. A missing test application/required assembly, stale or unmanifested report, mismatched binary, unsuccessful producer process, unreadable report, or branch with no executed outcome fails closed. Every source/document exclusion is reviewed. Source/IL branch coverage plus decision tables is evidence of independent-condition testing; it is not proof of machine-code MC/DC under C# async lowering, JIT compilation, or other code generation. Coverage scenarios are rerun against the uninstrumented Release artifact because instrumented code is not the deliverable.
 
 ### 15.8 Transaction and recovery matrix
 
@@ -1138,6 +1148,8 @@ SQLite integration tests include at least:
 - hostile-looking values containing quotes, semicolons, comments, SQL keywords, and Unicode, stored verbatim through parameters;
 - large note text and boundary numeric values.
 
+The current suite covers the core successful/rollback/idempotency/indeterminate/cancellation/constraint/migration/schema/hostile-value cases. It does not yet satisfy every item above—especially OS locking, read-only/full/corrupt storage, every occurrence sweep, historical multi-version upgrades, concurrent snapshot stress, or process termination—so this remains the release matrix rather than a claim of completion.
+
 For the transaction reliability kernel, process-termination tests MUST use a child-process harness in Release verification so abrupt termination is not simulated merely by throwing an exception. The explicit crash matrix terminates at least at these named checkpoints:
 
 - between each pair of business mutations in a multi-step command;
@@ -1154,7 +1166,7 @@ Process termination does not independently prove physical power-loss safety or s
 
 ### 15.9 Mutation testing
 
-Initially, curated mutations verify that important tests detect:
+Planned curated mutations will verify that important tests detect:
 
 - reversed comparisons in incident detection;
 - removed rollback or commit calls;
@@ -1165,23 +1177,21 @@ Initially, curated mutations verify that important tests detect:
 - unsafe acceptance of reset counters;
 - suppressed cancellation.
 
-A third-party mutation tool such as Stryker.NET is not added without an explicit dependency decision. Mutation results begin as diagnostic evidence. Every surviving behavior-changing mutant in the reliability kernel is a test defect; equivalent and performance-only mutants require recorded classification, with benchmark evidence for performance-only behavior.
+A mutation run/catalog is not implemented yet. A third-party mutation tool such as Stryker.NET is not added without an explicit dependency decision. Mutation results begin as diagnostic evidence. Every surviving behavior-changing mutant in the reliability kernel is a test defect; equivalent and performance-only mutants require recorded classification, with benchmark evidence for performance-only behavior.
 
 ### 15.10 Test the deliverable
 
-CI builds the Release deliverable once, records its hashes, and tests those same bytes without recompiling between stages. The final package is installed or expanded into a clean test location and smoke-tested as shipped. Checks include process startup, migration, database creation, dependency loading, telemetry ingestion, incident display, replay invocation, and clean shutdown.
+The current deliverable test launches the Release host executable with `--verify-startup` and a unique temporary database. It exercises the real Generic Host registrations, SQLitePCL initialization, DbUp migration, schema validation, application runtime start/stop, host shutdown, database creation, and copied iRacing third-party notice. It asserts a successful exit and cleans only its owned temporary directory. This is a useful startup smoke test, but it is not a packaged install test and does not drive the WPF UI.
 
-`IncidentReview.Iracing.ProtocolSimulator` is a separate test process, not an alternate application composition. It independently implements the pinned header's variable table, frame/ring-buffer tick protocol, named shared-memory mapping, synchronization event, torn-frame cases, and replay-message unpacking. It also implements the session-information memory region, declared length/offset, update counter/lifecycle, valid independently authored YAML-like fixtures for session/local-driver/team/car/track identity, and malformed/truncated/update-transition cases. It owns a hidden receiver window that records the same Windows broadcast messages iRacing would receive. The simulator MUST NOT reference `IncidentReview.Iracing`, copy its encoder/decoder helpers, or consume production-generated expected values; its oracle comes from a separately reviewed transcription plus golden vectors tied directly to the official artifact hash. Deliberate disagreement tests prove the oracle can catch swapped fields, wrong widths/signedness, stale ticks, bad session-info bounds/update handling, and bad message packing.
+`IncidentReview.Iracing.ProtocolSimulator` is an independent child process with no production-project reference. It creates uniquely named shared memory and an event, then independently writes the pinned header layout, variable table, session-information region, frame values, tick transitions, disconnect/reconnect, malformed input, and torn-read states. Adapter integration tests use the real production shared-memory reader against that process. Replay-message packing is currently verified separately through the implementation's recording-sender testing facade and independent golden vectors; the simulator does not yet own a User32 receiver window.
 
-The packaged application therefore runs its real `Iracing` adapter, real application services, real SQLite store, and production registration against an OS-level protocol peer. A Windows UI Automation driver uses stable `AutomationId` values to wait for the incident row, select it, and invoke Review, then the simulator independently validates the received replay command. This job runs on an interactive Windows agent in the same user session and integrity level as both processes. Setup proves real iRacing is stopped and the required named objects are free; otherwise the test fails without killing or interfering with a user process. Tests isolate the app's per-user data directory through a documented deployment-path option and a temporary Windows user/profile or test directory; there is no fake adapter, injectable test registration, or user-activatable “test mode” in the shipped executable.
+The Release gate still requires building a package once, recording its hashes, and testing those same bytes without recompilation. The package-level system test must run the shipped host's real iRacing adapter, application, SQLite store, and production registration against an OS-level protocol peer; use stable WPF `AutomationId` values to select and review an incident; and independently validate the broadcast command. It must isolate data using `--database-path`, prove real iRacing is not being disturbed, and run in an interactive Windows user session at compatible integrity levels. Coverage scenarios should also run against the uninstrumented artifact, and the package must include the reviewed notice.
 
-Identical observable scenarios run first under coverage and then against the uninstrumented packaged application; their results are compared. The hash manifest proves the package under test is the package approved for release. The simulator itself is test tooling, is dependency-inventoried, and is never included in the user package.
-
-Real iRacing acceptance testing follows a versioned checklist with captured simulator/app versions and expected observations. It supplements automated protocol tests; it does not replace them.
+Real iRacing acceptance follows a versioned checklist with captured Windows, simulator, SDK-baseline, and app versions. It supplements automated protocol tests; it does not replace them, and it has not yet been completed for this revision.
 
 ### 15.11 Test tiers
 
-| Tier | Trigger | Contents | Expected role |
+| Tier | Intended trigger | Contents | Expected role |
 |---|---|---|---|
 | Fast | Every local build/change | Results, domain, application, architecture, deterministic contracts | Immediate feedback |
 | Integration | Every CI change | Real SQLite, migrations, protocol fixtures, concurrency/fault cases | Merge gate |
@@ -1192,11 +1202,13 @@ Flaky tests are defects. A failing test is not retried until green without prese
 
 Every reported defect begins with a failing regression test. The repository preserves the smallest useful reproducer and records why the existing suite failed to expose it.
 
-Nightly fuzzing targets raw SDK buffers, session metadata, telemetry event sequences, notes/Unicode, and store query boundaries for a fixed recorded time budget. Failures retain the seed and input, are minimized, and enter the permanent regression corpus.
+Future nightly fuzzing targets raw SDK buffers, session metadata, telemetry event sequences, notes/Unicode, and store query boundaries for a fixed recorded time budget. Failures retain the seed and input, are minimized, and enter the permanent regression corpus.
+
+No hosted CI, scheduled reliability job, or nightly fuzz job is present yet. The table defines the intended delivery gates; local `eng/*.ps1` scripts currently provide the executable build/test/verification path.
 
 ### 15.12 Assertions and explanatory comments
 
-Assertions are executable statements of programmer invariants, not substitutes for validating external input. External invalid data returns a defined failure; broken internal assumptions assert and, where data safety requires it, remain checked in Release. Diagnostic/invariant builds and ordinary Release builds are both tested. Concise comments explain why a non-obvious invariant or branch exists rather than merely restating the code.
+Assertions are executable statements of programmer invariants, not substitutes for validating external input. External invalid data returns a defined failure; broken internal assumptions assert and, where data safety requires it, remain checked in Release. Dedicated diagnostic/invariant-build coverage remains a reliability target; ordinary Release builds are part of the current test path. Concise comments explain why a non-obvious invariant or branch exists rather than merely restating the code.
 
 ## 16. Technology stack and dependency policy
 
@@ -1223,9 +1235,9 @@ The default is Microsoft platform/framework dependencies plus the official iRaci
 
 The Roslyn analysis packages and code-coverage extension are Microsoft-published and prefix-reserved. The coverage extension is closed-source under Microsoft's free-to-use .NET library license; it satisfies an official-Microsoft-publisher policy but not an all-source-auditable policy. That distinction is recorded in the dependency inventory rather than hidden.
 
-The proposed provider stack is `Microsoft.Data.Sqlite.Core` plus `SQLitePCLRaw.bundle_winsqlite3`. It uses Windows' `winsqlite3.dll` instead of shipping the convenience `Microsoft.Data.Sqlite` package's bundled `e_sqlite3` engine. SQLitePCLRaw remains a reviewed third-party shim. This reduces shipped native code but ties available SQLite features to the supported Windows version, so startup and acceptance tests must probe the engine version and required features.
+The implemented provider stack is `Microsoft.Data.Sqlite.Core` plus `SQLitePCLRaw.bundle_winsqlite3`. It uses Windows' `winsqlite3.dll` instead of shipping the convenience `Microsoft.Data.Sqlite` package's bundled `e_sqlite3` engine. SQLitePCLRaw remains a reviewed third-party shim. This reduces shipped native code but ties available SQLite features to the supported Windows version, so startup validates the engine version and required features and Release acceptance must cover the minimum supported Windows build.
 
-Before the first restore is committed, the resolved graph for Dapper, DbUp SQLite support, `Microsoft.Data.Sqlite.Core`, SQLitePCLRaw, and the Windows native engine must be recorded and reviewed. `dbup-sqlite` currently trails `dbup-core` in versioning; their pinned combination requires real integration tests. Any provider change requires an ADR and must not leak beyond `Store.Sqlite`.
+The resolved NuGet graph is locked per package-consuming project, and the pinned Dapper/DbUp/provider combination is exercised by real SQLite integration tests and the Release-host startup smoke. A formal release dependency/license inventory and minimum-Windows compatibility record are still required. `dbup-sqlite` trails `dbup-core` in versioning; its pinned combination remains protected by those tests. Any provider change requires an ADR and must not leak beyond `Store.Sqlite`.
 
 No additional runtime or build package is added merely for convenience. A dependency proposal states:
 
@@ -1239,9 +1251,9 @@ No additional runtime or build package is added merely for convenience. A depend
 - removal/replacement plan;
 - tests protecting the boundary.
 
-### 16.3 Candidate package ledger
+### 16.3 Current direct package ledger
 
-These are candidate stable pins verified as current on 2026-09-05. A pin becomes approved only after locked restore, publisher/license/transitive-graph review, and the applicable compatibility tests. Versions are recorded centrally, not copied into individual projects.
+These are the direct versions currently pinned in repository-root policy. Versions are recorded centrally, not copied into individual projects. Lock files record each consuming project's resolved graph.
 
 | Package | Version | Classification |
 |---|---:|---|
@@ -1256,13 +1268,13 @@ These are candidate stable pins verified as current on 2026-09-05. A pin becomes
 | `Dapper` | 2.1.79 | Approved third-party exception |
 | `dbup-core` | 6.1.1 | Approved third-party exception |
 | `dbup-sqlite` | 6.0.4 | Approved third-party exception |
-| `SQLitePCLRaw.bundle_winsqlite3` | 2.1.11 | Proposed reviewed third-party binding exception |
+| `SQLitePCLRaw.bundle_winsqlite3` | 2.1.11 | Approved third-party binding exception |
 | `MSTest.Sdk` | 4.4.0 | Microsoft project/test SDK |
 | `Microsoft.Testing.Extensions.CodeCoverage` | 18.11.0 | Microsoft test-only extension; closed-source license reviewed separately |
 | `Microsoft.CodeAnalysis.CSharp` | 5.9.0 | Microsoft build-only dependency; private assets |
 | `Microsoft.CodeAnalysis.Analyzers` | 5.9.0 | Microsoft build-only dependency; private assets |
 
-Exact pins are a reproducible starting point, not permission to update automatically or a claim that the proposed provider graph already passed integration. Every version change follows the dependency review and lock-file process.
+Exact pins are a reproducible starting point, not permission to update automatically or a claim of final platform/release acceptance. Every version change follows the dependency review and lock-file process.
 
 ### 16.4 Development prerequisites and verified workstation baseline
 
@@ -1387,7 +1399,7 @@ The real file enumerates every production edge and infrastructure package owner 
 
 The analyzer project itself and its tests are excluded from that injected reference; analyzer tests use a normal project reference. Code-fix/workspace packages are not added unless a real code-fix requirement is approved. Diagnostics have stable IDs, documented examples, unit tests, and `error` severity for the forbidden patterns named in Section 6.3.
 
-`IncidentReview.Verification` is a normal repository console tool invoked by `eng/verify.ps1`. It consumes explicit machine-readable inputs and exits nonzero on policy failure; it does not scrape human prose when a schema can be used. Both tools are restored under the same source, lock, audit, and license rules as production dependencies.
+`IncidentReview.Verification` is a normal repository console tool invoked by `eng/verify.ps1`, but its current `Main` is an intentional no-op scaffold. It does not yet consume evidence or enforce policy, and a zero exit from it is not release evidence. When implemented, it must consume explicit machine-readable inputs, exit nonzero on policy failure, and avoid scraping human prose when a schema can be used. Both tools are restored under the same source, lock, audit, and license rules as production dependencies.
 
 ### 17.6 Explicit test extensions
 
@@ -1455,6 +1467,46 @@ Dependency additions/upgrades use a dedicated `build(deps)` commit containing th
 
 Commit signing and remote branch protection are configured only after the repository host and signing identity are selected. Until then, repository-local author identity must be explicit and must never be fabricated from guessed personal details.
 
+### 17.9 Build, run, and publish commands
+
+Commands are run from the repository root in PowerShell. Normal restore is locked:
+
+```powershell
+.\eng\build.ps1 -Configuration Release
+.\eng\test.ps1 -Configuration Release
+.\eng\verify.ps1 -Configuration Release
+```
+
+`verify.ps1` already performs the Release build and tests; the separate commands are useful while iterating. Only an intentional, reviewed dependency update uses `.\eng\build.ps1 -Configuration Release -UpdateLockFiles`, followed by inspection of every changed `packages.lock.json`.
+
+After a Release build, launch the existing bytes without another restore/build:
+
+```powershell
+dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.csproj `
+    --configuration Release --no-restore --no-build
+```
+
+Publish the Windows x64 host to a repository-ignored directory:
+
+```powershell
+dotnet publish .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.csproj `
+    --configuration Release --no-restore `
+    --output .\artifacts\publish\win-x64
+```
+
+The current project produces a framework-dependent Windows x64 app and therefore requires the matching .NET Desktop Runtime on the target machine. Packaging/self-contained deployment has not been selected. The published output must contain `THIRD-PARTY-NOTICES\iracing-sdk-1.20.md`.
+
+Startup overrides follow the executable after `--` when using `dotnet run`, for example:
+
+```powershell
+dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.csproj `
+    --configuration Release --no-restore --no-build -- `
+    --database-path "C:\IncidentReviewData\incident-review.db" `
+    --startup-timeout-seconds 30
+```
+
+The database path must be an absolute local file path. The default remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`.
+
 ## 18. Observability, privacy, and security
 
 ### 18.1 Logging
@@ -1505,6 +1557,8 @@ A future `Store.Sync` may compose local SQLite and remote stores. This requires 
 Simulator-neutral telemetry/replay contracts permit another adapter only if its semantics fit honestly. A web or alternate desktop UI consumes `Application.Contracts`; it does not reuse WPF view models by force.
 
 ## 20. Delivery plan
+
+Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices with remaining reliability-matrix work; Milestone 3 has the official SDK adapter and independent-process tests but not real-simulator acceptance; Milestone 4 has the runnable core WPF review workflow but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
 
 ### Milestone 0 — Repository foundation
 
@@ -1609,7 +1663,7 @@ A feature is not done until:
 | Decision | Status | Summary |
 |---|---|---|
 | ADR-0001 | Accepted | Windows desktop application using .NET 10 LTS, C# 14, and WPF. |
-| ADR-0002 | Proposed, pending integration verification | SQLite is the initial `IStore`; use `Microsoft.Data.Sqlite.Core` with `SQLitePCLRaw.bundle_winsqlite3`, audit/pin the full graph, and test Windows engine capabilities. |
+| ADR-0002 | Accepted; minimum-Windows acceptance pending | SQLite is the initial `IStore`; use `Microsoft.Data.Sqlite.Core` with `SQLitePCLRaw.bundle_winsqlite3`, audit/pin the full graph, and validate Windows engine capabilities at startup. |
 | ADR-0003 | Accepted | Dapper performs parameterized SQL mapping; raw SQL remains private to `Store.Sqlite`. |
 | ADR-0004 | Accepted | DbUp performs ordered, journaled, embedded migrations before application startup. |
 | ADR-0005 | Accepted | Every application mutation is one typed command with at-most-once committed effects, executed atomically through transaction-owning `IStore.ExecuteAsync`. |
@@ -1619,6 +1673,7 @@ A feature is not done until:
 | ADR-0009 | Accepted | Testing follows Hipp's reliability philosophy, including designed-in fault injection and deliverable testing. |
 | ADR-0010 | Deferred | JSON is an optional export format, not an internal storage or communication requirement. |
 | ADR-0011 | Accepted | Codex creates small, green Conventional Commits for completed work; push/merge/tag/history rewriting remain separately authorized actions. |
+| ADR-0012 | Accepted; live acceptance pending | Transcribe only the used protocol surface from the pinned official iRacing SDK 1.20 artifact; do not depend on an unofficial wrapper or redistribute the upstream archive. |
 
 ## 23. Open questions requiring evidence or product decisions
 
@@ -1626,15 +1681,15 @@ A feature is not done until:
 2. How much delay exists between the physical event and incident-counter update, and should the marker time be refined from a telemetry ring buffer?
 3. Which replay camera, playback speed, and default lead-in provide the best review experience?
 4. What telemetry state most reliably confirms that replay commands are currently accepted?
-5. Does the pinned `Microsoft.Data.Sqlite.Core` + `SQLitePCLRaw.bundle_winsqlite3` + `dbup-sqlite` graph pass migration, transaction, engine-capability, and deliverable tests on the minimum supported Windows build?
+5. What is the minimum supported Windows build, and does its serviced `winsqlite3.dll` pass the existing startup/schema/migration/transaction suite and release acceptance matrix?
 6. Which SQLite pragmas provide the desired durability/concurrency balance on supported Windows filesystems?
 7. What retention, deletion, backup, and database-corruption recovery experience should the UI provide?
 8. Should classification categories be fixed, user-configurable, or versioned?
 9. What exact packaged format and update mechanism will be used?
 10. What real-iRacing scenarios and versions form the first release acceptance matrix?
-11. What is the minimum supported Windows build, and which `winsqlite3` version/features does that build guarantee?
-12. Do the official session-info fixtures permit a small correct bounded extractor, or is a separately reviewed YAML dependency required?
-13. Which exact official SDK fields form the durable simulator-session key in every supported live/team/offline scenario, and which fixtures prove the identity table in Section 8.1?
+11. Do live samples confirm that the narrow repository-owned `WeekendInfo:SubSessionID` extractor remains sufficient, or does permitted real-world evidence justify a separately reviewed YAML dependency?
+12. Does `SubSessionID` plus SDK session number remain a durable simulator-session key across every supported live/team/offline scenario?
+13. Which authoritative SDK signal, if any, distinguishes a manually entered paused replay from live paused/stationary state?
 14. Which persistent Release diagnostic sink and rotation policy meet support needs without adding an unjustified logging package?
 
 Open questions are resolved with experiments, fixtures, or ADRs—not assumptions embedded silently in implementation code.
