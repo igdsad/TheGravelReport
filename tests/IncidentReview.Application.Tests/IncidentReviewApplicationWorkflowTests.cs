@@ -48,6 +48,72 @@ public sealed class IncidentReviewApplicationWorkflowTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-SES-003")]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task TransientTelemetryFailureRetainsActiveSessionAndIncident()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_000,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var session = host.Store.Session!.Id;
+        var incident = host.Store.LastRecord!.Incident;
+        var checkpoint = host.Store.Checkpoint;
+        Assert.IsNotNull(checkpoint);
+
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var unavailable = await host.Service.GetSnapshotAsync(CancellationToken.None);
+        Assert.IsTrue(unavailable.IsSuccess);
+        Assert.AreEqual(ReviewServiceStatus.Unavailable, unavailable.Value.Status);
+        Assert.AreEqual(session, unavailable.Value.ActiveSession!.Id);
+        Assert.HasCount(1, unavailable.Value.ActiveSession.Incidents);
+        Assert.AreEqual(incident.Id, unavailable.Value.ActiveSession.Incidents[0].Id);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 3_000,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+
+        var recovered = await host.Service.GetSnapshotAsync(CancellationToken.None);
+        Assert.IsTrue(recovered.IsSuccess);
+        Assert.AreEqual(session, recovered.Value.ActiveSession!.Id);
+        Assert.HasCount(1, recovered.Value.ActiveSession.Incidents);
+        Assert.AreEqual(incident.Id, recovered.Value.ActiveSession.Incidents[0].Id);
+        Assert.AreEqual(1, host.Store.EnsureSessionCount);
+        Assert.AreEqual(1, host.Store.BaselineCount);
+        Assert.AreEqual(1, host.Store.RecordAttemptCount);
+        Assert.AreEqual(checkpoint, host.Store.Checkpoint);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(session, current.Value.Id);
+        var review = await host.Service.ReviewIncidentAsync(
+            incident.Id,
+            ReplayOffset.Zero,
+            CancellationToken.None);
+        Assert.IsTrue(review.IsSuccess);
+        Assert.AreEqual(1, host.Replay.SeekCount);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
     [TestProperty("Requirement", "IR-RPY-001")]
     public async Task SnapshotLoadsCurrentSessionPreferencesAndTransientReplayContextTogether()
