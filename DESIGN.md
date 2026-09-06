@@ -475,6 +475,8 @@ The domain does not know how telemetry arrived, how replay commands are transmit
 
 The iRacing adapter cannot manufacture an application `SessionIdentity` because it has no store dependency. It instead emits a `SimulatorSessionDescriptor`. For the pinned SDK, the adapter builds a durable opaque key only from the officially documented session-instance evidence plus replay session number after all fields validate. The exact raw field mapping is recorded with the SDK fixture; raw field names never become a public contract.
 
+The acquisition, provenance, licensing, and evidence gate for that pinned artifact is maintained in [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md). ABI constants and replay ordinals do not enter production from unofficial mirrors.
+
 The application resolves the descriptor before incident detection: query `GetSessionBySimulatorKey`; if found, reuse its `SessionIdentity`; otherwise generate one UUIDv7 and execute `EnsureSession` with the proposed identity and descriptor. A concurrent unique-key conflict is resolved by querying the winner, never by creating a second logical session. SQLite enforces a partial unique key over `(simulator, simulator_session_key)` when the durable key is non-null.
 
 | Observation | Session identity action | Detector action |
@@ -1641,7 +1643,8 @@ Open questions are resolved with experiments, fixtures, or ADRs—not assumption
 
 - Richard Hipp, [*Reliability Lessons From SQLite* — SSW 2026](https://www.youtube.com/watch?v=V_qzqY1bb7I)
 - iRacing Support, [distinction between the local simulator SDK and remote Data API](https://support.iracing.com/support/solutions/articles/31000177790-oauth-client-credentials)
-- Non-authoritative discovery mirror, [`irsdk_defines.h`](https://github.com/vipoo/irsdk/blob/master/irsdk_defines.h); implementation must use a recorded official iRacing SDK artifact
+- iRacing, [official member SDK discussion and distribution](https://forums.iracing.com/discussion/62/iracing-sdk/p1)
+- Repository evidence gate, [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md)
 - Microsoft, [.NET Generic Host](https://learn.microsoft.com/dotnet/core/extensions/generic-host)
 - Microsoft, [.NET dependency injection guidelines](https://learn.microsoft.com/dotnet/core/extensions/dependency-injection/guidelines)
 - Microsoft, [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management)
