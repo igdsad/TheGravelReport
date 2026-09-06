@@ -1,5 +1,11 @@
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 using IncidentReview.Application.Contracts;
 using IncidentReview.Domain;
 using IncidentReview.Results;
@@ -9,6 +15,9 @@ namespace IncidentReview.Desktop.Wpf.Tests;
 [TestClass]
 public sealed class DesktopThemeOrderingTests
 {
+    private const string StartupProbeEnvironmentVariable =
+        "INCIDENTREVIEW_DESKTOP_STARTUP_PROBE";
+
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-003")]
     [TestProperty("Requirement", "QR-TST-001")]
@@ -41,8 +50,78 @@ public sealed class DesktopThemeOrderingTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-003")]
+    [TestProperty("Requirement", "IR-UI-004")]
     [TestProperty("Requirement", "QR-TST-001")]
-    public void StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary()
+    public async Task StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary()
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(StartupProbeEnvironmentVariable),
+                "1",
+                StringComparison.Ordinal))
+        {
+            RunStartupSequenceProbe();
+            return;
+        }
+
+        await RunStartupSequenceProbeInChildProcessAsync();
+    }
+
+    private static async Task RunStartupSequenceProbeInChildProcessAsync()
+    {
+        var executable = Path.Combine(
+            AppContext.BaseDirectory,
+            "IncidentReview.Desktop.Wpf.Tests.exe");
+        Assert.IsTrue(File.Exists(executable), $"Desktop test host not found: {executable}");
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.Environment[StartupProbeEnvironmentVariable] = "1";
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add(
+            $"FullyQualifiedName={typeof(DesktopThemeOrderingTests).FullName}." +
+            nameof(StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary));
+        startInfo.ArgumentList.Add("--output");
+        startInfo.ArgumentList.Add("Minimal");
+        startInfo.ArgumentList.Add("--progress");
+        startInfo.ArgumentList.Add("off");
+        startInfo.ArgumentList.Add("--timeout");
+        startInfo.ArgumentList.Add("15s");
+
+        using var process = Process.Start(startInfo) ??
+            throw new InvalidOperationException("The desktop startup probe could not be started.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(CancellationToken.None);
+            Assert.Fail("The isolated WPF startup probe did not finish in 20 seconds.");
+        }
+
+        var output = await standardOutput;
+        var error = await standardError;
+        Assert.AreEqual(
+            0,
+            process.ExitCode,
+            $"The isolated WPF startup probe exited with " +
+            $"0x{unchecked((uint)process.ExitCode):X8}.{Environment.NewLine}" +
+            $"stdout:{Environment.NewLine}{output}{Environment.NewLine}" +
+            $"stderr:{Environment.NewLine}{error}");
+    }
+
+    private static void RunStartupSequenceProbe()
     {
         ExceptionDispatchInfo? failure = null;
         var thread = new Thread(() =>
@@ -51,10 +130,21 @@ public sealed class DesktopThemeOrderingTests
             MainWindowViewModel? viewModel = null;
             try
             {
+                var sessionId = SessionIdentity.Generate();
+                var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+                var preferences = TestModelFactory.Preferences(
+                    camera: "Cockpit",
+                    theme: ThemePreference.Light);
                 var service = new FakeIncidentReviewService
                 {
-                    PreferencesResult = Result<UserPreferences>.Success(
-                        TestModelFactory.Preferences(theme: ThemePreference.Light)),
+                    PreferencesResult = Result<UserPreferences>.Success(preferences),
+                    SnapshotResult = Result<ReviewSnapshot>.Success(
+                        TestModelFactory.Snapshot(
+                            revision: 1,
+                            activeSession: TestModelFactory.Session(sessionId, incident),
+                            preferences: preferences,
+                            cameraGroups: ["Cockpit", "TV1"],
+                            currentCameraGroup: "Cockpit")),
                 };
                 var themeController = new FakeThemeController(ResolvedTheme.Dark);
                 viewModel = new MainWindowViewModel(
@@ -72,6 +162,22 @@ public sealed class DesktopThemeOrderingTests
                 Assert.AreEqual(ThemePreference.Light, viewModel.State.ConfiguredThemePreference);
                 Assert.AreEqual(ResolvedTheme.Light, viewModel.State.ResolvedTheme);
                 Assert.AreEqual(ResolvedTheme.Light, themeController.AppliedTheme);
+
+                window.Show();
+                window.Dispatcher.Invoke(static () => { }, DispatcherPriority.ApplicationIdle);
+                var advanced = FindVisualDescendant<Expander>(window);
+                Assert.IsNotNull(advanced);
+                advanced.IsExpanded = true;
+                window.UpdateLayout();
+
+                viewModel.RefreshAsync(CancellationToken.None).GetAwaiter().GetResult();
+                window.Dispatcher.Invoke(static () => { }, DispatcherPriority.ApplicationIdle);
+                window.UpdateLayout();
+
+                Assert.IsTrue(window.IsVisible);
+                Assert.HasCount(1, viewModel.State.Incidents);
+                Assert.HasCount(3, viewModel.State.CameraChoices);
+                Assert.AreEqual("Cockpit", viewModel.State.SelectedCameraChoice.CameraName);
             }
             catch (Exception exception)
             {
@@ -79,15 +185,39 @@ public sealed class DesktopThemeOrderingTests
             }
             finally
             {
-                window?.Close();
                 viewModel?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                window?.Close();
             }
-        });
+        })
+        {
+            IsBackground = true,
+        };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
 
         Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(10)), "The WPF startup probe did not finish.");
         failure?.Throw();
+    }
+
+    private static T? FindVisualDescendant<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            var descendant = FindVisualDescendant<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private static async Task PumpUntilCompleteAsync(Task operation, ManualDispatcher dispatcher)

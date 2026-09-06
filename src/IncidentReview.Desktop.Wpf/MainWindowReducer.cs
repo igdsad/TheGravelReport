@@ -207,6 +207,11 @@ public static class MainWindowReducer
             state.Incidents.Any(incident => incident.Id == action.IncidentId)
                 ? action.IncidentId
                 : null;
+        if (Equals(state.SelectedIncidentId, selected))
+        {
+            return state;
+        }
+
         return Copy(state, selectedIncidentId: selected, replaceSelectedIncidentId: true);
     }
 
@@ -218,6 +223,14 @@ public static class MainWindowReducer
         var isDirty = !CameraNamesEqual(
             camera.CameraName,
             state.SavedPreferences.PreferredCamera);
+        if (CameraNamesEqual(
+                state.SelectedCameraChoice.CameraName,
+                camera.CameraName) &&
+            state.IsCameraSelectionDirty == isDirty)
+        {
+            return state;
+        }
+
         return Copy(
             state,
             selectedCameraChoice: camera,

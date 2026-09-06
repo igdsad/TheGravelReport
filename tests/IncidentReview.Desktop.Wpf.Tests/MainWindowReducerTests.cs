@@ -26,6 +26,37 @@ public sealed class MainWindowReducerTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-UI-004")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void EquivalentSelectorActionsAreIdentityTransitions()
+    {
+        var sessionId = SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var state = ReduceSnapshot(
+            MainWindowReducer.InitialState,
+            Snapshot(
+                revision: 1,
+                session: TestModelFactory.Session(sessionId, incident),
+                preferences: TestModelFactory.Preferences(camera: "Cockpit"),
+                cameras: ["Cockpit", "TV1"]),
+            SnapshotRefreshMode.Automatic);
+        state = MainWindowReducer.Reduce(
+            state,
+            new MainWindowAction.SelectIncident(incident.Id));
+
+        var repeatedIncident = MainWindowReducer.Reduce(
+            state,
+            new MainWindowAction.SelectIncident(incident.Id));
+        var repeatedCamera = MainWindowReducer.Reduce(
+            state,
+            new MainWindowAction.SelectCamera("Cockpit"));
+
+        Assert.AreSame(state, repeatedIncident);
+        Assert.AreSame(state, repeatedCamera);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
     public void ManualSnapshotAtomicallyProjectsApplicationStateAndRefreshNotice()
     {
         var sessionId = SessionIdentity.Generate();
@@ -78,6 +109,9 @@ public sealed class MainWindowReducerTests
         var busy = MainWindowReducer.Reduce(state, new MainWindowAction.SetBusy(isBusy: true));
         Assert.AreEqual("Working…", busy.StatusDetail);
         Assert.AreSame(state.CurrentStatusEvent, busy.CurrentStatusEvent);
+        Assert.AreSame(state.Incidents, busy.Incidents);
+        Assert.AreSame(state.CameraChoices, busy.CameraChoices);
+        Assert.AreSame(state.EventLog, busy.EventLog);
 
         var idle = MainWindowReducer.Reduce(busy, new MainWindowAction.SetBusy(isBusy: false));
         Assert.AreEqual("Replay is ready.", idle.StatusDetail);

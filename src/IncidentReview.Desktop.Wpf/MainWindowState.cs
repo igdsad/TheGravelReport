@@ -163,8 +163,11 @@ public sealed class MainWindowState
         ? "No review session is available yet."
         : "No incidents are available for this session.";
 
-    private static ReadOnlyCollection<T> Copy<T>(IEnumerable<T> values) =>
-        Array.AsReadOnly(values.ToArray());
+    private static ReadOnlyCollection<T> Copy<T>(IEnumerable<T> values) => values switch
+    {
+        ReadOnlyCollection<T> readOnly => readOnly,
+        _ => Array.AsReadOnly(values.ToArray()),
+    };
 
     private static string FormatStatus(ReviewServiceStatus status) => status switch
     {

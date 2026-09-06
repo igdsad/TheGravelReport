@@ -48,6 +48,76 @@ public sealed class MainWindowViewModelTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-UI-004")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task SelectorWriteBackOfCurrentValuesDoesNotPublishState()
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 1,
+            activeSession: TestModelFactory.Session(sessionId, incident),
+            preferences: TestModelFactory.Preferences(camera: "Cockpit"),
+            cameraGroups: ["Cockpit", "TV1"]));
+        await using var viewModel = CreateViewModel(service);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.State.Incidents[0];
+        var selectedState = viewModel.State;
+        var stateNotifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.State))
+            {
+                stateNotifications++;
+            }
+        };
+
+        viewModel.SelectedIncident = viewModel.SelectedIncident;
+        viewModel.SelectedCameraChoice = viewModel.SelectedCameraChoice;
+
+        Assert.AreSame(selectedState, viewModel.State);
+        Assert.AreEqual(0, stateNotifications);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-UI-004")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task StatePublicationIgnoresTransientSelectorWriteBack()
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 1,
+            activeSession: TestModelFactory.Session(sessionId, incident),
+            preferences: TestModelFactory.Preferences(camera: "Cockpit"),
+            cameraGroups: ["Cockpit", "TV1"]));
+        var dispatcher = new RecordingDispatcher(hasAccess: true);
+        await using var viewModel = CreateViewModel(service, dispatcher);
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.State.Incidents[0];
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.State))
+            {
+                viewModel.SelectedIncident = null;
+                viewModel.SelectedCameraChoice = null!;
+            }
+        };
+
+        viewModel.PrepareForStartup(TestModelFactory.Preferences(
+            camera: "Cockpit",
+            theme: ThemePreference.Dark));
+
+        Assert.AreEqual(incident.Id, viewModel.State.SelectedIncidentId);
+        Assert.AreEqual("Cockpit", viewModel.State.SelectedCameraChoice.CameraName);
+        Assert.AreEqual(ThemePreference.Dark, viewModel.State.ConfiguredThemePreference);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
     public async Task NoActiveSessionShowsThePrimaryEmptyState()
     {
         var service = new FakeIncidentReviewService

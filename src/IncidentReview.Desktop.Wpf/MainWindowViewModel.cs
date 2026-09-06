@@ -25,6 +25,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private CancellationTokenSource? _monitorCancellation;
     private Task? _monitorTask;
     private MainWindowState _state;
+    private bool _isPublishingState;
     private bool _isDisposed;
 
     public MainWindowViewModel(
@@ -65,7 +66,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public IncidentListItem? SelectedIncident
     {
         get => State.SelectedIncident;
-        set => ApplyAction(new MainWindowAction.SelectIncident(value?.Id));
+        set
+        {
+            if (_isPublishingState)
+            {
+                return;
+            }
+
+            var incidentId = value?.Id;
+            if (Equals(State.SelectedIncidentId, incidentId))
+            {
+                return;
+            }
+
+            ApplyAction(new MainWindowAction.SelectIncident(incidentId));
+        }
     }
 
     public CameraChoice SelectedCameraChoice
@@ -73,7 +88,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get => State.SelectedCameraChoice;
         set
         {
-            ArgumentNullException.ThrowIfNull(value);
+            if (_isPublishingState || value is null)
+            {
+                return;
+            }
+
+            if (string.Equals(
+                    State.SelectedCameraChoice.CameraName,
+                    value.CameraName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
             ApplyAction(new MainWindowAction.SelectCamera(value.CameraName));
         }
     }
@@ -512,11 +539,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
+        var previous = _state;
         _state = next;
-        OnPropertyChanged(nameof(State));
-        OnPropertyChanged(nameof(SelectedIncident));
-        OnPropertyChanged(nameof(SelectedCameraChoice));
-        RaiseCommandStates();
+        _isPublishingState = true;
+        try
+        {
+            OnPropertyChanged(nameof(State));
+            if (!ReferenceEquals(previous.Incidents, next.Incidents) ||
+                !Equals(previous.SelectedIncidentId, next.SelectedIncidentId))
+            {
+                OnPropertyChanged(nameof(SelectedIncident));
+            }
+
+            if (!ReferenceEquals(previous.CameraChoices, next.CameraChoices) ||
+                !ReferenceEquals(previous.SelectedCameraChoice, next.SelectedCameraChoice))
+            {
+                OnPropertyChanged(nameof(SelectedCameraChoice));
+            }
+
+            RaiseCommandStates();
+        }
+        finally
+        {
+            _isPublishingState = false;
+        }
     }
 
     private void RaiseCommandStates()

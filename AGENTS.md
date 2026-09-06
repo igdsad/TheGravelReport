@@ -48,6 +48,8 @@ GravelReview uses a reducer-style, top-down presentation architecture inspired b
 - Application data enters through one coherent, revisioned `ReviewSnapshot`. Do not rebuild the same screen with independent status/session/preferences/context queries.
 - A status notice and its event-log entry are the same `EventLogItem` instance. Never maintain separate warning strings for the status bar and event stream.
 - Ignore lower snapshot revisions. Equal revisions may refresh transient simulator context. Automatic refresh preserves valid in-progress selection/drafts; a manual refresh deliberately reports its result.
+- WPF may write `SelectedItem` back while rebinding an `ItemsSource`. That render-time write-back is not new user intent: suppress selector setters while publishing root state, make equivalent selection actions return the existing state instance, and preserve unchanged collection identities across unrelated state transitions.
+- Run shown-window WPF crash regressions in a child process with a hard timeout. Fatal runtime failures such as stack overflow cannot be contained by an in-process test assertion.
 - Keep the event log bounded and tail-following. It is presentation state, not a durable diagnostic sink.
 - Busy state may temporarily overlay the status text, but it must not destroy the underlying current notice.
 
