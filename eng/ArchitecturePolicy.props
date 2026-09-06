@@ -244,6 +244,7 @@
     <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Iracing.Tests"><To>IncidentReview.Iracing.ProtocolSimulator</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Desktop.Wpf</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
@@ -252,6 +253,7 @@
     <AllowedProjectReference Include="IncidentReview.Desktop.Wpf.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Deliverable.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Deliverable.Tests"><To>IncidentReview.Host.Wpf</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Analyzers.Tests"><To>IncidentReview.Analyzers</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Verification.Tests"><To>IncidentReview.Verification</To></AllowedProjectReference>
   </ItemGroup>
@@ -264,6 +266,7 @@
     <PackageOwner Include="SQLitePCLRaw.bundle_winsqlite3"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.Application.Tests</Project></PackageOwner>
 
     <PackageOwner Include="Microsoft.Extensions.Hosting"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Configuration.Binder"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>

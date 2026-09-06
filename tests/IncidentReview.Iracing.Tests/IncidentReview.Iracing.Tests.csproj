@@ -1,16 +1,21 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="MSTest.Sdk">
   <PropertyGroup>
     <AssemblyName>IncidentReview.Iracing.Tests</AssemblyName>
     <RootNamespace>IncidentReview.Iracing.Tests</RootNamespace>
-    <IsPackable>false</IsPackable>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
     <ProjectReference Include="../../src/IncidentReview.Iracing/IncidentReview.Iracing.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
     <ProjectReference Include="../IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
+    <ProjectReference Include="../IncidentReview.Iracing.ProtocolSimulator/IncidentReview.Iracing.ProtocolSimulator.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

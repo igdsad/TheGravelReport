@@ -2,8 +2,14 @@
   <PropertyGroup>
     <AssemblyName>IncidentReview.Iracing</AssemblyName>
     <RootNamespace>IncidentReview.Iracing</RootNamespace>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
