@@ -17,6 +17,21 @@ public static class ApplicationErrorCodes
     public static ErrorCode ReplayUnavailable { get; } =
         ErrorCode.Define("application.replay.unavailable");
 
+    public static ErrorCode ReplayDriverOnTrack { get; } =
+        ErrorCode.Define("application.replay.driver-on-track");
+
+    public static ErrorCode ReplayOnTrackStateUnknown { get; } =
+        ErrorCode.Define("application.replay.on-track-state-unknown");
+
+    public static ErrorCode ReplayCommandInProgress { get; } =
+        ErrorCode.Define("application.replay.command-in-progress");
+
+    public static ErrorCode ReplaySessionNotLoaded { get; } =
+        ErrorCode.Define("application.replay.session-not-loaded");
+
+    public static ErrorCode ReplaySessionIdentityUnavailable { get; } =
+        ErrorCode.Define("application.replay.session-identity-unavailable");
+
     public static ErrorCode RuntimeStopped { get; } =
         ErrorCode.Define("application.runtime.stopped");
 }

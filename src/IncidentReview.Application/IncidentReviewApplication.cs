@@ -36,7 +36,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private bool _ownedReviewActive;
     private ReviewServiceStatus _status = ReviewServiceStatus.Stopped;
     private OnTrackState _onTrackState = OnTrackState.Unknown;
-    private ErrorCode? _lastUnavailableErrorCode;
+    private Error? _lastUnavailableError;
     private SessionIdentity? _currentSession;
     private StoredSession? _activeSession;
     private SimulatorSessionDescriptor? _replayDescriptor;
@@ -189,11 +189,15 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         var seekAccepted = false;
         lock (_stateLock)
         {
-            if (_status != ReviewServiceStatus.Connected ||
-                _onTrackState != OnTrackState.NotOnTrack ||
-                _reviewCommandInProgress)
+            var preconditionError = GetReplayPreconditionError();
+            if (preconditionError is not null)
             {
-                return Result.Failure(ApplicationErrors.ReplayUnavailable);
+                return Result.Failure(preconditionError);
+            }
+
+            if (_reviewCommandInProgress)
+            {
+                return Result.Failure(ApplicationErrors.ReplayCommandInProgress);
             }
 
             _reviewCommandInProgress = true;
@@ -238,11 +242,12 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             Result playbackResult;
             lock (_stateLock)
             {
-                if (_status != ReviewServiceStatus.Connected ||
-                    _onTrackState != OnTrackState.NotOnTrack ||
-                    _currentSession != stored.Session)
+                var preconditionError = GetReplayPreconditionError(
+                    stored.Session,
+                    stored.Position.SessionNumber);
+                if (preconditionError is not null)
                 {
-                    return Result.Failure(ApplicationErrors.ReplayUnavailable);
+                    return Result.Failure(preconditionError);
                 }
 
                 _ownedReviewActive = true;
@@ -270,6 +275,47 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 }
             }
         }
+    }
+
+    private Error? GetReplayPreconditionError(
+        SessionIdentity? requiredSession = null,
+        SessionNumber? requiredSessionNumber = null)
+    {
+        if (_status == ReviewServiceStatus.Stopped)
+        {
+            return ApplicationErrors.RuntimeStopped;
+        }
+
+        if (_status == ReviewServiceStatus.WaitingForSimulator)
+        {
+            return ApplicationErrors.ReplayUnavailable;
+        }
+
+        if (_status == ReviewServiceStatus.Unavailable)
+        {
+            return _lastUnavailableError ?? ApplicationErrors.ReplayUnavailable;
+        }
+
+        if (_onTrackState == OnTrackState.OnTrack)
+        {
+            return ApplicationErrors.ReplayDriverOnTrack;
+        }
+
+        if (_onTrackState == OnTrackState.Unknown)
+        {
+            return ApplicationErrors.ReplayOnTrackStateUnknown;
+        }
+
+        if (requiredSession is null || _currentSession == requiredSession)
+        {
+            return null;
+        }
+
+        return _currentSession is null &&
+            _replayDescriptor?.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
+            _replayDescriptor.SessionNumber == requiredSessionNumber
+                ? ApplicationErrors.ReplaySessionIdentityUnavailable
+                : ApplicationErrors.ReplaySessionNotLoaded;
     }
 
     public async Task<Result> AnnotateIncidentAsync(
@@ -432,8 +478,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     {
         lock (_stateLock)
         {
-            if (_reviewCommandInProgress ||
-                (_ownedReviewActive && sample.OnTrackState != OnTrackState.OnTrack))
+            if (_ownedReviewActive && sample.OnTrackState != OnTrackState.OnTrack)
             {
                 return false;
             }
@@ -549,13 +594,33 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         TelemetrySample sample,
         CancellationToken cancellationToken)
     {
+        StoredSession? cachedSession;
+        var restoredCurrentSession = false;
         lock (_stateLock)
         {
             _replayDescriptor = null;
-            if (_activeSession?.Descriptor == sample.Session)
+            cachedSession = _activeSession?.Descriptor == sample.Session
+                ? _activeSession
+                : null;
+            if (cachedSession is not null && _currentSession != cachedSession.Id)
             {
-                return _activeSession;
+                _currentSession = cachedSession.Id;
+                restoredCurrentSession = true;
             }
+            else if (cachedSession is null)
+            {
+                _currentSession = null;
+            }
+        }
+
+        if (cachedSession is not null)
+        {
+            if (restoredCurrentSession)
+            {
+                Publish(new ReviewUpdate.SessionChanged(cachedSession.Id));
+            }
+
+            return cachedSession;
         }
 
         StoredSession? resolved = null;
@@ -636,6 +701,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         CancellationToken cancellationToken)
     {
         SessionIdentity? previousSession;
+        SessionIdentity? connectionScopedSession = null;
         lock (_stateLock)
         {
             if (_replayDescriptor == sample.Session)
@@ -644,19 +710,37 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
 
             previousSession = _currentSession;
-            _activeSession = null;
-            _checkpoint = null;
-            _currentSession = null;
+            if (sample.Session.IdentityScope == SimulatorIdentityScope.ConnectionScoped)
+            {
+                _replayDescriptor = sample.Session;
+                connectionScopedSession = _activeSession is not null &&
+                    IsMatchingConnectionScopedReplay(_activeSession.Descriptor, sample.Session)
+                        ? _activeSession.Id
+                        : null;
+                _currentSession = connectionScopedSession;
+            }
+            else
+            {
+                _activeSession = null;
+                _checkpoint = null;
+                _currentSession = null;
+            }
         }
 
         if (sample.Session.IdentityScope != SimulatorIdentityScope.Durable)
         {
-            lock (_stateLock)
+            if (connectionScopedSession != previousSession)
             {
-                _replayDescriptor = sample.Session;
+                if (connectionScopedSession is not null)
+                {
+                    Publish(new ReviewUpdate.SessionChanged(connectionScopedSession));
+                }
+                else
+                {
+                    PublishClearedSession(previousSession);
+                }
             }
 
-            PublishClearedSession(previousSession);
             return true;
         }
 
@@ -691,6 +775,17 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
         return true;
     }
+
+    private static bool IsMatchingConnectionScopedReplay(
+        SimulatorSessionDescriptor activeSession,
+        SimulatorSessionDescriptor replaySession) =>
+        activeSession.Mode == SessionMode.Live &&
+        activeSession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
+        replaySession.Mode == SessionMode.Replay &&
+        replaySession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
+        activeSession.Simulator == replaySession.Simulator &&
+        activeSession.SessionKey == replaySession.SessionKey &&
+        activeSession.SessionNumber == replaySession.SessionNumber;
 
     private void PublishClearedSession(SessionIdentity? previousSession)
     {
@@ -838,7 +933,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
             if (status != ReviewServiceStatus.Unavailable)
             {
-                _lastUnavailableErrorCode = null;
+                _lastUnavailableError = null;
             }
         }
 
@@ -855,10 +950,10 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         lock (_stateLock)
         {
             if (_status != ReviewServiceStatus.Unavailable ||
-                _lastUnavailableErrorCode != error.Code)
+                _lastUnavailableError?.Code != error.Code)
             {
                 _status = ReviewServiceStatus.Unavailable;
-                _lastUnavailableErrorCode = error.Code;
+                _lastUnavailableError = error;
                 changed = true;
             }
         }
@@ -888,6 +983,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         lock (_stateLock)
         {
             _status = ReviewServiceStatus.Stopped;
+            _lastUnavailableError = null;
             _ownedReviewActive = false;
             _replayDescriptor = null;
         }

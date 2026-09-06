@@ -693,12 +693,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _ => "Unknown",
     };
 
-    private static string FormatError(Error error) => error.Kind switch
-    {
-        ErrorKind.Unavailable => $"{error.Message} Check that iRacing is running, then try again.",
-        ErrorKind.Conflict => $"{error.Message} Refresh and try again.",
-        _ => error.Message,
-    };
+    private static string FormatError(Error error) => error.Message;
 
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> source)
     {

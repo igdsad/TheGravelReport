@@ -73,11 +73,11 @@ public sealed class MainWindowViewModelTests
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "IR-UI-002")]
-    public async Task ReviewSelectedIncidentInvokesApplicationAndShowsActionableFailure()
+    public async Task ReviewSelectedIncidentDisplaysExactActionableFailure()
     {
         var service = new FakeIncidentReviewService
         {
-            ReviewResult = Result.Failure(ApplicationErrors.ReplayUnavailable),
+            ReviewResult = Result.Failure(ApplicationErrors.ReplayDriverOnTrack),
         };
         var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
         var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
@@ -92,7 +92,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
 
         Assert.AreEqual(incident.Id, service.ReviewedIncident);
-        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.ErrorMessage);
     }
 
     [TestMethod]
@@ -225,18 +225,18 @@ public sealed class MainWindowViewModelTests
         await WaitUntilAsync(() => viewModel.HasError);
 
         Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
-        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
         Assert.AreEqual(callsBeforeUpdate, service.StatusCalls);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 
         Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
-        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
         Assert.AreEqual(callsBeforeUpdate + 1, service.StatusCalls);
 
         await viewModel.SavePreferencesAsync(CancellationToken.None);
 
-        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
     }
 
     [TestMethod]

@@ -140,6 +140,189 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task MatchingConnectionScopedReplayRetainsRecordedSessionAndAllowsReview()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 2_000));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var incident = host.Store.LastRecord!.Incident;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_100,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(incident.Session, current.Value.Id);
+
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+
+        var review = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsTrue(review.IsSuccess);
+        Assert.AreEqual(1, host.Replay.SeekCount);
+        Assert.AreEqual(1, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public async Task DifferentConnectionKeyDoesNotMatchConnectionScopedReplay()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 1_500));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var incident = host.Store.LastRecord!.Incident;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "different-connection"));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsFalse(current.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.NoCurrentSession, current.Error!.Code);
+
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+        var review = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(review.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionIdentityUnavailable, review.Error!.Code);
+        Assert.AreEqual(
+            ApplicationErrors.ReplaySessionIdentityUnavailable.Message,
+            review.Error.Message);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task DifferentConnectionScopedReplaySessionFailsClosed()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 2_000));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var incident = host.Store.LastRecord!.Incident;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_100,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsFalse(current.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.NoCurrentSession, current.Error!.Code);
+
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+        var review = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(review.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionNotLoaded, review.Error!.Code);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public async Task ReturningFromDifferentReplayRestoresConnectionScopedLiveSession()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        var originalSession = host.Store.Session!.Id;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+        Assert.IsFalse(
+            (await host.Service.GetCurrentSessionAsync(CancellationToken.None)).IsSuccess);
+
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 2, time: 3_000));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(originalSession, current.Value.Id);
+        Assert.AreEqual(1, host.Store.EnsureSessionCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public async Task ReconnectedReplayDoesNotReuseConnectionScopedLiveSession()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+
+        await host.Telemetry.PublishAsync(TelemetryDisconnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.WaitingForSimulator);
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsFalse(current.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.NoCurrentSession, current.Error!.Code);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
     [TestProperty("Requirement", "IR-RPY-001")]
     public async Task EnteringUnmatchedReplayClearsPriorLiveCurrentSession()
     {
@@ -376,7 +559,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             CancellationToken.None);
 
         Assert.IsFalse(result.IsSuccess);
-        Assert.AreEqual(ApplicationErrorCodes.ReplayUnavailable, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionNotLoaded, result.Error!.Code);
         Assert.AreEqual(0, host.Replay.SeekCount);
         Assert.AreEqual(0, host.Replay.PlaybackCount);
     }
@@ -413,9 +596,96 @@ public sealed class IncidentReviewApplicationWorkflowTests
         var result = await review;
 
         Assert.IsFalse(result.IsSuccess);
-        Assert.AreEqual(ApplicationErrorCodes.ReplayUnavailable, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrorCodes.ReplayDriverOnTrack, result.Error!.Code);
         Assert.AreEqual(0, host.Replay.SeekCount);
         Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task ReviewRevalidatesSessionAfterStoreReads()
+    {
+        var store = new StatefulStore { BlockPreferencesQuery = true };
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 2_000));
+        await WaitUntilAsync(() => store.RecordAttemptCount == 1);
+        var incident = store.LastRecord!.Incident;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_100,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+
+        var review = host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+        await store.PreferencesQueryEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_200,
+            mode: SessionMode.Replay,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+        store.ReleasePreferencesQuery();
+
+        var result = await review;
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionNotLoaded, result.Error!.Code);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task ReviewFailsClosedWhileNewLiveSessionIsResolving()
+    {
+        var store = new StatefulStore();
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(counter: 0, time: 1_000));
+        await WaitUntilAsync(() => store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(counter: 4, time: 2_000));
+        await WaitUntilAsync(() => store.RecordAttemptCount == 1);
+        var incident = store.LastRecord!.Incident;
+        store.BlockSessionLookup = true;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "new-live-session",
+            sessionNumber: 3));
+        await store.SessionLookupEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var review = await host.Service.ReviewIncidentAsync(
+            incident.Id,
+            CancellationToken.None);
+
+        Assert.IsFalse(review.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionNotLoaded, review.Error!.Code);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+        store.ReleaseSessionLookup();
     }
 
     [TestMethod]
@@ -533,9 +803,120 @@ public sealed class IncidentReviewApplicationWorkflowTests
         var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
 
         Assert.IsFalse(result.IsSuccess);
-        Assert.AreEqual(ApplicationErrorCodes.ReplayUnavailable, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrorCodes.ReplayDriverOnTrack, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, result.Error.Message);
         Assert.IsNull(host.Replay.LastSeek);
         Assert.IsNull(store.LastMarkedReviewed);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task UnknownOnTrackStateReportsThatTelemetryHasNotArrived()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        store.SeedIncident(incident);
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplayOnTrackStateUnknown, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrors.ReplayOnTrackStateUnknown.Message, result.Error.Message);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task DisconnectedTelemetryReportsReplayUnavailable()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        store.SeedIncident(incident);
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(TelemetryDisconnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.WaitingForSimulator);
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplayUnavailable, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, result.Error.Message);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task StoppedRuntimeReportsRuntimeStopped()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        store.SeedIncident(incident);
+        await using var host = new TestHost(store);
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.RuntimeStopped, result.Error!.Code);
+        Assert.AreEqual(ApplicationErrors.RuntimeStopped.Message, result.Error.Message);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task UnavailableRuntimePreservesItsSpecificFailure()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        store.SeedIncident(incident);
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreSame(TestError, result.Error);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    public async Task ConcurrentReviewReportsCommandAlreadyInProgress()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore { BlockPreferencesQuery = true };
+        SeedReviewIncident(store, incident);
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await MakeReplayAvailableAsync(host);
+
+        var firstReview = host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+        await store.PreferencesQueryEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var secondReview = await host.Service.ReviewIncidentAsync(
+            incident.Id,
+            CancellationToken.None);
+
+        Assert.IsFalse(secondReview.IsSuccess);
+        Assert.AreEqual(ApplicationErrorCodes.ReplayCommandInProgress, secondReview.Error!.Code);
+        Assert.AreEqual(ApplicationErrors.ReplayCommandInProgress.Message, secondReview.Error.Message);
+        Assert.AreEqual(0, host.Replay.SeekCount);
+        Assert.AreEqual(0, host.Replay.PlaybackCount);
+
+        store.ReleasePreferencesQuery();
+        Assert.IsTrue((await firstReview).IsSuccess);
     }
 
     [TestMethod]
@@ -684,17 +1065,18 @@ public sealed class IncidentReviewApplicationWorkflowTests
         SessionMode? mode = null,
         SimulatorIdentityScope? scope = null,
         OnTrackState onTrackState = OnTrackState.OnTrack,
-        string sessionKey = "test-session")
+        string sessionKey = "test-session",
+        int sessionNumber = 2)
     {
-        var sessionNumber = SessionNumber.TryCreate(2).Value;
+        var validatedSessionNumber = SessionNumber.TryCreate(sessionNumber).Value;
         var descriptor = SimulatorSessionDescriptor.TryCreate(
             SimulatorCode.TryCreate("iracing").Value,
             SimulatorSessionKey.TryCreate(sessionKey).Value,
-            sessionNumber,
+            validatedSessionNumber,
             mode ?? SessionMode.Live,
             scope ?? SimulatorIdentityScope.ConnectionScoped).Value;
         var position = ReplayPosition.TryCreate(
-            sessionNumber,
+            validatedSessionNumber,
             SessionTime.TryCreateMilliseconds(time).Value).Value;
         var sample = TelemetrySample.TryCreate(
             descriptor,
@@ -914,9 +1296,14 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public bool FailOperationOutcomeQuery { get; init; }
         public bool FailSessionLookup { get; init; }
         public bool BlockPreferencesQuery { get; init; }
+        public bool BlockSessionLookup { get; set; }
         public TaskCompletionSource PreferencesQueryEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SessionLookupEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource ContinuePreferencesQuery { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource ContinueSessionLookup { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public StoredSession? Session { get; private set; }
         public IncidentCheckpoint? Checkpoint { get; private set; }
@@ -1042,6 +1429,12 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 await ContinuePreferencesQuery.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            if (query is GetSessionBySimulatorKey && BlockSessionLookup)
+            {
+                SessionLookupEntered.TrySetResult();
+                await ContinueSessionLookup.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             lock (_lock)
             {
                 object result = query switch
@@ -1069,6 +1462,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
         }
 
         public void ReleasePreferencesQuery() => ContinuePreferencesQuery.TrySetResult();
+
+        public void ReleaseSessionLookup() => ContinueSessionLookup.TrySetResult();
 
         public Task<Result> ExecuteAsync(
             IStoreCommand command,

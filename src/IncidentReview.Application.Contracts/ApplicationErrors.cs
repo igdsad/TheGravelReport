@@ -23,7 +23,32 @@ public static class ApplicationErrors
     public static Error ReplayUnavailable { get; } = Error.Create(
         ApplicationErrorCodes.ReplayUnavailable,
         ErrorKind.Unavailable,
-        "Replay control requires iRacing to be connected, the driver out of the car, and the selected incident's session loaded.");
+        "iRacing telemetry is not connected, so replay control is unavailable. Start or reconnect iRacing, then try again.");
+
+    public static Error ReplayDriverOnTrack { get; } = Error.Create(
+        ApplicationErrorCodes.ReplayDriverOnTrack,
+        ErrorKind.Conflict,
+        "iRacing still reports the driver as on track. Being stopped in the pit does not count as being out of the car; use iRacing's tow or exit control, then try again.");
+
+    public static Error ReplayOnTrackStateUnknown { get; } = Error.Create(
+        ApplicationErrorCodes.ReplayOnTrackStateUnknown,
+        ErrorKind.Unavailable,
+        "The app has not received the driver's on-track state from iRacing yet. Wait for telemetry to update, then try again.");
+
+    public static Error ReplayCommandInProgress { get; } = Error.Create(
+        ApplicationErrorCodes.ReplayCommandInProgress,
+        ErrorKind.Conflict,
+        "Another replay request is still in progress. Wait for it to finish, then try again.");
+
+    public static Error ReplaySessionNotLoaded { get; } = Error.Create(
+        ApplicationErrorCodes.ReplaySessionNotLoaded,
+        ErrorKind.Conflict,
+        "The selected incident belongs to an iRacing session that is not currently loaded. Load that session's replay, then try again.");
+
+    public static Error ReplaySessionIdentityUnavailable { get; } = Error.Create(
+        ApplicationErrorCodes.ReplaySessionIdentityUnavailable,
+        ErrorKind.Conflict,
+        "iRacing did not provide a stable ID for this replay, so the app cannot verify that it matches the saved incident. Keep Incident Review running while recording and entering replay, then try again.");
 
     public static Error RuntimeStopped { get; } = Error.Create(
         ApplicationErrorCodes.RuntimeStopped,
