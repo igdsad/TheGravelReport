@@ -9,7 +9,14 @@
     <PackageReference Include="dbup-core" />
     <PackageReference Include="dbup-sqlite" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="SQLitePCLRaw.bundle_winsqlite3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations/001_InitialSchema.sql"
+                      LogicalName="IncidentReview.Store.Sqlite.Migrations.001_InitialSchema.sql" />
   </ItemGroup>
 
   <ItemGroup>
