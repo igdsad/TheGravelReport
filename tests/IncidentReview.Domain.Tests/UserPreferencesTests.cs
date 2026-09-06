@@ -25,6 +25,7 @@ public sealed class UserPreferencesTests
         Assert.AreEqual(0.5, preferences.PlaybackSpeed);
         Assert.IsTrue(preferences.AutoPause);
         Assert.IsNull(preferences.PreferredCamera);
+        Assert.AreEqual(ThemePreference.FollowDesktop, preferences.Theme);
     }
 
     [TestMethod]
@@ -157,11 +158,83 @@ public sealed class UserPreferencesTests
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
     [TestProperty("Requirement", "QR-TST-001")]
+    [DataRow(ThemePreference.FollowDesktop)]
+    [DataRow(ThemePreference.Light)]
+    [DataRow(ThemePreference.Dark)]
+    public void ThemeRoundTripsEverySupportedPreference(ThemePreference theme)
+    {
+        var fromMilliseconds = UserPreferences.TryCreateMilliseconds(
+            5_000,
+            0.5,
+            autoPause: true,
+            preferredCamera: "Cockpit",
+            theme: theme).Value;
+        var fromDuration = UserPreferences.TryCreate(
+            TimeSpan.FromSeconds(5),
+            0.5,
+            autoPause: true,
+            preferredCamera: "Cockpit",
+            theme: theme).Value;
+
+        Assert.AreEqual(theme, fromMilliseconds.Theme);
+        Assert.AreEqual(theme, fromDuration.Theme);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void ThemeRejectsUndefinedPersistentValues()
+    {
+        AssertInvalid(
+            UserPreferences.TryCreateMilliseconds(
+                5_000,
+                0.5,
+                autoPause: true,
+                preferredCamera: null,
+                (ThemePreference)(-1)),
+            "domain.user-preferences.invalid-theme");
+        AssertInvalid(
+            UserPreferences.TryCreateMilliseconds(
+                5_000,
+                0.5,
+                autoPause: true,
+                preferredCamera: null,
+                (ThemePreference)3),
+            "domain.user-preferences.invalid-theme");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void ThemePersistenceCodesAreStableAndExistingFactoriesDefaultToDesktop()
+    {
+        var values = Enum.GetValues<ThemePreference>();
+        Assert.HasCount(3, values);
+        Assert.AreEqual(0, (int)values[0]);
+        Assert.AreEqual(1, (int)values[1]);
+        Assert.AreEqual(2, (int)values[2]);
+        Assert.AreEqual(
+            ThemePreference.FollowDesktop,
+            UserPreferences.TryCreateMilliseconds(5_000, 1, true, null).Value.Theme);
+        Assert.AreEqual(
+            ThemePreference.FollowDesktop,
+            UserPreferences.TryCreate(TimeSpan.FromSeconds(5), 1, true, null).Value.Theme);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
     public void EqualNormalizedPreferencesHaveValueEquality()
     {
         var first = UserPreferences.TryCreateMilliseconds(5_000, 0.5, true, " Caf\u00e9 ").Value;
         var second = UserPreferences.TryCreateMilliseconds(5_000, 0.5, true, "Cafe\u0301").Value;
-        var different = UserPreferences.TryCreateMilliseconds(5_000, 0.5, false, "Caf\u00e9").Value;
+        var different = UserPreferences.TryCreateMilliseconds(
+            5_000,
+            0.5,
+            true,
+            "Caf\u00e9",
+            ThemePreference.Dark).Value;
 
         Assert.AreEqual(first, second);
         Assert.AreEqual(first.GetHashCode(), second.GetHashCode());

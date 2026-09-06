@@ -2,7 +2,7 @@ using IncidentReview.Results;
 
 namespace IncidentReview.Domain;
 
-/// <summary>Contains durable, simulator-neutral replay review preferences.</summary>
+/// <summary>Contains durable, application-wide user preferences.</summary>
 public sealed record UserPreferences
 {
     /// <summary>Gets the maximum supported replay lead-in: 60 seconds.</summary>
@@ -29,16 +29,22 @@ public sealed record UserPreferences
         "domain.user-preferences.invalid-preferred-camera",
         "The preferred camera contains invalid text or exceeds the supported length.");
 
+    private static readonly Error InvalidThemeError = DomainValidationError.Create(
+        "domain.user-preferences.invalid-theme",
+        "The selected theme is not supported.");
+
     private UserPreferences(
         long replayLeadInMilliseconds,
         double playbackSpeed,
         bool autoPause,
-        string? preferredCamera)
+        string? preferredCamera,
+        ThemePreference theme)
     {
         ReplayLeadInMilliseconds = replayLeadInMilliseconds;
         PlaybackSpeed = playbackSpeed;
         AutoPause = autoPause;
         PreferredCamera = preferredCamera;
+        Theme = theme;
     }
 
     /// <summary>Gets the configured lead-in as lossless integer milliseconds.</summary>
@@ -56,12 +62,16 @@ public sealed record UserPreferences
     /// <summary>Gets the optional normalized camera name.</summary>
     public string? PreferredCamera { get; }
 
+    /// <summary>Gets how the application chooses its visual theme.</summary>
+    public ThemePreference Theme { get; }
+
     /// <summary>Validates preferences supplied as a duration.</summary>
     public static Result<UserPreferences> TryCreate(
         TimeSpan replayLeadIn,
         double playbackSpeed,
         bool autoPause,
-        string? preferredCamera)
+        string? preferredCamera,
+        ThemePreference theme = ThemePreference.FollowDesktop)
     {
         if (replayLeadIn.Ticks < 0 ||
             replayLeadIn.Ticks % TimeSpan.TicksPerMillisecond != 0)
@@ -73,7 +83,8 @@ public sealed record UserPreferences
             replayLeadIn.Ticks / TimeSpan.TicksPerMillisecond,
             playbackSpeed,
             autoPause,
-            preferredCamera);
+            preferredCamera,
+            theme);
     }
 
     /// <summary>Validates preferences supplied in persistence units.</summary>
@@ -81,7 +92,8 @@ public sealed record UserPreferences
         long replayLeadInMilliseconds,
         double playbackSpeed,
         bool autoPause,
-        string? preferredCamera)
+        string? preferredCamera,
+        ThemePreference theme = ThemePreference.FollowDesktop)
     {
         if (replayLeadInMilliseconds is < 0 or > MaximumReplayLeadInMilliseconds)
         {
@@ -104,11 +116,17 @@ public sealed record UserPreferences
             return Result<UserPreferences>.Failure(InvalidCameraError);
         }
 
+        if (!Enum.IsDefined(theme))
+        {
+            return Result<UserPreferences>.Failure(InvalidThemeError);
+        }
+
         return Result<UserPreferences>.Success(
             new UserPreferences(
                 replayLeadInMilliseconds,
                 playbackSpeed,
                 autoPause,
-                normalizedCamera));
+                normalizedCamera,
+                theme));
     }
 }
