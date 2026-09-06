@@ -189,6 +189,128 @@ public sealed class MainWindowViewModelTests
         Assert.IsFalse(viewModel.IsMonitoring);
     }
 
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-SET-001")]
+    public async Task IncidentChangedAutomaticRefreshPreservesDirtyPreferencesAndSelectedIncident()
+    {
+        await AssertAutomaticRefreshPreservesInteractionStateAsync(
+            static (session, incident) => new ReviewUpdate.IncidentChanged(session, incident));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-SET-001")]
+    public async Task SessionChangedAutomaticRefreshPreservesDirtyPreferencesAndSelectedIncident()
+    {
+        await AssertAutomaticRefreshPreservesInteractionStateAsync(
+            static (session, _) => new ReviewUpdate.SessionChanged(session));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task UnavailableUpdateKeepsItsActionableErrorThroughManualRefresh()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            StatusResult = Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Unavailable),
+        };
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.StartMonitoringAsync(CancellationToken.None);
+        var callsBeforeUpdate = service.StatusCalls;
+
+        await service.PublishAsync(ReviewUpdate.StatusChanged.Create(
+            ReviewServiceStatus.Unavailable,
+            ApplicationErrors.ReplayUnavailable));
+        await WaitUntilAsync(() => viewModel.HasError);
+
+        Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
+        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(callsBeforeUpdate, service.StatusCalls);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
+        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+        Assert.AreEqual(callsBeforeUpdate + 1, service.StatusCalls);
+
+        await viewModel.SavePreferencesAsync(CancellationToken.None);
+
+        StringAssert.Contains(viewModel.ErrorMessage, "Check that iRacing is running");
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-LIF-001")]
+    public async Task DisposeWaitsForAnUncooperativeActiveOperationBeforeDisposingItsGate()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeIncidentReviewService
+        {
+            StatusHandler = async _ =>
+            {
+                entered.SetResult();
+                await release.Task;
+                return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
+            },
+        };
+        var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        var refresh = viewModel.RefreshAsync(CancellationToken.None);
+        await entered.Task;
+
+        var dispose = viewModel.DisposeAsync().AsTask();
+        Assert.IsFalse(dispose.IsCompleted);
+        release.SetResult();
+
+        await refresh;
+        await dispose;
+        Assert.IsFalse(viewModel.IsBusy);
+        await viewModel.DisposeAsync();
+    }
+
+    private static async Task AssertAutomaticRefreshPreservesInteractionStateAsync(
+        Func<IncidentReview.Domain.SessionIdentity, IncidentReview.Domain.IncidentId, ReviewUpdate> createUpdate)
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var selectedIncident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var initialSession = TestModelFactory.Session(sessionId, selectedIncident);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(initialSession);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(initialSession)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var originalListItem = viewModel.Incidents[0];
+        viewModel.SelectedIncident = originalListItem;
+        viewModel.ReplayLeadInMilliseconds = "7000";
+        viewModel.PlaybackSpeed = "0.75";
+        viewModel.AutoPause = false;
+        viewModel.PreferredCamera = "TV2";
+
+        var addedIncident = TestModelFactory.Incident(sessionId, 2_000, 12_000, 4, 2);
+        var refreshedSession = TestModelFactory.Session(
+            sessionId,
+            selectedIncident,
+            addedIncident);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(refreshedSession);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(refreshedSession)]);
+        service.PreferencesResult = Result<IncidentReview.Domain.UserPreferences>.Success(
+            TestModelFactory.Preferences(1_000, 0.25, true, "Cockpit"));
+        await viewModel.StartMonitoringAsync(CancellationToken.None);
+
+        await service.PublishAsync(createUpdate(sessionId, selectedIncident.Id));
+        await WaitUntilAsync(() => viewModel.Incidents.Count == 2);
+
+        Assert.AreEqual("7000", viewModel.ReplayLeadInMilliseconds);
+        Assert.AreEqual("0.75", viewModel.PlaybackSpeed);
+        Assert.IsFalse(viewModel.AutoPause);
+        Assert.AreEqual("TV2", viewModel.PreferredCamera);
+        Assert.IsNotNull(viewModel.SelectedIncident);
+        Assert.AreEqual(selectedIncident.Id, viewModel.SelectedIncident.Id);
+        Assert.AreNotSame(originalListItem, viewModel.SelectedIncident);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));

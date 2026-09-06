@@ -12,6 +12,22 @@ namespace IncidentReview.Desktop.Wpf;
 /// <summary>Coordinates incident-review presentation exclusively through application contracts.</summary>
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    [Flags]
+    private enum DirtyPreferenceFields
+    {
+        None = 0,
+        ReplayLeadIn = 1 << 0,
+        PlaybackSpeed = 1 << 1,
+        AutoPause = 1 << 2,
+        PreferredCamera = 1 << 3,
+    }
+
+    private enum RefreshMode
+    {
+        UserInitiated,
+        Automatic,
+    }
+
     private readonly IIncidentReviewService _service;
     private readonly IUiDispatcher _dispatcher;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
@@ -24,6 +40,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _isDisposed;
     private string _connectionStatus = "Starting";
     private string? _errorMessage;
+    private string? _unavailableStatusErrorMessage;
     private string _emptyMessage = "No incidents are available for this session.";
     private SessionListItem? _selectedSession;
     private IncidentListItem? _selectedIncident;
@@ -31,6 +48,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string _playbackSpeed = "1";
     private bool _autoPause;
     private string? _preferredCamera;
+    private DirtyPreferenceFields _dirtyPreferenceFields;
+    private long _preferenceEditVersion;
+    private bool _isApplyingPreferences;
 
     public MainWindowViewModel(IIncidentReviewService service, IUiDispatcher dispatcher)
     {
@@ -100,7 +120,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public string MonitorActionText => IsMonitoring ? "Stop monitoring" : "Start monitoring";
+    public string MonitorActionText => IsMonitoring ? "Stop live updates" : "Start live updates";
 
     public string ConnectionStatus
     {
@@ -159,25 +179,49 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string ReplayLeadInMilliseconds
     {
         get => _replayLeadInMilliseconds;
-        set => SetField(ref _replayLeadInMilliseconds, value);
+        set
+        {
+            if (SetField(ref _replayLeadInMilliseconds, value))
+            {
+                MarkPreferenceDirty(DirtyPreferenceFields.ReplayLeadIn);
+            }
+        }
     }
 
     public string PlaybackSpeed
     {
         get => _playbackSpeed;
-        set => SetField(ref _playbackSpeed, value);
+        set
+        {
+            if (SetField(ref _playbackSpeed, value))
+            {
+                MarkPreferenceDirty(DirtyPreferenceFields.PlaybackSpeed);
+            }
+        }
     }
 
     public bool AutoPause
     {
         get => _autoPause;
-        set => SetField(ref _autoPause, value);
+        set
+        {
+            if (SetField(ref _autoPause, value))
+            {
+                MarkPreferenceDirty(DirtyPreferenceFields.AutoPause);
+            }
+        }
     }
 
     public string? PreferredCamera
     {
         get => _preferredCamera;
-        set => SetField(ref _preferredCamera, value);
+        set
+        {
+            if (SetField(ref _preferredCamera, value))
+            {
+                MarkPreferenceDirty(DirtyPreferenceFields.PreferredCamera);
+            }
+        }
     }
 
     /// <summary>Loads initial state and starts update monitoring.</summary>
@@ -195,7 +239,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     /// <summary>Reloads a consistent presentation snapshot.</summary>
     public Task RefreshAsync(CancellationToken cancellationToken) =>
-        RunUiOperationAsync(RefreshCoreAsync, cancellationToken);
+        RunUiOperationAsync(
+            token => RefreshCoreAsync(RefreshMode.UserInitiated, token),
+            cancellationToken);
 
     /// <summary>Loads the session selected by the user.</summary>
     public Task OpenSelectedSessionAsync(CancellationToken cancellationToken)
@@ -227,7 +273,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     return;
                 }
 
-                await SetErrorAsync(null).ConfigureAwait(false);
+                await RestoreStatusErrorAsync().ConfigureAwait(false);
             },
             cancellationToken);
     }
@@ -264,10 +310,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     return;
                 }
 
+                var preferenceEditVersion = _preferenceEditVersion;
                 var result = await _service.UpdatePreferencesAsync(preferences.Value, token).ConfigureAwait(false);
                 if (result.IsSuccess)
                 {
-                    await SetErrorAsync(null).ConfigureAwait(false);
+                    await RunOnUiAsync(
+                        () =>
+                        {
+                            if (_preferenceEditVersion == preferenceEditVersion)
+                            {
+                                _dirtyPreferenceFields = DirtyPreferenceFields.None;
+                            }
+
+                            ErrorMessage = _unavailableStatusErrorMessage;
+                        }).ConfigureAwait(false);
                 }
                 else
                 {
@@ -338,7 +394,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _lifetimeCancellation.Cancel();
         _activeOperationCancellation?.Cancel();
         await StopMonitoringAsync().ConfigureAwait(false);
-        _activeOperationCancellation?.Dispose();
+
+        await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        _operationGate.Release();
         _lifetimeCancellation.Dispose();
         _operationGate.Dispose();
     }
@@ -367,13 +425,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         () =>
                         {
                             ConnectionStatus = FormatStatus(statusChanged.Status);
-                            ErrorMessage = statusChanged.Error is null
+                            _unavailableStatusErrorMessage = statusChanged.Error is null
                                 ? null
                                 : FormatError(statusChanged.Error);
+                            ErrorMessage = _unavailableStatusErrorMessage;
                         }).ConfigureAwait(false);
+
+                    if (statusChanged.Error is not null)
+                    {
+                        continue;
+                    }
                 }
 
-                await RefreshAsync(cancellationToken).ConfigureAwait(false);
+                await RunUiOperationAsync(
+                    token => RefreshCoreAsync(RefreshMode.Automatic, token),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -416,10 +482,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private async Task RefreshCoreAsync(CancellationToken cancellationToken)
+    private async Task RefreshCoreAsync(
+        RefreshMode refreshMode,
+        CancellationToken cancellationToken)
     {
-        await SetErrorAsync(null).ConfigureAwait(false);
-
         var status = await _service.GetStatusAsync(cancellationToken).ConfigureAwait(false);
         if (!status.IsSuccess)
         {
@@ -427,7 +493,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        await RunOnUiAsync(() => ConnectionStatus = FormatStatus(status.Value)).ConfigureAwait(false);
+        await RunOnUiAsync(
+            () =>
+            {
+                ConnectionStatus = FormatStatus(status.Value);
+                if (status.Value != ReviewServiceStatus.Unavailable)
+                {
+                    _unavailableStatusErrorMessage = null;
+                }
+            }).ConfigureAwait(false);
 
         var sessions = await _service.ListSessionsAsync(SessionQuery.All, cancellationToken).ConfigureAwait(false);
         if (!sessions.IsSuccess)
@@ -497,7 +571,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 Replace(Sessions, summaries);
                 SelectedSession = selected;
                 ApplySession(reviewSession);
-                ApplyPreferences(preferences.Value);
+                ApplyPreferences(
+                    preferences.Value,
+                    preserveDirtyFields: refreshMode == RefreshMode.Automatic);
+                ErrorMessage = status.Value == ReviewServiceStatus.Unavailable
+                    ? _unavailableStatusErrorMessage
+                    : null;
             }).ConfigureAwait(false);
     }
 
@@ -513,20 +592,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await RunOnUiAsync(
             () =>
             {
-                ErrorMessage = null;
+                ErrorMessage = _unavailableStatusErrorMessage;
                 ApplySession(result.Value);
             }).ConfigureAwait(false);
     }
 
     private void ApplySession(ReviewSession? session)
     {
+        var previousIncidentId = SelectedIncident?.Id;
         var incidents = session?.Incidents
             .OrderBy(static incident => incident.ObservedAt.UnixMilliseconds)
             .ThenBy(static incident => incident.Id.Value)
             .Select(static incident => new IncidentListItem(incident))
             .ToArray() ?? [];
         Replace(Incidents, incidents);
-        SelectedIncident = null;
+        SelectedIncident = incidents.FirstOrDefault(incident => incident.Id == previousIncidentId);
         EmptyMessage = session is null
             ? "No review session is available yet."
             : "No incidents are available for this session.";
@@ -534,15 +614,62 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OnPropertyChanged(nameof(ShowsEmptyState));
     }
 
-    private void ApplyPreferences(UserPreferences preferences)
+    private void ApplyPreferences(UserPreferences preferences, bool preserveDirtyFields)
     {
-        ReplayLeadInMilliseconds = preferences.ReplayLeadInMilliseconds.ToString(CultureInfo.CurrentCulture);
-        PlaybackSpeed = preferences.PlaybackSpeed.ToString("G", CultureInfo.CurrentCulture);
-        AutoPause = preferences.AutoPause;
-        PreferredCamera = preferences.PreferredCamera;
+        _isApplyingPreferences = true;
+        try
+        {
+            if (!preserveDirtyFields ||
+                !_dirtyPreferenceFields.HasFlag(DirtyPreferenceFields.ReplayLeadIn))
+            {
+                ReplayLeadInMilliseconds = preferences.ReplayLeadInMilliseconds.ToString(
+                    CultureInfo.CurrentCulture);
+            }
+
+            if (!preserveDirtyFields ||
+                !_dirtyPreferenceFields.HasFlag(DirtyPreferenceFields.PlaybackSpeed))
+            {
+                PlaybackSpeed = preferences.PlaybackSpeed.ToString("G", CultureInfo.CurrentCulture);
+            }
+
+            if (!preserveDirtyFields ||
+                !_dirtyPreferenceFields.HasFlag(DirtyPreferenceFields.AutoPause))
+            {
+                AutoPause = preferences.AutoPause;
+            }
+
+            if (!preserveDirtyFields ||
+                !_dirtyPreferenceFields.HasFlag(DirtyPreferenceFields.PreferredCamera))
+            {
+                PreferredCamera = preferences.PreferredCamera;
+            }
+
+            if (!preserveDirtyFields)
+            {
+                _dirtyPreferenceFields = DirtyPreferenceFields.None;
+            }
+        }
+        finally
+        {
+            _isApplyingPreferences = false;
+        }
+    }
+
+    private void MarkPreferenceDirty(DirtyPreferenceFields field)
+    {
+        if (_isApplyingPreferences)
+        {
+            return;
+        }
+
+        _dirtyPreferenceFields |= field;
+        _preferenceEditVersion++;
     }
 
     private Task ShowErrorAsync(Error error) => SetErrorAsync(FormatError(error));
+
+    private Task RestoreStatusErrorAsync() =>
+        RunOnUiAsync(() => ErrorMessage = _unavailableStatusErrorMessage);
 
     private Task SetErrorAsync(string? message) => RunOnUiAsync(() => ErrorMessage = message);
 
