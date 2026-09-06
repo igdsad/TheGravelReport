@@ -202,6 +202,7 @@ Deferred requirement: `DR-EXP-001` — a future export operation can serialize s
 9. **Prefer a small explicit dependency graph.** Every external package requires a reason, a pinned version, and review of its transitive graph.
 10. **Optimize for replacement, not speculation.** Interfaces describe capabilities we use; they do not attempt to predict every future backend.
 11. **Render visible state from one root value.** Presentation effects dispatch data-only actions to a pure reducer; no control, handler, collection, or parallel property bag owns an independent copy of UI-visible state.
+12. **Represent state combinations honestly.** Mutually exclusive states use closed sum-like record hierarchies with their required data, not correlated Booleans, enums, nullable payloads, or partially synchronized fields. Stateful boundary loops interpret explicit effects produced by pure reducers; resource handles and nondeterminism stay outside those reducers.
 
 ## 5. System context
 
@@ -659,6 +660,31 @@ Responsibilities:
 - Encode replay commands for session-time search, player/camera focus, pause, and playback speed.
 - Convert the fire-and-forget Windows transport into applied-result semantics by confirming each command against a later stable telemetry frame.
 - Translate expected integration failures into stable `Result` errors.
+
+### 10.1 Telemetry lifecycle reducer
+
+The shared-memory source has one immutable lifecycle value. `IracingTelemetryLifecycleReducer.Reduce(state, input)` is a synchronous pure function returning a complete next state, an ordered collection of explicit effects, and one loop directive. It performs no shared-memory access, clock read, delay, identifier generation, channel write, replay publication, or mutation. The source loop is the effect interpreter and sole owner of those operations.
+
+The closed lifecycle variants are:
+
+| State | Reader | Retained evidence | Meaning |
+|---|---|---|---|
+| `AwaitingEndpoint` | closed | none | no endpoint; the next open failure may publish the generic unavailable diagnostic |
+| `AwaitingEndpointAfterDiagnostic` | closed | none | the same open failure is coalesced until progress occurs |
+| `Priming` | open | provisional connection identity | endpoint opened, but no sample has decoded successfully |
+| `PrimingDegraded` | open | provisional connection identity | a semantic rejection was reported before the first accepted sample |
+| `ReopeningBeforeFirstSample` | closed | provisional connection identity | a structurally invalid frame forced an internal reopen before an accepted sample |
+| `Active` | open | logical identity, last-success timestamp, last published projection | accepted telemetry and replay context are available |
+| `Degraded` | open | logical identity and last-success timestamp | a semantic rejection invalidated replay context while preserving logical continuity |
+| `Reopening` | closed | logical identity and last-success timestamp | a structurally invalid frame forced an internal reopen while preserving logical continuity |
+
+State leaves declare whether the interpreter must own an open reader and whether provisional or established identity evidence exists. This makes a newly added state supply those facts instead of silently falling through a helper switch. Logical age is itself a closed value—`NotEstablished` or non-negative `Measured`—and reducer validation rejects an age inconsistent with its state. Monotonic timestamps are opaque values captured and compared only through the configured `TimeProvider`.
+
+Reducer effects are likewise closed values: publish a replay frame, invalidate replay, publish a telemetry event, or close the reader. Every reducer-driven close explicitly invalidates replay first. The close operation itself only releases the OS resource, so it cannot hide another state transition. Loop directives are checked against the next state's declared reader ownership, and the interpreter independently asserts that the actual reader sidecar matches. The mutable OS handle deliberately remains outside immutable reducer state.
+
+Raw SDK reads and replay observations do not use a status/Boolean paired with a nullable frame. Each is one closed variant whose available/snapshot case necessarily contains its frame. Replay availability, frame, metadata projection, and monotonically increasing version are replaced atomically under one lock, preventing replay control from observing availability from one frame and content from another.
+
+Observation admission atomically installs a producer-completion barrier before production can begin. Cancellation, early enumeration disposal, and adapter disposal close the active reader and join that producer. `DisposeAsync` performs a final replay invalidation after the join, so it cannot return while a late open, channel write, or replay-frame publication remains possible.
 
 Frame reads follow the official buffer-generation/tick protocol: copy the selected frame into app-owned memory, prove the header did not change during the copy, and retry a bounded number of times on a torn read. Every count, offset, element size, index, and string length is range-checked before slicing. Unknown variables, SDK-version drift, and malformed session information yield typed unavailability/errors rather than unchecked memory access. A rejected frame also clears transient replay confirmation state, but it does not emit `TelemetryDisconnected` or rotate the connection-scoped session key. A later valid frame before the source deadline restores availability under that same logical connection. A real SDK disconnect or 30 seconds without a successfully decoded sample ends the provisional connection.
 

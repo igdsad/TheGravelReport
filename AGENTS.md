@@ -68,8 +68,13 @@ GravelReview uses a reducer-style, top-down presentation architecture inspired b
 - Only `IncidentReview.Iracing` knows shared-memory layouts, session YAML shape, SDK numeric identifiers, or Windows replay broadcast encoding.
 - Prefer the smallest repository-owned transcription of the authenticated official SDK surface. Do not add an unofficial SDK wrapper casually.
 - `IReplayController` issues simulator-neutral replay intents. `IReplayContextReader` exposes only transient driver/camera display context.
+- Model the telemetry lifecycle as one closed immutable state hierarchy. `IracingTelemetryLifecycleReducer.Reduce(state, input)` is pure and returns the complete replacement state, explicit ordered effects, and the next loop directive; do not reintroduce correlated connection/recovery booleans or mutate lifecycle fields from the shared-memory loop.
+- Keep nondeterminism and resources in the telemetry interpreter: it alone opens/closes readers, captures monotonic time, creates provisional identities, waits, delays, writes the event channel, and publishes replay observations. Closing a reader is resource cleanup, not an implicit replay-state mutation; every reducer transition declares replay invalidation explicitly.
+- Represent mutually exclusive protocol and replay states with closed variants, not an enum/Boolean plus a nullable payload. Replay availability, frame, and version are one atomic observation under one lock.
+- Adapter disposal cancels and joins its registered producer before returning. No reader, telemetry write, or replay publication may outlive that completion boundary.
 - Driver and camera parsing fail independently. Missing display metadata must not disable otherwise valid replay control.
 - A malformed or inconsistent frame is transient unavailability, not proof of a simulator disconnect. Retain the logical connection/session identity while recovery remains within 30 seconds of the last successfully decoded sample. Only a real SDK disconnect, expiry of that deadline, or valid evidence of a different simulator session may replace the active session.
+- Every successfully decoded sample refreshes the logical-connection deadline, including a position-only sample coalesced from the application event stream. Repeated invalid frames emit one diagnostic per degraded interval; one valid recovery rearms that diagnostic.
 - Report seek, camera, and playback success only after later stable telemetry confirms the requested state; accepting a Windows message is not success.
 
 ## Dependencies and build configuration
