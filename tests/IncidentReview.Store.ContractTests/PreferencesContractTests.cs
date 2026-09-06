@@ -32,6 +32,7 @@ public sealed class PreferencesContractTests
         var second = UpdatePreferences.Create(preferences, updatedAt);
 
         Assert.AreSame(preferences, first.Preferences);
+        Assert.AreEqual(ThemePreference.Dark, first.Preferences.Theme);
         Assert.AreSame(updatedAt, first.UpdatedAt);
         Assert.AreNotEqual(first.OperationId, second.OperationId);
         Assert.IsInstanceOfType<IStoreCommand>(first);
@@ -83,5 +84,10 @@ public sealed class PreferencesContractTests
     }
 
     private static UserPreferences CreatePreferences() =>
-        UserPreferences.TryCreateMilliseconds(5_000, 0.5, autoPause: true, "Cockpit").Value;
+        UserPreferences.TryCreateMilliseconds(
+            5_000,
+            0.5,
+            autoPause: true,
+            "Cockpit",
+            ThemePreference.Dark).Value;
 }

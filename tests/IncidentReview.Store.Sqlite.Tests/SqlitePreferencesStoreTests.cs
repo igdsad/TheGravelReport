@@ -85,9 +85,20 @@ public sealed class SqlitePreferencesStoreTests
 
         var defaults = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
         Assert.IsTrue(defaults.IsSuccess);
-        AssertPreferences(defaults.Value, 5_000, 1.0, autoPause: true, expectedCamera: null);
+        AssertPreferences(
+            defaults.Value,
+            5_000,
+            1.0,
+            autoPause: true,
+            expectedCamera: null,
+            ThemePreference.FollowDesktop);
 
-        var expected = CreatePreferences(12_345, 0.5, autoPause: false, "Cockpit");
+        var expected = CreatePreferences(
+            12_345,
+            0.5,
+            autoPause: false,
+            "Cockpit",
+            ThemePreference.Dark);
         var update = CreateUpdate(expected, 1_234_567);
         var updateResult = await context.Store.ExecuteAsync(update, CancellationToken.None);
         var actual = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
@@ -99,6 +110,30 @@ public sealed class SqlitePreferencesStoreTests
         Assert.AreEqual(1_234_567L, ExecuteScalarInt64(
             connection,
             "SELECT updated_at_utc_ms FROM ApplicationPreferences WHERE preferences_id = 1;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            "SELECT theme_preference FROM ApplicationPreferences WHERE preferences_id = 1;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [DataRow(ThemePreference.FollowDesktop)]
+    [DataRow(ThemePreference.Light)]
+    [DataRow(ThemePreference.Dark)]
+    public async Task ThemePreferenceRoundTripsEveryDefinedValue(ThemePreference theme)
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        var expected = CreatePreferences(5_000, 1, true, null, theme);
+
+        var update = await context.Store.ExecuteAsync(
+            CreateUpdate(expected, 1_000 + (int)theme),
+            CancellationToken.None);
+        var actual = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
+
+        Assert.IsTrue(update.IsSuccess, update.Error?.ToString());
+        Assert.IsTrue(actual.IsSuccess, actual.Error?.ToString());
+        Assert.AreEqual(expected, actual.Value);
     }
 
     [TestMethod]
@@ -156,7 +191,13 @@ public sealed class SqlitePreferencesStoreTests
         AssertFailure(result, StoreErrorCodes.OperationIdConflict, ErrorKind.Conflict);
         var preferences = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
         Assert.IsTrue(preferences.IsSuccess);
-        AssertPreferences(preferences.Value, 5_000, 1.0, autoPause: true, expectedCamera: null);
+        AssertPreferences(
+            preferences.Value,
+            5_000,
+            1.0,
+            autoPause: true,
+            expectedCamera: null,
+            ThemePreference.FollowDesktop);
     }
 
     [TestMethod]
@@ -250,7 +291,12 @@ public sealed class SqlitePreferencesStoreTests
         await using var context = await CreateInitializedStore(database);
         var commands = Enumerable.Range(0, 32)
             .Select(index => CreateUpdate(
-                CreatePreferences(index * 100, 0.5, index % 2 == 0, $"Camera {index}"),
+                CreatePreferences(
+                    index * 100,
+                    0.5,
+                    index % 2 == 0,
+                    $"Camera {index}",
+                    (ThemePreference)(index % 3)),
                 index + 1L))
             .ToArray();
 
@@ -275,7 +321,12 @@ public sealed class SqlitePreferencesStoreTests
         await using var context = SqliteTestingRegistration.CreateStore(database.Options, mode);
         Assert.IsTrue((await context.Initializer.InitializeAsync(CancellationToken.None)).IsSuccess);
         var command = CreateUpdate(
-            CreatePreferences(7_000, 0.25, autoPause: false, "Scenic"),
+            CreatePreferences(
+                7_000,
+                0.25,
+                autoPause: false,
+                "Scenic",
+                ThemePreference.Dark),
             5_000);
 
         var result = await context.Store.ExecuteAsync(command, CancellationToken.None);
@@ -286,6 +337,11 @@ public sealed class SqlitePreferencesStoreTests
         AssertFailure(result, StoreErrorCodes.IndeterminateCommit, ErrorKind.Indeterminate);
         Assert.IsTrue(outcome.IsSuccess);
         Assert.AreEqual(expectedCommitted, outcome.Value.IsCommitted);
+        var preferences = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
+        Assert.IsTrue(preferences.IsSuccess);
+        Assert.AreEqual(
+            expectedCommitted ? ThemePreference.Dark : ThemePreference.FollowDesktop,
+            preferences.Value.Theme);
     }
 
     [TestMethod]
@@ -298,13 +354,18 @@ public sealed class SqlitePreferencesStoreTests
             SqliteTestCommitMode.IndeterminateBeforeCommit,
             SqliteTestCleanupMode.FailAfterCleanup);
         Assert.IsTrue((await context.Initializer.InitializeAsync(CancellationToken.None)).IsSuccess);
-        var command = CreateUpdate(CreatePreferences(8_000, 0.5, false, null), 5_500);
+        var command = CreateUpdate(
+            CreatePreferences(8_000, 0.5, false, null, ThemePreference.Light),
+            5_500);
 
         var result = await context.Store.ExecuteAsync(command, CancellationToken.None);
 
         AssertFailure(result, StoreErrorCodes.IndeterminateCommit, ErrorKind.Indeterminate);
         using var connection = database.OpenConnection();
         Assert.AreEqual(0L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM StoreOperation;"));
+        Assert.AreEqual(0L, ExecuteScalarInt64(
+            connection,
+            "SELECT theme_preference FROM ApplicationPreferences WHERE preferences_id = 1;"));
     }
 
     [TestMethod]
@@ -314,21 +375,70 @@ public sealed class SqlitePreferencesStoreTests
         using var database = new TemporarySqliteDatabase();
         await using var context = await CreateInitializedStore(database);
         var command = CreateUpdate(
-            CreatePreferences(12_345, 0.5, autoPause: true, "Cockpit"),
+            CreatePreferences(
+                12_345,
+                0.5,
+                autoPause: true,
+                "Cockpit",
+                ThemePreference.Dark),
             1_234_567);
 
         Assert.IsTrue((await context.Store.ExecuteAsync(command, CancellationToken.None)).IsSuccess);
 
         using var connection = database.OpenConnection();
         Assert.AreEqual(
-            "c77f3faa749b7344795cde107cf08dd026149819876b0a3f1f0d5dbf3e99b84c",
+            "d40667793045d6a7d4d56b5f406793561a9979b8062e31e20e867cdd2ddb92e7",
             ExecuteScalarString(
                 connection,
                 "SELECT lower(hex(payload_fingerprint_sha256)) FROM StoreOperation;"));
         Assert.AreEqual(
             "preferences.update",
             ExecuteScalarString(connection, "SELECT command_kind FROM StoreOperation;"));
-        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "SELECT command_version FROM StoreOperation;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "SELECT command_version FROM StoreOperation;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-STR-005")]
+    [TestProperty("Requirement", "IR-SET-001")]
+    public async Task ThemeIsPartOfTheVersionedOperationFingerprint()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        var light = CreateUpdate(
+            CreatePreferences(5_000, 1, true, null, ThemePreference.Light),
+            7_000);
+        var dark = CreateUpdate(
+            CreatePreferences(5_000, 1, true, null, ThemePreference.Dark),
+            7_000);
+
+        Assert.IsTrue((await context.Store.ExecuteAsync(light, CancellationToken.None)).IsSuccess);
+        Assert.IsTrue((await context.Store.ExecuteAsync(dark, CancellationToken.None)).IsSuccess);
+
+        using var connection = database.OpenConnection();
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            "SELECT COUNT(DISTINCT payload_fingerprint_sha256) FROM StoreOperation;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    public async Task QueryRejectsAnInvalidPersistedThemeWithoutExposingProviderDetails()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "PRAGMA ignore_check_constraints = ON;");
+            ExecuteNonQuery(
+                connection,
+                "UPDATE ApplicationPreferences SET theme_preference = 99 WHERE preferences_id = 1;");
+        }
+
+        var result = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
+
+        AssertFailure(result, StoreErrorCodes.PersistenceFailure, ErrorKind.Persistence);
+        Assert.IsFalse(result.Error!.Message.Contains("theme_preference", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -370,7 +480,13 @@ public sealed class SqlitePreferencesStoreTests
         var nextQuery = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
 
         Assert.IsTrue(nextQuery.IsSuccess);
-        AssertPreferences(nextQuery.Value, 5_000, 1.0, autoPause: true, expectedCamera: null);
+        AssertPreferences(
+            nextQuery.Value,
+            5_000,
+            1.0,
+            autoPause: true,
+            expectedCamera: null,
+            ThemePreference.FollowDesktop);
     }
 
     private static async Task<SqliteTestStoreContext> CreateInitializedStore(
@@ -391,24 +507,28 @@ public sealed class SqlitePreferencesStoreTests
         long leadInMilliseconds,
         double playbackSpeed,
         bool autoPause,
-        string? camera) =>
+        string? camera,
+        ThemePreference theme = ThemePreference.FollowDesktop) =>
         UserPreferences.TryCreateMilliseconds(
             leadInMilliseconds,
             playbackSpeed,
             autoPause,
-            camera).Value;
+            camera,
+            theme).Value;
 
     private static void AssertPreferences(
         UserPreferences actual,
         long expectedLeadIn,
         double expectedSpeed,
         bool autoPause,
-        string? expectedCamera)
+        string? expectedCamera,
+        ThemePreference expectedTheme)
     {
         Assert.AreEqual(expectedLeadIn, actual.ReplayLeadInMilliseconds);
         Assert.AreEqual(expectedSpeed, actual.PlaybackSpeed);
         Assert.AreEqual(autoPause, actual.AutoPause);
         Assert.AreEqual(expectedCamera, actual.PreferredCamera);
+        Assert.AreEqual(expectedTheme, actual.Theme);
     }
 
     private static long ExecuteScalarInt64(SqliteConnection connection, string sql)
@@ -438,6 +558,13 @@ public sealed class SqlitePreferencesStoreTests
             _ = command.Parameters.AddWithValue(parameter.Name, parameter.Value);
         }
 
+        _ = command.ExecuteNonQuery();
+    }
+
+    private static void ExecuteNonQuery(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
         _ = command.ExecuteNonQuery();
     }
 

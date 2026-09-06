@@ -33,6 +33,18 @@ public sealed class SqliteInitializationTests
         "created_at_utc_ms", "updated_at_utc_ms",
     ];
 
+    private static readonly string[] ExpectedPreferencesColumns =
+    [
+        "preferences_id", "replay_lead_in_ms", "auto_pause", "playback_speed",
+        "preferred_camera", "updated_at_utc_ms", "theme_preference",
+    ];
+
+    private static readonly string[] ExpectedMigrationScripts =
+    [
+        "001_InitialSchema.sql",
+        "002_AddThemePreference.sql",
+    ];
+
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-004")]
     public async Task NewDatabaseAppliesExactManifestAndRequiredPragmas()
@@ -45,13 +57,17 @@ public sealed class SqliteInitializationTests
         Assert.IsTrue(result.IsSuccess);
         using var connection = database.OpenConnection();
         CollectionAssert.AreEqual(ExpectedTables, ReadTableNames(connection));
-        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
         Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA foreign_keys;"));
         Assert.AreEqual("delete", ExecuteScalarString(connection, "PRAGMA journal_mode;"));
-        Assert.AreEqual("001_InitialSchema.sql", ExecuteScalarString(
-            connection,
-            "SELECT ScriptName FROM SchemaVersions;"));
+        CollectionAssert.AreEqual(ExpectedMigrationScripts, ReadMigrationScriptNames(connection));
         CollectionAssert.AreEqual(ExpectedSessionColumns, ReadColumnNames(connection, "Session"));
+        CollectionAssert.AreEqual(
+            ExpectedPreferencesColumns,
+            ReadColumnNames(connection, "ApplicationPreferences"));
+        Assert.AreEqual(0L, ExecuteScalarInt64(
+            connection,
+            "SELECT theme_preference FROM ApplicationPreferences WHERE preferences_id = 1;"));
     }
 
     [TestMethod]
@@ -72,7 +88,63 @@ public sealed class SqliteInitializationTests
             "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '001_InitialSchema.sql';"));
         Assert.AreEqual(1L, ExecuteScalarInt64(
             connection,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '002_AddThemePreference.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            connection,
             "SELECT COUNT(*) FROM ApplicationPreferences;"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task VersionOneDatabaseUpgradesWithoutLosingReplayPreferences()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteParameterized(
+                connection,
+                """
+                UPDATE ApplicationPreferences
+                SET replay_lead_in_ms = @leadIn,
+                    auto_pause = @autoPause,
+                    playback_speed = @playbackSpeed,
+                    preferred_camera = @camera,
+                    updated_at_utc_ms = @updatedAt
+                WHERE preferences_id = 1;
+                """,
+                ("@leadIn", 12_345),
+                ("@autoPause", 0),
+                ("@playbackSpeed", 0.5),
+                ("@camera", "TV 2"),
+                ("@updatedAt", 1_234_567));
+            ExecuteNonQuery(connection, "ALTER TABLE ApplicationPreferences DROP COLUMN theme_preference;");
+            ExecuteNonQuery(
+                connection,
+                "DELETE FROM SchemaVersions WHERE ScriptName = '002_AddThemePreference.sql';");
+            ExecuteNonQuery(connection, "PRAGMA user_version = 1;");
+        }
+
+        await using var context = SqliteTestingRegistration.CreateStore(database.Options);
+        var initialization = await context.Initializer.InitializeAsync(CancellationToken.None);
+        var preferences = await context.Store.QueryAsync(GetPreferences.Instance, CancellationToken.None);
+
+        Assert.IsTrue(initialization.IsSuccess, initialization.Error?.ToString());
+        Assert.IsTrue(preferences.IsSuccess, preferences.Error?.ToString());
+        Assert.AreEqual(12_345L, preferences.Value.ReplayLeadInMilliseconds);
+        Assert.IsFalse(preferences.Value.AutoPause);
+        Assert.AreEqual(0.5, preferences.Value.PlaybackSpeed);
+        Assert.AreEqual("TV 2", preferences.Value.PreferredCamera);
+        Assert.AreEqual(ThemePreference.FollowDesktop, preferences.Value.Theme);
+        using var verification = database.OpenConnection();
+        Assert.AreEqual(2L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
+        Assert.AreEqual(1_234_567L, ExecuteScalarInt64(
+            verification,
+            "SELECT updated_at_utc_ms FROM ApplicationPreferences WHERE preferences_id = 1;"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '002_AddThemePreference.sql';"));
     }
 
     [TestMethod]
@@ -136,7 +208,7 @@ public sealed class SqliteInitializationTests
         Assert.IsTrue((await first.InitializeAsync(CancellationToken.None)).IsSuccess);
         using (var connection = database.OpenConnection())
         {
-            ExecuteNonQuery(connection, "PRAGMA user_version = 2;");
+            ExecuteNonQuery(connection, "PRAGMA user_version = 3;");
         }
 
         var second = SqliteTestingRegistration.CreateInitializer(database.Options);
@@ -147,7 +219,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-004")]
-    [DataRow(2)]
+    [DataRow(3)]
     [DataRow(-1)]
     public async Task UnsupportedUnjournaledSchemaVersionIsRejectedWithoutMutation(int schemaVersion)
     {
@@ -328,8 +400,8 @@ public sealed class SqliteInitializationTests
 
         Assert.IsTrue(enteredMigration, "The migration did not reach its deterministic test gate.");
         using var connection = database.OpenConnection();
-        Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
-        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
+        Assert.AreEqual(3L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
 
         var whileCanceled = await context.Store.QueryAsync(
             GetPreferences.Instance,
@@ -455,6 +527,27 @@ public sealed class SqliteInitializationTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SET-001")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task SchemaValidationRejectsAnInvalidPersistedTheme()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        using (var connection = database.OpenConnection())
+        {
+            ExecuteNonQuery(connection, "PRAGMA ignore_check_constraints = ON;");
+            ExecuteNonQuery(
+                connection,
+                "UPDATE ApplicationPreferences SET theme_preference = 99 WHERE preferences_id = 1;");
+        }
+
+        var result = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        AssertFailure(result, "store.sqlite.schema-invalid");
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-INC-004")]
     public async Task IncidentLogicalIdentityIsUniqueWithinSessionEpoch()
     {
@@ -493,7 +586,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
-    public async Task PreferencesEnforceSingletonBooleanAndPlaybackValues()
+    public async Task PreferencesEnforceSingletonBooleanPlaybackAndThemeValues()
     {
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
@@ -513,6 +606,12 @@ public sealed class SqliteInitializationTests
         Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
             connection,
             "UPDATE ApplicationPreferences SET playback_speed = 3.0 WHERE preferences_id = 1;"));
+        Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
+            connection,
+            "UPDATE ApplicationPreferences SET theme_preference = -1 WHERE preferences_id = 1;"));
+        Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
+            connection,
+            "UPDATE ApplicationPreferences SET theme_preference = 3 WHERE preferences_id = 1;"));
     }
 
     [TestMethod]
@@ -562,6 +661,7 @@ public sealed class SqliteInitializationTests
             SET replay_lead_in_ms = 60000,
                 playback_speed = 0.1,
                 preferred_camera = @camera,
+                theme_preference = 2,
                 updated_at_utc_ms = 253402300799999
             WHERE preferences_id = 1;
             """,
@@ -613,6 +713,9 @@ public sealed class SqliteInitializationTests
             connection,
             "UPDATE ApplicationPreferences SET preferred_camera = @camera WHERE preferences_id = 1;",
             ("@camera", new string(' ', 128) + "c")));
+        Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
+            connection,
+            "UPDATE ApplicationPreferences SET theme_preference = 3 WHERE preferences_id = 1;"));
         Assert.ThrowsExactly<SqliteException>(() => ExecuteNonQuery(
             connection,
             "UPDATE \"Session\" SET started_at_utc_ms = -62135596800001 WHERE session_id IS NOT NULL;"));
@@ -667,6 +770,7 @@ public sealed class SqliteInitializationTests
         command.CommandText = table switch
         {
             "Session" => "PRAGMA table_info('Session');",
+            "ApplicationPreferences" => "PRAGMA table_info('ApplicationPreferences');",
             _ => throw new ArgumentOutOfRangeException(nameof(table)),
         };
         using var reader = command.ExecuteReader();
@@ -674,6 +778,20 @@ public sealed class SqliteInitializationTests
         while (reader.Read())
         {
             names.Add(reader.GetString(1));
+        }
+
+        return names.ToArray();
+    }
+
+    private static string[] ReadMigrationScriptNames(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT ScriptName FROM SchemaVersions ORDER BY ScriptName;";
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+        {
+            names.Add(reader.GetString(0));
         }
 
         return names.ToArray();
@@ -747,7 +865,7 @@ public sealed class SqliteInitializationTests
         var sql = schemaVersion switch
         {
             -1 => "PRAGMA user_version = -1;",
-            2 => "PRAGMA user_version = 2;",
+            3 => "PRAGMA user_version = 3;",
             _ => throw new ArgumentOutOfRangeException(nameof(schemaVersion)),
         };
         ExecuteNonQuery(connection, sql);

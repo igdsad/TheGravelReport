@@ -9,6 +9,8 @@ internal sealed class PreferencesRow
     public double PlaybackSpeed { get; init; }
 
     public string? PreferredCamera { get; init; }
+
+    public int ThemePreference { get; init; }
 }
 
 internal sealed class StoreOperationRow

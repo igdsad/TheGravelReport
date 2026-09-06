@@ -9,7 +9,7 @@ namespace IncidentReview.Store.Sqlite;
 internal static class PreferencesCommandFingerprint
 {
     public const string CommandKind = "preferences.update";
-    public const int CommandVersion = 1;
+    public const int CommandVersion = 2;
 
     public static byte[] Create(UpdatePreferences command)
     {
@@ -20,6 +20,7 @@ internal static class PreferencesCommandFingerprint
         WriteByte(writer, command.Preferences.AutoPause ? (byte)1 : (byte)0);
         WriteInt64(writer, BitConverter.DoubleToInt64Bits(command.Preferences.PlaybackSpeed));
         WriteOptionalUtf8(writer, command.Preferences.PreferredCamera);
+        WriteInt32(writer, (int)command.Preferences.Theme);
         WriteInt64(writer, command.UpdatedAt.UnixMilliseconds);
         return SHA256.HashData(writer.WrittenSpan);
     }

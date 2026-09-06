@@ -15,6 +15,10 @@ internal static class MigrationManifest
             "001_InitialSchema.sql",
             ResourcePrefix + "001_InitialSchema.sql",
             "d8f86828d65f37b74e72c1b4bd00af91975aae3381d58dd1a3972cbe12d01407"),
+        new(
+            "002_AddThemePreference.sql",
+            ResourcePrefix + "002_AddThemePreference.sql",
+            "57b08ea4947c4e9a5fbbb49ba27521cbdd3806c691c7ba8e48e403768628e47d"),
     ];
 
     public static IReadOnlyList<SqlScript> LoadProductionScripts()

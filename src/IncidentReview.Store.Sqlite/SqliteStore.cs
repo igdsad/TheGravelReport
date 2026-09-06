@@ -42,7 +42,8 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
         SELECT replay_lead_in_ms AS ReplayLeadInMilliseconds,
                auto_pause AS AutoPause,
                playback_speed AS PlaybackSpeed,
-               preferred_camera AS PreferredCamera
+               preferred_camera AS PreferredCamera,
+               theme_preference AS ThemePreference
         FROM ApplicationPreferences
         WHERE preferences_id = 1;
         """;
@@ -71,6 +72,7 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
             auto_pause = @AutoPause,
             playback_speed = @PlaybackSpeed,
             preferred_camera = @PreferredCamera,
+            theme_preference = @ThemePreference,
             updated_at_utc_ms = @UpdatedAtUnixMilliseconds
         WHERE preferences_id = 1;
         """;
@@ -304,7 +306,8 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
                     row.ReplayLeadInMilliseconds,
                     row.PlaybackSpeed,
                     row.AutoPause == 1,
-                    row.PreferredCamera);
+                    row.PreferredCamera,
+                    (ThemePreference)row.ThemePreference);
                 if (!preferences.IsSuccess)
                 {
                     return Result<UserPreferences>.Failure(StoreErrors.PersistenceFailure);
@@ -400,6 +403,7 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
                         AutoPause = command.Preferences.AutoPause ? 1 : 0,
                         command.Preferences.PlaybackSpeed,
                         command.Preferences.PreferredCamera,
+                        ThemePreference = (int)command.Preferences.Theme,
                         UpdatedAtUnixMilliseconds = command.UpdatedAt.UnixMilliseconds,
                     },
                     transaction: transaction);

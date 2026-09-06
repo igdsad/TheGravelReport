@@ -9,7 +9,7 @@ namespace IncidentReview.Store.Sqlite;
 
 internal sealed class SqliteSchemaValidator
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
     private static readonly Version MinimumSqliteVersion = new(3, 8, 0);
 
     private static readonly string[] RequiredTables =
@@ -52,6 +52,7 @@ internal sealed class SqliteSchemaValidator
         [
             "preferences_id", "replay_lead_in_ms", "auto_pause",
             "playback_speed", "preferred_camera", "updated_at_utc_ms",
+            "theme_preference",
         ]),
     ];
 
@@ -216,6 +217,7 @@ internal sealed class SqliteSchemaValidator
                     auto_pause AS AutoPause,
                     playback_speed AS PlaybackSpeed,
                     preferred_camera AS PreferredCamera,
+                    theme_preference AS ThemePreference,
                     updated_at_utc_ms AS UpdatedAtUnixMilliseconds
                 FROM ApplicationPreferences
                 ORDER BY preferences_id;
@@ -232,7 +234,8 @@ internal sealed class SqliteSchemaValidator
                     row.ReplayLeadInMilliseconds,
                     row.PlaybackSpeed,
                     row.AutoPause == 1,
-                    row.PreferredCamera).IsSuccess
+                    row.PreferredCamera,
+                    (ThemePreference)row.ThemePreference).IsSuccess
                 && UtcInstant.TryCreateUnixMilliseconds(row.UpdatedAtUnixMilliseconds).IsSuccess;
         }
         catch (Exception exception) when (
@@ -493,6 +496,8 @@ internal sealed class SqliteSchemaValidator
         public double PlaybackSpeed { get; init; }
 
         public string? PreferredCamera { get; init; }
+
+        public int ThemePreference { get; init; }
 
         public long UpdatedAtUnixMilliseconds { get; init; }
     }
