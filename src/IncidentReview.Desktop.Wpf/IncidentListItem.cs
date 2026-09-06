@@ -18,7 +18,19 @@ public sealed class IncidentListItem
 
     public string ObservedAtText => ObservedAt.LocalDateTime.ToString("g", CultureInfo.CurrentCulture);
 
-    public string IncidentIdText => Id.ToString();
+    public string IncidentIdText
+    {
+        get
+        {
+            var value = FullIncidentIdText;
+            const int visibleSuffixLength = 8;
+            return value.Length <= visibleSuffixLength
+                ? value
+                : string.Concat("…", value.AsSpan(value.Length - visibleSuffixLength));
+        }
+    }
+
+    public string FullIncidentIdText => Id.ToString();
 
     public string ReplayTime => FormatDuration(Incident.Position.SessionTime.Value);
 

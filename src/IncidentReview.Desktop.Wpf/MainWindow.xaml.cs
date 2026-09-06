@@ -1,6 +1,7 @@
+using System.ComponentModel;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace IncidentReview.Desktop.Wpf;
 
@@ -15,6 +16,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = ViewModel;
         Loaded += OnLoaded;
+        Closed += OnClosed;
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
     }
 
     public MainWindowViewModel ViewModel { get; }
@@ -30,19 +33,31 @@ public partial class MainWindow : Window
         await ViewModel.InitializeAsync(CancellationToken.None).ConfigureAwait(true);
     }
 
-    private void OnSessionSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void OnIncidentActivated(object sender, MouseButtonEventArgs e)
     {
-        if (_initialized && ViewModel.OpenSessionCommand.CanExecute(null))
+        var incident = ViewModel.SelectedIncident;
+        if (incident is not null && ViewModel.ReviewAtCommand.CanExecute(incident))
         {
-            ViewModel.OpenSessionCommand.Execute(null);
+            ViewModel.ReviewAtCommand.Execute(incident);
         }
     }
 
-    private void OnIncidentActivated(object sender, MouseButtonEventArgs e)
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (ViewModel.ReviewCommand.CanExecute(null))
+        if (e.PropertyName != nameof(MainWindowViewModel.State) ||
+            ViewModel.State.EventLog.Count == 0)
         {
-            ViewModel.ReviewCommand.Execute(null);
+            return;
         }
+
+        var newest = ViewModel.State.EventLog[^1];
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() => EventLogList.ScrollIntoView(newest)));
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
     }
 }

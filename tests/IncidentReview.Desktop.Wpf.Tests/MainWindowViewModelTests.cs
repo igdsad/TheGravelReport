@@ -1,4 +1,5 @@
 using IncidentReview.Application.Contracts;
+using IncidentReview.Domain;
 using IncidentReview.Results;
 
 namespace IncidentReview.Desktop.Wpf.Tests;
@@ -6,412 +7,290 @@ namespace IncidentReview.Desktop.Wpf.Tests;
 [TestClass]
 public sealed class MainWindowViewModelTests
 {
+    private static readonly string[] ExpectedCameraDisplayNames =
+        ["Current iRacing camera", "Cockpit", "TV1"];
+
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
-    public async Task RefreshDisplaysCurrentSessionIncidentsChronologically()
+    public async Task RefreshRendersOneCurrentSnapshotChronologically()
     {
         var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var sessionId = SessionIdentity.Generate();
         var later = TestModelFactory.Incident(sessionId, 2_000, 15_000, 4, 2);
         var earlier = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
         var session = TestModelFactory.Session(sessionId, later, earlier);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 4,
+            activeSession: session,
+            driverDisplayName: "Eric Sigurdson",
+            cameraGroups: ["Cockpit", "TV1"],
+            currentCameraGroup: "Cockpit"));
         var dispatcher = new RecordingDispatcher();
         await using var viewModel = new MainWindowViewModel(service, dispatcher);
 
         await viewModel.RefreshAsync(CancellationToken.None);
 
-        Assert.AreEqual("Connected to iRacing", viewModel.ConnectionStatus);
-        Assert.HasCount(1, viewModel.Sessions);
-        Assert.IsTrue(viewModel.Sessions[0].IsCurrent);
-        StringAssert.StartsWith(viewModel.Sessions[0].DisplayName, "Current");
-        Assert.HasCount(2, viewModel.Incidents);
-        Assert.AreEqual(earlier.Id, viewModel.Incidents[0].Id);
-        Assert.AreEqual(later.Id, viewModel.Incidents[1].Id);
-        Assert.AreEqual("3000", viewModel.ReplayLeadInMilliseconds);
+        Assert.AreEqual(1, service.SnapshotCalls);
+        Assert.AreEqual(0, service.StatusCalls);
+        Assert.AreEqual("Connected to iRacing", viewModel.State.ConnectionStatus);
+        Assert.AreEqual("Eric Sigurdson", viewModel.State.ActiveDriverName);
+        Assert.HasCount(2, viewModel.State.Incidents);
+        Assert.AreEqual(earlier.Id, viewModel.State.Incidents[0].Id);
+        Assert.AreEqual(later.Id, viewModel.State.Incidents[1].Id);
+        CollectionAssert.AreEqual(
+            ExpectedCameraDisplayNames,
+            viewModel.State.CameraChoices.Select(static choice => choice.DisplayName).ToArray());
         Assert.IsGreaterThan(0, dispatcher.InvocationCount);
-        Assert.IsFalse(viewModel.ShowsEmptyState);
-        Assert.AreEqual("2 incidents", viewModel.StatusDetail);
-        Assert.HasCount(1, viewModel.EventLog);
-        Assert.IsFalse(viewModel.EventLog[0].IsError);
-        StringAssert.Contains(viewModel.EventLog[0].Message, "2 incidents");
+        Assert.IsFalse(viewModel.State.ShowsEmptyState);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        StringAssert.Contains(viewModel.State.StatusDetail, "2 incidents");
     }
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
-    public async Task CurrentSessionIsShownWhenSessionListSnapshotPrecedesIt()
+    public async Task NoActiveSessionShowsThePrimaryEmptyState()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                status: ReviewServiceStatus.WaitingForSimulator)),
+        };
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("Waiting for iRacing", viewModel.State.ConnectionStatus);
+        Assert.IsTrue(viewModel.State.ShowsEmptyState);
+        Assert.AreEqual("No review session is available yet.", viewModel.State.EmptyMessage);
+        Assert.IsFalse(viewModel.State.HasError);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task FreshUnavailableSnapshotDisplaysItsExactReasonEverywhere()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                status: ReviewServiceStatus.Unavailable,
+                statusError: ApplicationErrors.ReplayUnavailable)),
+        };
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.AreEqual("iRacing unavailable", viewModel.State.ConnectionStatus);
+        Assert.IsTrue(viewModel.State.HasError);
+        Assert.AreEqual(
+            ApplicationErrors.ReplayUnavailable.Message,
+            viewModel.State.StatusDetail);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        Assert.IsTrue(viewModel.State.EventLog[^1].IsError);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-002")]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task RowCommandsSendTheirExplicitOffsets()
     {
         var service = new FakeIncidentReviewService();
-        var session = TestModelFactory.Session();
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-
-        await viewModel.RefreshAsync(CancellationToken.None);
-
-        Assert.HasCount(1, viewModel.Sessions);
-        Assert.AreEqual(session.Id, viewModel.Sessions[0].Id);
-        Assert.IsTrue(viewModel.Sessions[0].IsCurrent);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-001")]
-    public async Task RefreshWithNoCurrentOrPastSessionShowsEmptyState()
-    {
-        var service = new FakeIncidentReviewService
-        {
-            StatusResult = Result<ReviewServiceStatus>.Success(
-                ReviewServiceStatus.WaitingForSimulator),
-        };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-
-        await viewModel.RefreshAsync(CancellationToken.None);
-
-        Assert.AreEqual("Waiting for iRacing", viewModel.ConnectionStatus);
-        Assert.IsTrue(viewModel.ShowsEmptyState);
-        Assert.AreEqual("No review session is available yet.", viewModel.EmptyMessage);
-        Assert.IsFalse(viewModel.HasError);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-RPY-003")]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task ReviewSelectedIncidentDisplaysExactActionableFailure()
-    {
-        var service = new FakeIncidentReviewService
-        {
-            ReviewResult = Result.Failure(ApplicationErrors.ReplayDriverOnTrack),
-        };
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var sessionId = SessionIdentity.Generate();
         var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
         var session = TestModelFactory.Session(sessionId, incident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            activeSession: session));
         await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
         await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedIncident = viewModel.Incidents[0];
+        var row = viewModel.State.Incidents[0];
 
-        await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
+        await ExecuteAndWaitAsync(viewModel.ReviewBeforeCommand, row, service, 1, viewModel);
+        await ExecuteAndWaitAsync(viewModel.ReviewAtCommand, row, service, 2, viewModel);
+        await ExecuteAndWaitAsync(viewModel.ReviewAfterCommand, row, service, 3, viewModel);
 
         Assert.AreEqual(incident.Id, service.ReviewedIncident);
-        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.ErrorMessage);
-        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.StatusDetail);
-        Assert.IsTrue(viewModel.EventLog[^1].IsError);
-        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.EventLog[^1].Message);
+        CollectionAssert.AreEqual(
+            new long[] { -2_000, 0, 2_000 },
+            service.ReviewedOffsets.Select(static offset => offset.Milliseconds).ToArray());
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        StringAssert.Contains(viewModel.State.StatusDetail, "2 sec after");
     }
 
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "IR-UI-002")]
-    public async Task SuccessfulReviewDisplaysConfirmedStatusAndEvent()
-    {
-        var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
-        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var session = TestModelFactory.Session(sessionId, incident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedIncident = viewModel.Incidents[0];
-
-        await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
-
-        var expected = $"Replay ready for incident {incident.Id}.";
-        Assert.IsFalse(viewModel.HasError);
-        Assert.AreEqual(expected, viewModel.StatusDetail);
-        Assert.IsFalse(viewModel.EventLog[^1].IsError);
-        Assert.AreEqual(expected, viewModel.EventLog[^1].Message);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task BusyStatusTemporarilyOverridesConfirmedReviewStatus()
-    {
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
-        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var session = TestModelFactory.Session(sessionId, incident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedIncident = viewModel.Incidents[0];
-        await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
-        service.StatusHandler = async _ =>
-        {
-            entered.SetResult();
-            await release.Task;
-            return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
-        };
-
-        var refresh = viewModel.RefreshAsync(CancellationToken.None);
-        await entered.Task;
-
-        Assert.AreEqual("Working…", viewModel.StatusDetail);
-
-        release.SetResult();
-        await refresh;
-        Assert.AreEqual($"Replay ready for incident {incident.Id}.", viewModel.StatusDetail);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-RPY-003")]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task RowReviewCommandUsesItsIncidentWithoutChangingSelection()
-    {
-        var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
-        var first = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var second = TestModelFactory.Incident(sessionId, 2_000, 8_000, 4, 2);
-        var session = TestModelFactory.Session(sessionId, first, second);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedIncident = viewModel.Incidents[0];
-        var rowIncident = viewModel.Incidents[1];
-
-        Assert.IsTrue(viewModel.ReviewIncidentCommand.CanExecute(rowIncident));
-        viewModel.ReviewIncidentCommand.Execute(rowIncident);
-        await WaitUntilAsync(() => service.ReviewedIncident is not null);
-
-        Assert.AreEqual(second.Id, service.ReviewedIncident);
-        Assert.AreEqual(first.Id, viewModel.SelectedIncident.Id);
-        Assert.IsFalse(viewModel.HasError);
-        StringAssert.Contains(viewModel.EventLog[^1].Message, second.Id.ToString());
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task RowReviewCommandIsDisabledWhileAnotherOperationIsBusy()
-    {
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
-        var model = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var session = TestModelFactory.Session(sessionId, model);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.RefreshAsync(CancellationToken.None);
-        var incident = viewModel.Incidents[0];
-        service.StatusHandler = async _ =>
-        {
-            entered.SetResult();
-            await release.Task;
-            return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
-        };
-
-        var refresh = viewModel.RefreshAsync(CancellationToken.None);
-        await entered.Task;
-
-        Assert.IsTrue(viewModel.IsBusy);
-        Assert.IsFalse(viewModel.ReviewIncidentCommand.CanExecute(incident));
-        Assert.IsFalse(viewModel.ReviewIncidentCommand.CanExecute(null));
-        viewModel.ReviewIncidentCommand.Execute(incident);
-        Assert.IsNull(service.ReviewedIncident);
-
-        release.SetResult();
-        await refresh;
-        Assert.IsTrue(viewModel.ReviewIncidentCommand.CanExecute(incident));
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task EventLogDropsOldestEntriesAtItsBound()
+    public async Task ReviewFailureBecomesOneExactErrorNotice()
     {
         var service = new FakeIncidentReviewService
         {
             ReviewResult = Result.Failure(ApplicationErrors.ReplayDriverOnTrack),
         };
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var sessionId = SessionIdentity.Generate();
         var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var session = TestModelFactory.Session(sessionId, incident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(session)]);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            activeSession: TestModelFactory.Session(sessionId, incident)));
         await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
         await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedIncident = viewModel.Incidents[0];
 
-        for (var index = 0; index < 205; index++)
-        {
-            await viewModel.ReviewSelectedIncidentAsync(CancellationToken.None);
-        }
+        await viewModel.ReviewIncidentAsync(
+            viewModel.State.Incidents[0],
+            ReplayOffset.Zero,
+            CancellationToken.None);
 
-        Assert.HasCount(200, viewModel.EventLog);
-        Assert.IsTrue(viewModel.EventLog.All(static entry => entry.IsError));
+        Assert.AreEqual(ApplicationErrors.ReplayDriverOnTrack.Message, viewModel.State.StatusDetail);
+        Assert.IsTrue(viewModel.State.HasError);
+        AssertCurrentStatusIsNewestEvent(viewModel);
     }
 
     [TestMethod]
-    [TestProperty("Requirement", "IR-HIS-001")]
-    public async Task SelectingPastSessionLoadsItsIncidentSnapshot()
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task ManualRefreshSupersedesAStaleReviewNotice()
     {
         var service = new FakeIncidentReviewService();
-        var current = TestModelFactory.Session();
-        var pastId = IncidentReview.Domain.SessionIdentity.Generate();
-        var pastIncident = TestModelFactory.Incident(pastId, 500, 4_000, 1, 1);
-        var past = TestModelFactory.Session(pastId, pastIncident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(current);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(current), TestModelFactory.Summary(past)]);
-        service.Sessions.Add(past.Id, past);
+        var sessionId = SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 2,
+            activeSession: TestModelFactory.Session(sessionId, incident)));
         await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
         await viewModel.RefreshAsync(CancellationToken.None);
-        viewModel.SelectedSession = viewModel.Sessions.Single(item => item.Id == past.Id);
+        await viewModel.ReviewIncidentAsync(
+            viewModel.State.Incidents[0],
+            ReplayOffset.Zero,
+            CancellationToken.None);
+        var reviewNotice = viewModel.State.CurrentStatusEvent;
 
-        await viewModel.OpenSelectedSessionAsync(CancellationToken.None);
+        await viewModel.RefreshAsync(CancellationToken.None);
 
-        Assert.HasCount(1, viewModel.Incidents);
-        Assert.AreEqual(pastIncident.Id, viewModel.Incidents[0].Id);
+        Assert.AreNotSame(reviewNotice, viewModel.State.CurrentStatusEvent);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        StringAssert.StartsWith(viewModel.State.StatusDetail, "Refreshed incident log:");
     }
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SET-001")]
-    public async Task SavePreferencesValidatesBeforeCallingApplication()
+    public async Task SaveCameraPreservesHiddenPlaybackPreferences()
     {
         var service = new FakeIncidentReviewService();
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher())
-        {
-            ReplayLeadInMilliseconds = "not-a-number",
-        };
+        var stored = TestModelFactory.Preferences(5_000, 0.75, true, "TV1");
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 1,
+            preferences: stored,
+            cameraGroups: ["TV1", "TV2"],
+            currentCameraGroup: "TV1"));
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedCameraChoice = viewModel.State.CameraChoices.Single(
+            static choice => choice.CameraName == "TV2");
 
-        await viewModel.SavePreferencesAsync(CancellationToken.None);
-        Assert.IsNull(service.UpdatedPreferences);
-        Assert.IsTrue(viewModel.HasError);
-
-        viewModel.ReplayLeadInMilliseconds = "5000";
-        viewModel.PlaybackSpeed = "0.75";
-        viewModel.AutoPause = true;
-        viewModel.PreferredCamera = "TV1";
         await viewModel.SavePreferencesAsync(CancellationToken.None);
 
         Assert.IsNotNull(service.UpdatedPreferences);
         Assert.AreEqual(5_000, service.UpdatedPreferences.ReplayLeadInMilliseconds);
         Assert.AreEqual(0.75, service.UpdatedPreferences.PlaybackSpeed);
-        Assert.AreEqual("TV1", service.UpdatedPreferences.PreferredCamera);
-        Assert.IsFalse(viewModel.HasError);
+        Assert.IsTrue(service.UpdatedPreferences.AutoPause);
+        Assert.AreEqual("TV2", service.UpdatedPreferences.PreferredCamera);
+        Assert.IsFalse(viewModel.State.IsCameraSelectionDirty);
+        Assert.AreEqual("TV2", viewModel.State.SelectedCameraChoice.CameraName);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        Assert.AreEqual("Camera preference saved.", viewModel.State.StatusDetail);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task SnapshotFailureAfterCameraSaveIsNotHiddenByASuccessNotice()
+    {
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                revision: 1,
+                cameraGroups: ["TV1"])),
+        };
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedCameraChoice = viewModel.State.CameraChoices.Single(
+            static choice => choice.CameraName == "TV1");
+        service.SnapshotHandler = _ => Task.FromResult(
+            Result<ReviewSnapshot>.Failure(ApplicationErrors.ReplayUnavailable));
+
+        await viewModel.SavePreferencesAsync(CancellationToken.None);
+
+        Assert.IsNotNull(service.UpdatedPreferences);
+        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.State.StatusDetail);
+        Assert.IsTrue(viewModel.State.HasError);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task ApplicationUpdateRefreshesOnlyTheAggregateSnapshot()
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = SessionIdentity.Generate();
+        var first = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 1,
+            activeSession: TestModelFactory.Session(sessionId, first)));
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        await viewModel.StartMonitoringAsync(CancellationToken.None);
+        var callsBeforeUpdate = service.SnapshotCalls;
+        var second = TestModelFactory.Incident(sessionId, 2_000, 12_000, 4, 2);
+        service.SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+            revision: 2,
+            activeSession: TestModelFactory.Session(sessionId, first, second),
+            driverDisplayName: "Eric Sigurdson",
+            cameraGroups: ["TV1"]));
+
+        await service.PublishAsync(new ReviewUpdate.IncidentChanged(sessionId, second.Id));
+        await WaitUntilAsync(() => viewModel.State.Incidents.Count == 2);
+
+        Assert.AreEqual(callsBeforeUpdate + 1, service.SnapshotCalls);
+        Assert.AreEqual(0, service.StatusCalls);
+        Assert.AreEqual("Eric Sigurdson", viewModel.State.ActiveDriverName);
+        AssertCurrentStatusIsNewestEvent(viewModel);
+        StringAssert.Contains(viewModel.State.StatusDetail, second.Id.ToString());
+        await viewModel.StopMonitoringAsync();
     }
 
     [TestMethod]
     [TestProperty("Requirement", "QR-ERR-002")]
-    public async Task CancelActiveOperationReturnsViewModelToIdle()
+    public async Task CancelActiveRefreshReturnsTheStateToIdle()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new FakeIncidentReviewService
         {
-            StatusHandler = async cancellationToken =>
+            SnapshotHandler = async cancellationToken =>
             {
                 entered.SetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
+                return Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot());
             },
         };
         await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
 
         var refresh = viewModel.RefreshAsync(CancellationToken.None);
         await entered.Task;
-        Assert.IsTrue(viewModel.IsBusy);
+        Assert.IsTrue(viewModel.State.IsBusy);
         viewModel.CancelActiveOperation();
         await refresh;
 
-        Assert.IsFalse(viewModel.IsBusy);
-        Assert.IsFalse(viewModel.HasError);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-001")]
-    public async Task MonitorRefreshesAfterApplicationUpdate()
-    {
-        var service = new FakeIncidentReviewService();
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.StartMonitoringAsync(CancellationToken.None);
-        var callsBeforeUpdate = service.StatusCalls;
-
-        await service.PublishAsync(ReviewUpdate.StatusChanged.Create(
-            ReviewServiceStatus.WaitingForSimulator));
-        await WaitUntilAsync(() => service.StatusCalls > callsBeforeUpdate);
-
-        Assert.IsTrue(viewModel.IsMonitoring);
-        await viewModel.StopMonitoringAsync();
-        Assert.IsFalse(viewModel.IsMonitoring);
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-001")]
-    [TestProperty("Requirement", "IR-SET-001")]
-    public async Task IncidentChangedAutomaticRefreshPreservesDirtyPreferencesAndSelectedIncident()
-    {
-        await AssertAutomaticRefreshPreservesInteractionStateAsync(
-            static (session, incident) => new ReviewUpdate.IncidentChanged(session, incident));
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-001")]
-    [TestProperty("Requirement", "IR-SET-001")]
-    public async Task SessionChangedAutomaticRefreshPreservesDirtyPreferencesAndSelectedIncident()
-    {
-        await AssertAutomaticRefreshPreservesInteractionStateAsync(
-            static (session, _) => new ReviewUpdate.SessionChanged(session));
-    }
-
-    [TestMethod]
-    [TestProperty("Requirement", "IR-UI-002")]
-    public async Task UnavailableUpdateKeepsItsActionableErrorThroughManualRefresh()
-    {
-        var service = new FakeIncidentReviewService
-        {
-            StatusResult = Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Unavailable),
-        };
-        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
-        await viewModel.StartMonitoringAsync(CancellationToken.None);
-        var callsBeforeUpdate = service.StatusCalls;
-
-        await service.PublishAsync(ReviewUpdate.StatusChanged.Create(
-            ReviewServiceStatus.Unavailable,
-            ApplicationErrors.ReplayUnavailable));
-        await WaitUntilAsync(() => viewModel.HasError);
-
-        Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
-        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
-        Assert.AreEqual(callsBeforeUpdate, service.StatusCalls);
-        Assert.IsTrue(viewModel.EventLog[^1].IsError);
-        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.EventLog[^1].Message);
-
-        await viewModel.RefreshAsync(CancellationToken.None);
-
-        Assert.AreEqual("iRacing unavailable", viewModel.ConnectionStatus);
-        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
-        Assert.AreEqual(callsBeforeUpdate + 1, service.StatusCalls);
-
-        await viewModel.SavePreferencesAsync(CancellationToken.None);
-
-        Assert.AreEqual(ApplicationErrors.ReplayUnavailable.Message, viewModel.ErrorMessage);
+        Assert.IsFalse(viewModel.State.IsBusy);
+        Assert.IsFalse(viewModel.State.HasError);
     }
 
     [TestMethod]
     [TestProperty("Requirement", "QR-LIF-001")]
-    public async Task DisposeWaitsForAnUncooperativeActiveOperationBeforeDisposingItsGate()
+    public async Task DisposeWaitsForAnUncooperativeActiveOperation()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new FakeIncidentReviewService
         {
-            StatusHandler = async _ =>
+            SnapshotHandler = async _ =>
             {
                 entered.SetResult();
                 await release.Task;
-                return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
+                return Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot());
             },
         };
         var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
@@ -424,51 +303,46 @@ public sealed class MainWindowViewModelTests
 
         await refresh;
         await dispose;
-        Assert.IsFalse(viewModel.IsBusy);
+        Assert.IsFalse(viewModel.State.IsBusy);
         await viewModel.DisposeAsync();
     }
 
-    private static async Task AssertAutomaticRefreshPreservesInteractionStateAsync(
-        Func<IncidentReview.Domain.SessionIdentity, IncidentReview.Domain.IncidentId, ReviewUpdate> createUpdate)
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-001")]
+    public async Task IncidentIdentityIsCompactButRetainsItsFullValue()
     {
-        var service = new FakeIncidentReviewService();
-        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
-        var selectedIncident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
-        var initialSession = TestModelFactory.Session(sessionId, selectedIncident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(initialSession);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(initialSession)]);
+        var sessionId = SessionIdentity.Generate();
+        var incident = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var service = new FakeIncidentReviewService
+        {
+            SnapshotResult = Result<ReviewSnapshot>.Success(TestModelFactory.Snapshot(
+                activeSession: TestModelFactory.Session(sessionId, incident))),
+        };
         await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
         await viewModel.RefreshAsync(CancellationToken.None);
-        var originalListItem = viewModel.Incidents[0];
-        viewModel.SelectedIncident = originalListItem;
-        viewModel.ReplayLeadInMilliseconds = "7000";
-        viewModel.PlaybackSpeed = "0.75";
-        viewModel.AutoPause = false;
-        viewModel.PreferredCamera = "TV2";
+        var item = viewModel.State.Incidents[0];
 
-        var addedIncident = TestModelFactory.Incident(sessionId, 2_000, 12_000, 4, 2);
-        var refreshedSession = TestModelFactory.Session(
-            sessionId,
-            selectedIncident,
-            addedIncident);
-        service.CurrentSessionResult = Result<ReviewSession>.Success(refreshedSession);
-        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
-            [TestModelFactory.Summary(refreshedSession)]);
-        service.PreferencesResult = Result<IncidentReview.Domain.UserPreferences>.Success(
-            TestModelFactory.Preferences(1_000, 0.25, true, "Cockpit"));
-        await viewModel.StartMonitoringAsync(CancellationToken.None);
+        Assert.AreEqual(item.Id.ToString(), item.FullIncidentIdText);
+        Assert.AreEqual($"…{item.FullIncidentIdText[^8..]}", item.IncidentIdText);
+    }
 
-        await service.PublishAsync(createUpdate(sessionId, selectedIncident.Id));
-        await WaitUntilAsync(() => viewModel.Incidents.Count == 2);
+    private static async Task ExecuteAndWaitAsync(
+        System.Windows.Input.ICommand command,
+        IncidentListItem incident,
+        FakeIncidentReviewService service,
+        int expectedCalls,
+        MainWindowViewModel viewModel)
+    {
+        Assert.IsTrue(command.CanExecute(incident));
+        command.Execute(incident);
+        await WaitUntilAsync(() => service.ReviewCalls == expectedCalls && !viewModel.State.IsBusy);
+    }
 
-        Assert.AreEqual("7000", viewModel.ReplayLeadInMilliseconds);
-        Assert.AreEqual("0.75", viewModel.PlaybackSpeed);
-        Assert.IsFalse(viewModel.AutoPause);
-        Assert.AreEqual("TV2", viewModel.PreferredCamera);
-        Assert.IsNotNull(viewModel.SelectedIncident);
-        Assert.AreEqual(selectedIncident.Id, viewModel.SelectedIncident.Id);
-        Assert.AreNotSame(originalListItem, viewModel.SelectedIncident);
+    private static void AssertCurrentStatusIsNewestEvent(MainWindowViewModel viewModel)
+    {
+        Assert.IsNotEmpty(viewModel.State.EventLog);
+        Assert.AreSame(viewModel.State.EventLog[^1], viewModel.State.CurrentStatusEvent);
+        Assert.AreEqual(viewModel.State.EventLog[^1].Message, viewModel.State.StatusDetail);
     }
 
     private static async Task WaitUntilAsync(Func<bool> predicate)

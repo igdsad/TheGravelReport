@@ -5,6 +5,25 @@ namespace IncidentReview.Desktop.Wpf.Tests;
 
 internal static class TestModelFactory
 {
+    public static ReviewSnapshot Snapshot(
+        long revision = 0,
+        ReviewServiceStatus status = ReviewServiceStatus.Connected,
+        ReviewSession? activeSession = null,
+        UserPreferences? preferences = null,
+        string? driverDisplayName = null,
+        IEnumerable<string>? cameraGroups = null,
+        string? currentCameraGroup = null,
+        IncidentReview.Results.Error? statusError = null) =>
+        ReviewSnapshot.Create(
+            revision,
+            status,
+            statusError,
+            activeSession,
+            preferences ?? Preferences(),
+            driverDisplayName,
+            cameraGroups ?? Array.Empty<string>(),
+            currentCameraGroup);
+
     public static UserPreferences Preferences(
         long leadIn = 3_000,
         double speed = 0.5,
