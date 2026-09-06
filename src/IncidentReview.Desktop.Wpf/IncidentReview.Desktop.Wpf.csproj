@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="../../assets/branding/logo.png"
+    <Resource Include="../../assets/branding/logo-simplified.png"
               Link="Assets/GravelReviewLogo.png" />
   </ItemGroup>
 </Project>

@@ -61,7 +61,7 @@ GravelReview uses a reducer-style, top-down presentation architecture inspired b
 - `MainWindowState` owns both the configured preference and resolved palette. The window applies the palette represented by that state; it does not resolve an independent theme. `FollowDesktop` reacts to live Windows changes, while forced Light and Dark modes ignore them.
 - The status-bar theme control cycles `FollowDesktop → Light → Dark → FollowDesktop`. A selection is rendered immediately, then persisted with all other preferences through the transactional `IStore` path. On persistence failure, restore the complete prior preference and resolve its current palette before publishing the one exact error event/status.
 - Apply the stored preference before the main window becomes visible. New and version-1 databases default to `FollowDesktop` through append-only migration `002`; never edit migration `001` or discard existing replay preferences during a theme update.
-- Use `assets/branding/logo.png` for in-app GravelReview branding and `assets/branding/favicon.ico` for the executable/window icon. Keep the compatibility-stable internal `IncidentReview.*` identities unchanged.
+- Use `assets/branding/logo-simplified.png` for in-app GravelReview branding and `assets/branding/favicon-simplified.ico` for the executable/window icon. Keep the compatibility-stable internal `IncidentReview.*` identities unchanged.
 
 ## iRacing boundary
 

@@ -1098,7 +1098,7 @@ JSON configuration is not used in the current application. Deployment settings u
 
 The implemented GravelReview UI contains:
 
-- the `assets/branding/logo.png` GravelReview mark, product name, and transient active-driver display name in a compact raised header/toolbar; the host executable/window uses `assets/branding/favicon.ico`;
+- the `assets/branding/logo-simplified.png` GravelReview mark, product name, and transient active-driver display name in a compact raised header/toolbar; the host executable/window uses `assets/branding/favicon-simplified.ico`;
 - one primary chronological incident log derived only from `ReviewSnapshot.ActiveSession`, with its own horizontal and vertical scrolling and no historical-session selector;
 - recorded time, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and review status for each incident; the full stable incident ID remains the command identity and is available as a tooltip;
 - `-2 sec`, `0 sec`, and `+2 sec` actions on each incident row; double-click dispatches the `0 sec` action;

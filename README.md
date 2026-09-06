@@ -50,7 +50,7 @@ Replay pause/playback behavior, preferred camera group, and theme mode are durab
 
 ## Appearance and branding
 
-GravelReview's light and dark visual system uses only native WPF resources. [`Base.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Base.xaml) owns shared control structure, while [`Light.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Light.xaml) and [`Dark.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Dark.xaml) provide matching semantic palettes. The UI includes [`logo.png`](assets/branding/logo.png), and the Windows executable/window uses [`favicon.ico`](assets/branding/favicon.ico). Product-facing surfaces say GravelReview; compatibility-stable `IncidentReview.*` projects, namespaces, database paths, environment variables, mutex, and Automation IDs intentionally retain their existing names.
+GravelReview's light and dark visual system uses only native WPF resources. [`Base.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Base.xaml) owns shared control structure, while [`Light.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Light.xaml) and [`Dark.xaml`](src/IncidentReview.Desktop.Wpf/Themes/Dark.xaml) provide matching semantic palettes. The UI includes [`logo-simplified.png`](assets/branding/logo-simplified.png), and the Windows executable/window uses [`favicon-simplified.ico`](assets/branding/favicon-simplified.ico). Product-facing surfaces say GravelReview; compatibility-stable `IncidentReview.*` projects, namespaces, database paths, environment variables, mutex, and Automation IDs intentionally retain their existing names.
 
 ## Build, test, and publish
 
