@@ -68,6 +68,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ReviewCommand = new AsyncPresentationCommand(
             token => ReviewSelectedIncidentAsync(token),
             () => !IsBusy && SelectedIncident is not null);
+        ReviewIncidentCommand = new AsyncPresentationCommand<IncidentListItem>(
+            (incident, token) => ReviewIncidentAsync(incident, token),
+            _ => !IsBusy);
         SavePreferencesCommand = new AsyncPresentationCommand(
             token => SavePreferencesAsync(token),
             () => !IsBusy);
@@ -90,6 +93,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand OpenSessionCommand { get; }
 
     public ICommand ReviewCommand { get; }
+
+    public ICommand ReviewIncidentCommand { get; }
 
     public ICommand SavePreferencesCommand { get; }
 
@@ -298,10 +303,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return Task.CompletedTask;
         }
 
+        return ReviewIncidentAsync(selected, cancellationToken);
+    }
+
+    private Task ReviewIncidentAsync(
+        IncidentListItem incident,
+        CancellationToken cancellationToken)
+    {
         return RunUiOperationAsync(
             async token =>
             {
-                var result = await _service.ReviewIncidentAsync(selected.Id, token).ConfigureAwait(false);
+                var result = await _service.ReviewIncidentAsync(incident.Id, token).ConfigureAwait(false);
                 if (!result.IsSuccess)
                 {
                     await ShowErrorAsync(result.Error!).ConfigureAwait(false);
@@ -314,7 +326,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         AddEventLogEntry(
                             string.Create(
                                 CultureInfo.CurrentCulture,
-                                $"Replay requested for incident {selected.Id} at {selected.ReplayTime}."));
+                                $"Replay requested for incident {incident.Id} at {incident.ReplayTime}."));
                         ErrorMessage = _unavailableStatusErrorMessage;
                     }).ConfigureAwait(false);
             },
@@ -813,6 +825,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ((AsyncPresentationCommand)RefreshCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)OpenSessionCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)ReviewCommand).RaiseCanExecuteChanged();
+        ((AsyncPresentationCommand<IncidentListItem>)ReviewIncidentCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)SavePreferencesCommand).RaiseCanExecuteChanged();
         ((AsyncPresentationCommand)ToggleMonitoringCommand).RaiseCanExecuteChanged();
         ((PresentationCommand)CancelCommand).RaiseCanExecuteChanged();

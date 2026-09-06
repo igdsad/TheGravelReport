@@ -73,7 +73,8 @@
                                 <DataTemplate>
                                     <Button Margin="5,2" Padding="10,3"
                                             AutomationProperties.Name="Review this incident in iRacing"
-                                            Click="OnReviewIncidentClicked"
+                                            Command="{Binding DataContext.ReviewIncidentCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                            CommandParameter="{Binding}"
                                             Content="Review" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>

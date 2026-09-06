@@ -103,6 +103,71 @@ public sealed class MainWindowViewModelTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task RowReviewCommandUsesItsIncidentWithoutChangingSelection()
+    {
+        var service = new FakeIncidentReviewService();
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var first = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var second = TestModelFactory.Incident(sessionId, 2_000, 8_000, 4, 2);
+        var session = TestModelFactory.Session(sessionId, first, second);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(session)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        viewModel.SelectedIncident = viewModel.Incidents[0];
+        var rowIncident = viewModel.Incidents[1];
+
+        Assert.IsTrue(viewModel.ReviewIncidentCommand.CanExecute(rowIncident));
+        viewModel.ReviewIncidentCommand.Execute(rowIncident);
+        await WaitUntilAsync(() => service.ReviewedIncident is not null);
+
+        Assert.AreEqual(second.Id, service.ReviewedIncident);
+        Assert.AreEqual(first.Id, viewModel.SelectedIncident.Id);
+        Assert.IsFalse(viewModel.HasError);
+        StringAssert.Contains(viewModel.EventLog[^1].Message, second.Id.ToString());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-002")]
+    public async Task RowReviewCommandIsDisabledWhileAnotherOperationIsBusy()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeIncidentReviewService();
+        var sessionId = IncidentReview.Domain.SessionIdentity.Generate();
+        var model = TestModelFactory.Incident(sessionId, 1_000, 7_000, 2, 2);
+        var session = TestModelFactory.Session(sessionId, model);
+        service.CurrentSessionResult = Result<ReviewSession>.Success(session);
+        service.SessionsResult = Result<IReadOnlyList<SessionSummary>>.Success(
+            [TestModelFactory.Summary(session)]);
+        await using var viewModel = new MainWindowViewModel(service, new RecordingDispatcher());
+        await viewModel.RefreshAsync(CancellationToken.None);
+        var incident = viewModel.Incidents[0];
+        service.StatusHandler = async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return Result<ReviewServiceStatus>.Success(ReviewServiceStatus.Connected);
+        };
+
+        var refresh = viewModel.RefreshAsync(CancellationToken.None);
+        await entered.Task;
+
+        Assert.IsTrue(viewModel.IsBusy);
+        Assert.IsFalse(viewModel.ReviewIncidentCommand.CanExecute(incident));
+        Assert.IsFalse(viewModel.ReviewIncidentCommand.CanExecute(null));
+        viewModel.ReviewIncidentCommand.Execute(incident);
+        Assert.IsNull(service.ReviewedIncident);
+
+        release.SetResult();
+        await refresh;
+        Assert.IsTrue(viewModel.ReviewIncidentCommand.CanExecute(incident));
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-UI-002")]
     public async Task EventLogDropsOldestEntriesAtItsBound()
     {
