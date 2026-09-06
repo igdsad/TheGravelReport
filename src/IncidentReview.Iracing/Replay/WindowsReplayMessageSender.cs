@@ -6,12 +6,24 @@ namespace IncidentReview.Iracing.Replay;
 internal sealed partial class WindowsReplayMessageSender : IReplayMessageSender
 {
     private static readonly nint BroadcastWindow = (nint)0xffff;
+    private readonly string _messageName;
+
+    public WindowsReplayMessageSender()
+        : this(IracingProtocol.BroadcastMessageName)
+    {
+    }
+
+    internal WindowsReplayMessageSender(string messageName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageName);
+        _messageName = messageName;
+    }
 
     public ReplaySendOutcome Send(ReplayBroadcastCommand command)
     {
         try
         {
-            var messageId = RegisterWindowMessageW(IracingProtocol.BroadcastMessageName);
+            var messageId = RegisterWindowMessageW(_messageName);
             if (messageId == 0)
             {
                 return ReplaySendOutcome.EndpointUnavailable;

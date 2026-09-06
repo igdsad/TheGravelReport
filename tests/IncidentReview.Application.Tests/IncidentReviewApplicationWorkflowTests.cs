@@ -14,6 +14,11 @@ namespace IncidentReview.Application.Tests;
 [TestClass]
 public sealed class IncidentReviewApplicationWorkflowTests
 {
+    private static readonly string[] SuccessfulReplayCommandOrder =
+        ["seek", "focus-player", "set-playback"];
+    private static readonly string[] SeekOnlyCommandOrder = ["seek"];
+    private static readonly string[] SeekAndFocusCommandOrder = ["seek", "focus-player"];
+
     [TestMethod]
     [TestProperty("Requirement", "IR-INC-001")]
     [TestProperty("Requirement", "IR-INC-003")]
@@ -540,7 +545,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 replayLeadInMilliseconds: 3_000,
                 playbackSpeed: 0.5,
                 autoPause: false,
-                preferredCamera: null).Value,
+                preferredCamera: "TV1").Value,
         };
         SeedReviewIncident(store, incident);
         await using var host = new TestHost(store);
@@ -551,8 +556,12 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
         Assert.IsTrue(result.IsSuccess);
         Assert.AreEqual(0, host.Replay.LastSeek!.SessionTime.Milliseconds);
+        Assert.AreEqual("TV1", host.Replay.LastPreferredCamera);
         Assert.IsFalse(host.Replay.LastPlayback!.IsPaused);
         Assert.AreEqual(0.5, host.Replay.LastPlayback.PlaybackRate);
+        CollectionAssert.AreEqual(
+            SuccessfulReplayCommandOrder,
+            host.Replay.DeliveredCommands.ToArray());
         Assert.IsNull(store.LastMarkedReviewed);
         Assert.AreEqual(IncidentReviewStatus.Pending, store.GetIncidentStatus(incident.Id));
     }
@@ -723,6 +732,60 @@ public sealed class IncidentReviewApplicationWorkflowTests
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "QR-ERR-001")]
+    public async Task RejectedSeekStopsBeforeCameraAndPlayback()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        SeedReviewIncident(store, incident);
+        var replay = new RecordingReplayController
+        {
+            SeekResult = Result.Failure(TestError),
+        };
+        await using var host = new TestHost(store, replay);
+        await host.StartConnectedAsync();
+        await MakeReplayAvailableAsync(host);
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreSame(TestError, result.Error);
+        Assert.AreEqual(1, replay.SeekCount);
+        Assert.AreEqual(0, replay.FocusCount);
+        Assert.AreEqual(0, replay.PlaybackCount);
+        CollectionAssert.AreEqual(SeekOnlyCommandOrder, replay.DeliveredCommands.ToArray());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    public async Task RejectedCameraStopsBeforePlayback()
+    {
+        var incident = CreateStoredIncident(positionMilliseconds: 5_000);
+        var store = new StatefulStore();
+        SeedReviewIncident(store, incident);
+        var replay = new RecordingReplayController
+        {
+            FocusResult = Result.Failure(TestError),
+        };
+        await using var host = new TestHost(store, replay);
+        await host.StartConnectedAsync();
+        await MakeReplayAvailableAsync(host);
+
+        var result = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreSame(TestError, result.Error);
+        Assert.AreEqual(1, replay.SeekCount);
+        Assert.AreEqual(1, replay.FocusCount);
+        Assert.AreEqual(0, replay.PlaybackCount);
+        CollectionAssert.AreEqual(
+            SeekAndFocusCommandOrder,
+            replay.DeliveredCommands.ToArray());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "QR-ERR-001")]
     public async Task RejectedPlaybackDoesNotMarkIncidentReviewed()
     {
         var incident = CreateStoredIncident(positionMilliseconds: 5_000);
@@ -740,6 +803,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
         Assert.IsFalse(result.IsSuccess);
         Assert.AreSame(TestError, result.Error);
+        Assert.AreEqual(1, replay.FocusCount);
         Assert.IsNull(store.LastMarkedReviewed);
     }
 
@@ -1332,12 +1396,19 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
     private sealed class RecordingReplayController : IReplayController
     {
+        private readonly List<string> _deliveredCommands = [];
+
+        public Result SeekResult { get; init; } = Result.Success();
+        public Result FocusResult { get; init; } = Result.Success();
         public Result PlaybackResult { get; init; } = Result.Success();
         public Result ValidationResult { get; init; } = Result.Success();
         public ReplayPosition? LastSeek { get; private set; }
+        public string? LastPreferredCamera { get; private set; }
         public ReplayPlayback? LastPlayback { get; private set; }
+        public IReadOnlyList<string> DeliveredCommands => _deliveredCommands;
         public int ValidationCount { get; private set; }
         public int SeekCount { get; private set; }
+        public int FocusCount { get; private set; }
         public int PlaybackCount { get; private set; }
 
         public Result ValidatePlayback(ReplayPlayback playback)
@@ -1347,24 +1418,37 @@ public sealed class IncidentReviewApplicationWorkflowTests
             return ValidationResult;
         }
 
-        public Result Seek(
+        public ValueTask<Result> SeekAsync(
             ReplayPosition position,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             SeekCount++;
             LastSeek = position;
-            return Result.Success();
+            _deliveredCommands.Add("seek");
+            return ValueTask.FromResult(SeekResult);
         }
 
-        public Result SetPlayback(
+        public ValueTask<Result> FocusPlayerAsync(
+            string? preferredCamera,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FocusCount++;
+            LastPreferredCamera = preferredCamera;
+            _deliveredCommands.Add("focus-player");
+            return ValueTask.FromResult(FocusResult);
+        }
+
+        public ValueTask<Result> SetPlaybackAsync(
             ReplayPlayback playback,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             PlaybackCount++;
             LastPlayback = playback;
-            return PlaybackResult;
+            _deliveredCommands.Add("set-playback");
+            return ValueTask.FromResult(PlaybackResult);
         }
     }
 

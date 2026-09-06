@@ -9,6 +9,7 @@ internal sealed record IracingVariableDescriptor(
 internal sealed record IracingFrameSnapshot(
     byte[] Frame,
     long? SubSessionId,
+    string SessionInfo,
     IReadOnlyDictionary<string, IracingVariableDescriptor> Variables);
 
 internal enum IracingReadStatus

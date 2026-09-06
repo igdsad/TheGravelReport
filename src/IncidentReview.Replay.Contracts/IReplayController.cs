@@ -15,29 +15,32 @@ public interface IReplayController
     public Result ValidatePlayback(ReplayPlayback playback);
 
     /// <summary>
-    /// Synchronously hands a validated seek intent to the replay integration boundary.
+    /// Delivers a seek intent and waits until the simulator reports that it was applied.
     /// </summary>
     /// <remarks>
-    /// Success means the command was accepted for delivery before this method
-    /// returns; it does not assert that the simulator subsequently applied it.
-    /// Implementations must not defer delivery or call back into the application.
-    /// Cancellation observed before delivery propagates as
-    /// <see cref="OperationCanceledException"/>.
+    /// Success means a later simulator frame confirmed the requested replay
+    /// session and time. Cancellation propagates as <see cref="OperationCanceledException"/>.
     /// </remarks>
-    public Result Seek(
+    public ValueTask<Result> SeekAsync(
         ReplayPosition position,
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Synchronously hands a validated pause or playback-rate intent to the replay
-    /// integration boundary.
+    /// Focuses the replay camera on the local player and waits for confirmation.
     /// </summary>
     /// <remarks>
-    /// Delivery is complete before this method returns. Implementations must not
-    /// defer delivery or call back into the application. Cancellation observed
-    /// before delivery propagates as <see cref="OperationCanceledException"/>.
+    /// A null preference preserves the currently reported camera. A non-null
+    /// preference names an iRacing camera group and selects its first camera.
     /// </remarks>
-    public Result SetPlayback(
+    public ValueTask<Result> FocusPlayerAsync(
+        string? preferredCamera,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Delivers a pause or playback-rate intent and waits until the simulator
+    /// reports that it was applied.
+    /// </summary>
+    public ValueTask<Result> SetPlaybackAsync(
         ReplayPlayback playback,
         CancellationToken cancellationToken);
 }

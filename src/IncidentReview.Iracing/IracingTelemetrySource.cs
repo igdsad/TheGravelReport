@@ -164,6 +164,7 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                     {
                         try
                         {
+                            _connectionState.ObserveStableFrame(readResult.Snapshot!);
                             var sample = IracingFrameDecoder.Decode(
                                 readResult.Snapshot!,
                                 connectionIdentity!,

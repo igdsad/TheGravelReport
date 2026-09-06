@@ -7,6 +7,27 @@ namespace IncidentReview.Iracing.Replay;
 
 internal static class IracingReplayEncoder
 {
+    public static Result<ReplayBroadcastCommand> EncodeFocusPlayer(
+        int playerCarNumberRaw,
+        int cameraGroupNumber,
+        int cameraNumber)
+    {
+        if (playerCarNumberRaw is < 0 or > short.MaxValue ||
+            cameraGroupNumber is < 0 or > short.MaxValue ||
+            cameraNumber is < 0 or > short.MaxValue)
+        {
+            return Result<ReplayBroadcastCommand>.Failure(
+                IracingErrors.ReplayMetadataUnavailable);
+        }
+
+        return Result<ReplayBroadcastCommand>.Success(new ReplayBroadcastCommand(
+            IracingBroadcastMessage.CameraSwitchNumber,
+            PackInt16Pair(
+                (short)IracingBroadcastMessage.CameraSwitchNumber,
+                (short)playerCarNumberRaw),
+            PackInt16Pair((short)cameraGroupNumber, (short)cameraNumber)));
+    }
+
     public static Result<ReplayBroadcastCommand> EncodeSeek(ReplayPosition position)
     {
         ArgumentNullException.ThrowIfNull(position);

@@ -33,7 +33,10 @@ public static class IracingTestingRegistration
     /// <summary>Creates a replay controller with a deterministic command recorder.</summary>
     public static IracingTestReplayContext CreateReplayContext(
         IracingTestDeliveryMode deliveryMode = IracingTestDeliveryMode.Delivered,
-        bool telemetryAvailable = true)
+        bool telemetryAvailable = true,
+        bool autoApplyCommands = true,
+        TimeSpan? confirmationTimeout = null,
+        string? sessionInfo = null)
     {
         if (!Enum.IsDefined(deliveryMode))
         {
@@ -43,11 +46,57 @@ public static class IracingTestingRegistration
                 "The test delivery mode is undefined.");
         }
 
-        var sender = new RecordingReplayMessageSender(deliveryMode);
+        var connectionState = new IracingConnectionState(telemetryAvailable);
+        var initialFrame = CreateTestFrame(
+            new IracingTestReplayState(
+                ReplaySessionNumber: 0,
+                ReplaySessionTimeMilliseconds: 0,
+                ReplayPlaySpeed: 1,
+                ReplayPlaySlowMotion: false,
+                CameraState: 1,
+                CameraCarIndex: 4,
+                CameraGroupNumber: 1,
+                CameraNumber: 10,
+                SessionInfo: sessionInfo ?? DefaultReplaySessionInfo));
+        connectionState.ObserveTestFrame(initialFrame);
+
+        var sender = new RecordingReplayMessageSender(
+            deliveryMode,
+            autoApplyCommands
+                ? command => ApplyTestCommand(connectionState, command)
+                : null);
         return new IracingTestReplayContext(
             new IracingReplayController(
                 sender,
-                new IracingConnectionState(telemetryAvailable)),
+                connectionState,
+                confirmationTimeout),
+            sender,
+            connectionState);
+    }
+
+    /// <summary>
+    /// Creates telemetry and replay adapters over the same deterministic connection state.
+    /// </summary>
+    public static IracingTestIntegrationContext CreateIntegrationContext(
+        string memoryMapName,
+        string dataValidEventName,
+        IracingOptions? options = null,
+        TimeSpan? confirmationTimeout = null)
+    {
+        ValidateObjectName(memoryMapName, nameof(memoryMapName));
+        ValidateObjectName(dataValidEventName, nameof(dataValidEventName));
+        var connectionState = new IracingConnectionState();
+        var sender = new RecordingReplayMessageSender(IracingTestDeliveryMode.Delivered);
+        var source = new IracingTelemetrySource(
+            new IracingProtocolConfiguration(
+                memoryMapName,
+                dataValidEventName,
+                options ?? IracingOptions.Default,
+                TimeProvider.System),
+            connectionState);
+        return new IracingTestIntegrationContext(
+            source,
+            new IracingReplayController(sender, connectionState, confirmationTimeout),
             sender);
     }
 
@@ -77,6 +126,58 @@ public static class IracingTestingRegistration
         return IracingSessionInfoDecoder.TryGetSubSessionId(sessionInfo);
     }
 
+    /// <summary>Classifies replay mode from the official playback and camera-state fields.</summary>
+    public static bool IsReplayMode(bool isReplayPlaying, int cameraState) =>
+        IracingFrameDecoder.IsReplayMode(isReplayPlaying, cameraState);
+
+    /// <summary>Parses the replay-focus subset of official iRacing session YAML.</summary>
+    public static IracingTestReplayMetadata? ReadReplayMetadata(string sessionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(sessionInfo);
+        if (!IracingSessionInfoDecoder.TryGetReplayMetadata(sessionInfo, out var metadata))
+        {
+            return null;
+        }
+
+        return new IracingTestReplayMetadata(
+            metadata!.PlayerCarIndex,
+            metadata.PlayerCarNumberRaw,
+            metadata.CameraGroups.Select(static group =>
+                new IracingTestCameraGroup(
+                    group.Number,
+                    group.Name,
+                    [.. group.CameraNumbers])).ToArray());
+    }
+
+    /// <summary>Sends one raw replay message through the production Windows sender.</summary>
+    public static IracingTestDeliveryMode SendWindowsReplayMessage(
+        IracingTestReplayMessage message,
+        string registeredMessageName)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(registeredMessageName);
+        if (!Enum.IsDefined(typeof(IracingBroadcastMessage), message.Command))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(message),
+                message.Command,
+                "The replay broadcast command is undefined.");
+        }
+
+        var outcome = new WindowsReplayMessageSender(registeredMessageName).Send(
+            new ReplayBroadcastCommand(
+            (IracingBroadcastMessage)message.Command,
+            message.WParam,
+            message.LParam));
+        return outcome switch
+        {
+            ReplaySendOutcome.Delivered => IracingTestDeliveryMode.Delivered,
+            ReplaySendOutcome.EndpointUnavailable => IracingTestDeliveryMode.EndpointUnavailable,
+            ReplaySendOutcome.DeliveryRejected => IracingTestDeliveryMode.DeliveryRejected,
+            _ => throw new InvalidOperationException("The replay delivery outcome is undefined."),
+        };
+    }
+
     /// <summary>
     /// Verifies that the production wait-only boundary can open and release a named data event.
     /// </summary>
@@ -104,6 +205,92 @@ public static class IracingTestingRegistration
                 parameterName);
         }
     }
+
+    private static ReplayFrameState CreateTestFrame(IracingTestReplayState state)
+    {
+        if (!IracingSessionInfoDecoder.TryGetReplayMetadata(
+                state.SessionInfo,
+                out var metadata))
+        {
+            metadata = null;
+        }
+
+        return new ReplayFrameState(
+            state.ReplaySessionNumber,
+            state.ReplaySessionTimeMilliseconds,
+            state.ReplayPlaySpeed,
+            state.ReplayPlaySlowMotion,
+            state.CameraState,
+            state.CameraCarIndex,
+            state.CameraGroupNumber,
+            state.CameraNumber,
+            metadata);
+    }
+
+    private static void ApplyTestCommand(
+        IracingConnectionState state,
+        ReplayBroadcastCommand command)
+    {
+        var observation = state.Read();
+        if (observation.Frame is not { } current)
+        {
+            return;
+        }
+
+        var next = command.Message switch
+        {
+            IracingBroadcastMessage.ReplaySearchSessionTime => current with
+            {
+                ReplaySessionNumber = unchecked((short)((uint)command.WParam >> 16)),
+                ReplaySessionTimeMilliseconds = command.LParam,
+            },
+            IracingBroadcastMessage.ReplaySetPlaySpeed => current with
+            {
+                ReplayPlaySpeed = unchecked((short)((uint)command.WParam >> 16)),
+                ReplayPlaySlowMotion = unchecked((short)(uint)command.LParam) != 0,
+            },
+            IracingBroadcastMessage.CameraSwitchNumber => ApplyTestCameraCommand(
+                current,
+                command),
+            _ => current,
+        };
+        state.ObserveTestFrame(next);
+    }
+
+    private static ReplayFrameState ApplyTestCameraCommand(
+        ReplayFrameState current,
+        ReplayBroadcastCommand command)
+    {
+        var rawCarNumber = unchecked((short)((uint)command.WParam >> 16));
+        var carIndex = current.Metadata?.PlayerCarNumberRaw == rawCarNumber
+            ? current.Metadata.PlayerCarIndex
+            : current.CameraCarIndex;
+        return current with
+        {
+            CameraCarIndex = carIndex,
+            CameraGroupNumber = unchecked((short)(uint)command.LParam),
+            CameraNumber = unchecked((short)((uint)command.LParam >> 16)),
+        };
+    }
+
+    private const string DefaultReplaySessionInfo = """
+        DriverInfo:
+         DriverCarIdx: 4
+         Drivers:
+         - CarIdx: 4
+           CarNumberRaw: 23
+        CameraInfo:
+         Groups:
+         - GroupNum: 1
+           GroupName: Cockpit
+           Cameras:
+           - CameraNum: 10
+         - GroupNum: 2
+           GroupName: TV1
+           Cameras:
+           - CameraNum: 20
+           - CameraNum: 21
+        """;
 }
 
 /// <summary>Controls the deterministic replay-delivery outcome exposed to tests.</summary>
@@ -123,13 +310,16 @@ public enum IracingTestDeliveryMode
 public sealed class IracingTestReplayContext
 {
     private readonly RecordingReplayMessageSender _sender;
+    private readonly IracingConnectionState _connectionState;
 
     internal IracingTestReplayContext(
         IReplayController controller,
-        RecordingReplayMessageSender sender)
+        RecordingReplayMessageSender sender,
+        IracingConnectionState connectionState)
     {
         Controller = controller;
         _sender = sender;
+        _connectionState = connectionState;
     }
 
     /// <summary>Gets the replay contract under test.</summary>
@@ -138,10 +328,87 @@ public sealed class IracingTestReplayContext
     /// <summary>Gets a stable snapshot of all delivered wire commands.</summary>
     public IReadOnlyList<IracingTestReplayMessage> Messages =>
         new ReadOnlyCollection<IracingTestReplayMessage>(_sender.Snapshot());
+
+    /// <summary>Publishes a later deterministic SDK frame for confirmation tests.</summary>
+    public void ObserveFrame(IracingTestReplayState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        _connectionState.ObserveTestFrame(CreateFrame(state));
+    }
+
+    /// <summary>Marks the deterministic SDK connection unavailable.</summary>
+    public void Disconnect() => _connectionState.SetUnavailable();
+
+    private static ReplayFrameState CreateFrame(IracingTestReplayState state)
+    {
+        _ = IracingSessionInfoDecoder.TryGetReplayMetadata(
+            state.SessionInfo,
+            out var metadata);
+        return new ReplayFrameState(
+            state.ReplaySessionNumber,
+            state.ReplaySessionTimeMilliseconds,
+            state.ReplayPlaySpeed,
+            state.ReplayPlaySlowMotion,
+            state.CameraState,
+            state.CameraCarIndex,
+            state.CameraGroupNumber,
+            state.CameraNumber,
+            metadata);
+    }
+}
+
+/// <summary>Pairs production telemetry reads with deterministic replay-message delivery.</summary>
+public sealed class IracingTestIntegrationContext
+{
+    private readonly RecordingReplayMessageSender _sender;
+
+    internal IracingTestIntegrationContext(
+        ITelemetrySource telemetry,
+        IReplayController controller,
+        RecordingReplayMessageSender sender)
+    {
+        Telemetry = telemetry;
+        Controller = controller;
+        _sender = sender;
+    }
+
+    /// <summary>Gets the shared-memory telemetry adapter.</summary>
+    public ITelemetrySource Telemetry { get; }
+
+    /// <summary>Gets the replay controller observing every copied telemetry frame.</summary>
+    public IReplayController Controller { get; }
+
+    /// <summary>Gets a stable snapshot of delivered commands.</summary>
+    public IReadOnlyList<IracingTestReplayMessage> Messages =>
+        new ReadOnlyCollection<IracingTestReplayMessage>(_sender.Snapshot());
 }
 
 /// <summary>Represents independently inspectable 32-bit iRacing broadcast payloads.</summary>
 public sealed record IracingTestReplayMessage(int Command, int WParam, int LParam);
+
+/// <summary>Represents the confirmation fields copied from one stable SDK frame.</summary>
+public sealed record IracingTestReplayState(
+    int? ReplaySessionNumber,
+    long? ReplaySessionTimeMilliseconds,
+    int? ReplayPlaySpeed,
+    bool? ReplayPlaySlowMotion,
+    int? CameraState,
+    int? CameraCarIndex,
+    int? CameraGroupNumber,
+    int? CameraNumber,
+    string SessionInfo);
+
+/// <summary>Represents replay-focus metadata decoded for integration tests.</summary>
+public sealed record IracingTestReplayMetadata(
+    int PlayerCarIndex,
+    int PlayerCarNumberRaw,
+    IReadOnlyList<IracingTestCameraGroup> CameraGroups);
+
+/// <summary>Represents one decoded camera group and its ordered camera numbers.</summary>
+public sealed record IracingTestCameraGroup(
+    int Number,
+    string Name,
+    IReadOnlyList<int> CameraNumbers);
 
 /// <summary>Classifies one focused shared-memory copy attempt.</summary>
 public enum IracingTestFrameOutcome
@@ -207,11 +474,15 @@ internal sealed class RecordingReplayMessageSender : IReplayMessageSender
 {
     private readonly Lock _lock = new();
     private readonly IracingTestDeliveryMode _deliveryMode;
+    private readonly Action<ReplayBroadcastCommand>? _onDelivered;
     private readonly List<IracingTestReplayMessage> _messages = [];
 
-    public RecordingReplayMessageSender(IracingTestDeliveryMode deliveryMode)
+    public RecordingReplayMessageSender(
+        IracingTestDeliveryMode deliveryMode,
+        Action<ReplayBroadcastCommand>? onDelivered = null)
     {
         _deliveryMode = deliveryMode;
+        _onDelivered = onDelivered;
     }
 
     public ReplaySendOutcome Send(ReplayBroadcastCommand command)
@@ -222,6 +493,11 @@ internal sealed class RecordingReplayMessageSender : IReplayMessageSender
                 (int)command.Message,
                 command.WParam,
                 command.LParam));
+        }
+
+        if (_deliveryMode == IracingTestDeliveryMode.Delivered)
+        {
+            _onDelivered?.Invoke(command);
         }
 
         return _deliveryMode switch

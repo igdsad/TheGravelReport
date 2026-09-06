@@ -27,10 +27,26 @@ internal static class IracingFrameDecoder
             return Invalid();
         }
 
-        var sessionNumberVariable = isReplayPlaying
+        var isSessionScreen = false;
+        if (snapshot.Variables.ContainsKey(IracingProtocol.CameraStateVariable))
+        {
+            if (!TryReadBitField(
+                    snapshot,
+                    IracingProtocol.CameraStateVariable,
+                    out var cameraState))
+            {
+                return Invalid();
+            }
+
+            isSessionScreen = (cameraState & (int)IracingCameraState.IsSessionScreen) != 0;
+        }
+
+        var isReplay = IsReplayMode(isReplayPlaying, cameraState: isSessionScreen ? 1 : 0);
+
+        var sessionNumberVariable = isReplay
             ? IracingProtocol.ReplaySessionNumberVariable
             : IracingProtocol.SessionNumberVariable;
-        var sessionTimeVariable = isReplayPlaying
+        var sessionTimeVariable = isReplay
             ? IracingProtocol.ReplaySessionTimeVariable
             : IracingProtocol.SessionTimeVariable;
         if (!TryReadInt32(snapshot, sessionNumberVariable, out var sessionNumberValue) ||
@@ -63,7 +79,7 @@ internal static class IracingFrameDecoder
             Simulator,
             sessionKey.IsSuccess ? sessionKey.Value : null,
             sessionNumber.Value,
-            isReplayPlaying ? SessionMode.Replay : SessionMode.Live,
+            isReplay ? SessionMode.Replay : SessionMode.Live,
             isDurable
                 ? SimulatorIdentityScope.Durable
                 : SimulatorIdentityScope.ConnectionScoped);
@@ -115,7 +131,7 @@ internal static class IracingFrameDecoder
         return result.IsSuccess;
     }
 
-    private static bool TryConvertSessionMilliseconds(double seconds, out long milliseconds)
+    internal static bool TryConvertSessionMilliseconds(double seconds, out long milliseconds)
     {
         if (!double.IsFinite(seconds) || seconds < 0)
         {
@@ -135,6 +151,10 @@ internal static class IracingFrameDecoder
         milliseconds = (long)flooredMilliseconds;
         return true;
     }
+
+    internal static bool IsReplayMode(bool isReplayPlaying, int cameraState) =>
+        isReplayPlaying ||
+        (cameraState & (int)IracingCameraState.IsSessionScreen) != 0;
 
     private static bool TryReadOptionalLapDistance(
         IracingFrameSnapshot snapshot,
@@ -163,7 +183,7 @@ internal static class IracingFrameDecoder
         return result.IsSuccess;
     }
 
-    private static bool TryReadInt32(
+    internal static bool TryReadInt32(
         IracingFrameSnapshot snapshot,
         string name,
         out int value)
@@ -178,7 +198,7 @@ internal static class IracingFrameDecoder
         return true;
     }
 
-    private static bool TryReadDouble(
+    internal static bool TryReadDouble(
         IracingFrameSnapshot snapshot,
         string name,
         out double value)
@@ -208,7 +228,7 @@ internal static class IracingFrameDecoder
         return true;
     }
 
-    private static bool TryReadBoolean(
+    internal static bool TryReadBoolean(
         IracingFrameSnapshot snapshot,
         string name,
         out bool value)
@@ -221,6 +241,21 @@ internal static class IracingFrameDecoder
         }
 
         value = bytes[0] == 1;
+        return true;
+    }
+
+    internal static bool TryReadBitField(
+        IracingFrameSnapshot snapshot,
+        string name,
+        out int value)
+    {
+        if (!TryGetScalar(snapshot, name, IracingVariableType.BitField, sizeof(int), out var bytes))
+        {
+            value = default;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadInt32LittleEndian(bytes);
         return true;
     }
 

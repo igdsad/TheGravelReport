@@ -31,6 +31,12 @@ internal static class IracingProtocol
     public const string IsReplayPlayingVariable = "IsReplayPlaying";
     public const string ReplaySessionNumberVariable = "ReplaySessionNum";
     public const string ReplaySessionTimeVariable = "ReplaySessionTime";
+    public const string ReplayPlaySpeedVariable = "ReplayPlaySpeed";
+    public const string ReplayPlaySlowMotionVariable = "ReplayPlaySlowMotion";
+    public const string CameraStateVariable = "CamCameraState";
+    public const string CameraCarIndexVariable = "CamCarIdx";
+    public const string CameraGroupNumberVariable = "CamGroupNumber";
+    public const string CameraNumberVariable = "CamCameraNumber";
 }
 
 internal enum IracingVariableType
@@ -45,6 +51,14 @@ internal enum IracingVariableType
 
 internal enum IracingBroadcastMessage
 {
+    CameraSwitchNumber = 1,
     ReplaySetPlaySpeed = 3,
     ReplaySearchSessionTime = 12,
+}
+
+[Flags]
+internal enum IracingCameraState
+{
+    None = 0,
+    IsSessionScreen = 0x0001,
 }

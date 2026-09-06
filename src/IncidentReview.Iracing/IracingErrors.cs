@@ -48,4 +48,29 @@ internal static class IracingErrors
         IracingErrorCodes.ReplayDeliveryFailed,
         ErrorKind.Integration,
         "Windows did not accept the iRacing replay command for delivery.");
+
+    public static Error ReplaySeekTimeout { get; } = Error.Create(
+        IracingErrorCodes.ReplaySeekTimeout,
+        ErrorKind.Unavailable,
+        "iRacing accepted the seek command but did not report reaching the incident timestamp before the timeout.");
+
+    public static Error ReplayCameraTimeout { get; } = Error.Create(
+        IracingErrorCodes.ReplayCameraTimeout,
+        ErrorKind.Unavailable,
+        "iRacing accepted the camera command but did not report focusing the player and camera group before the timeout.");
+
+    public static Error ReplayPlaybackTimeout { get; } = Error.Create(
+        IracingErrorCodes.ReplayPlaybackTimeout,
+        ErrorKind.Unavailable,
+        "iRacing accepted the playback command but did not report applying the requested speed before the timeout.");
+
+    public static Error ReplayMetadataUnavailable { get; } = Error.Create(
+        IracingErrorCodes.ReplayMetadataUnavailable,
+        ErrorKind.Integration,
+        "iRacing did not provide valid driver and camera metadata for the current session.");
+
+    public static Error ReplayCameraNotFound { get; } = Error.Create(
+        IracingErrorCodes.ReplayCameraNotFound,
+        ErrorKind.NotFound,
+        "The preferred camera group is not available in the current iRacing session.");
 }

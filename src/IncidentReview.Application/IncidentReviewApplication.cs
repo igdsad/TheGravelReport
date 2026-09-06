@@ -239,7 +239,6 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 return validation;
             }
 
-            Result playbackResult;
             lock (_stateLock)
             {
                 var preconditionError = GetReplayPreconditionError(
@@ -252,17 +251,27 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
                 _ownedReviewActive = true;
                 reviewArmed = true;
-                var seek = _replayController.Seek(target, cancellationToken);
-                if (!seek.IsSuccess)
-                {
-                    return seek;
-                }
-
-                seekAccepted = true;
-                playbackResult = _replayController.SetPlayback(playback, cancellationToken);
             }
 
-            return playbackResult;
+            var seek = await _replayController.SeekAsync(target, cancellationToken)
+                .ConfigureAwait(false);
+            if (!seek.IsSuccess)
+            {
+                return seek;
+            }
+
+            seekAccepted = true;
+            var focus = await _replayController.FocusPlayerAsync(
+                    preferences.Value.PreferredCamera,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!focus.IsSuccess)
+            {
+                return focus;
+            }
+
+            return await _replayController.SetPlaybackAsync(playback, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

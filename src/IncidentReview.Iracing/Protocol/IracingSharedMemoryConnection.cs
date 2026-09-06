@@ -343,9 +343,13 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         }
 
         long? subSessionId;
+        string sessionInfo;
         if (sessionInfoBytes is not null)
         {
-            if (!TryDecodeSessionInformation(sessionInfoBytes, out subSessionId))
+            if (!TryDecodeSessionInformation(
+                    sessionInfoBytes,
+                    out subSessionId,
+                    out sessionInfo))
             {
                 return IracingReadResult.Invalid;
             }
@@ -354,12 +358,14 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
                 sessionInfoUpdate,
                 sessionInfoOffset,
                 sessionInfoLength,
-                subSessionId);
+                subSessionId,
+                sessionInfo);
             _ = Interlocked.Increment(ref _sessionInformationDecodeCount);
         }
         else
         {
             subSessionId = cachedSessionInformation!.SubSessionId;
+            sessionInfo = cachedSessionInformation.SessionInfo;
         }
 
         if (variables.Count != numberOfVariables)
@@ -370,7 +376,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         _lastTick = tickCount;
         _lastValidTimestamp = _timeProvider.GetTimestamp();
         return IracingReadResult.FromSnapshot(
-            new IracingFrameSnapshot(frame, subSessionId, variables));
+            new IracingFrameSnapshot(frame, subSessionId, sessionInfo, variables));
     }
 
     private static bool TryDecodeVariableHeaders(
@@ -453,7 +459,10 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         return true;
     }
 
-    private static bool TryDecodeSessionInformation(byte[] bytes, out long? subSessionId)
+    private static bool TryDecodeSessionInformation(
+        byte[] bytes,
+        out long? subSessionId,
+        out string sessionInfo)
     {
         var length = bytes.Length;
         while (length > 0 && bytes[length - 1] == 0)
@@ -464,11 +473,12 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         if (bytes.AsSpan(0, length).Contains((byte)0))
         {
             subSessionId = null;
+            sessionInfo = string.Empty;
             return false;
         }
 
         var sessionInfoBytes = bytes.AsSpan(0, length);
-        var sessionInfo = Encoding.Latin1.GetString(sessionInfoBytes);
+        sessionInfo = Encoding.Latin1.GetString(sessionInfoBytes);
         try
         {
             if (IracingSessionInfoDecoder.UsesUtf8Encoding(sessionInfo))
@@ -479,6 +489,7 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         catch (DecoderFallbackException)
         {
             subSessionId = null;
+            sessionInfo = string.Empty;
             return false;
         }
 
@@ -567,7 +578,8 @@ internal sealed class IracingSharedMemoryConnection : IDisposable
         int Update,
         int Offset,
         int Length,
-        long? SubSessionId)
+        long? SubSessionId,
+        string SessionInfo)
     {
         public bool Matches(int update, int offset, int length) =>
             Update == update && Offset == offset && Length == length;

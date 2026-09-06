@@ -7,14 +7,15 @@ public sealed class ReplayApiTests
     [TestProperty("Requirement", "IR-RPY-001")]
     [TestProperty("Requirement", "IR-RPY-003")]
     [TestProperty("Requirement", "QR-ERR-002")]
-    public void ControllerExposesPreflightAndSynchronousCancelableDeliveryIntents()
+    public void ControllerExposesPreflightAndConfirmedAsyncCommands()
     {
         var methods = typeof(IReplayController).GetMethods();
-        Assert.HasCount(3, methods);
+        Assert.HasCount(4, methods);
 
         AssertValidationMethod(methods);
-        AssertMethod(methods, nameof(IReplayController.Seek), typeof(ReplayPosition));
-        AssertMethod(methods, nameof(IReplayController.SetPlayback), typeof(ReplayPlayback));
+        AssertAsyncMethod(methods, nameof(IReplayController.SeekAsync), typeof(ReplayPosition));
+        AssertAsyncMethod(methods, nameof(IReplayController.SetPlaybackAsync), typeof(ReplayPlayback));
+        AssertFocusMethod(methods);
     }
 
     [TestMethod]
@@ -45,13 +46,13 @@ public sealed class ReplayApiTests
         Assert.IsFalse(parameters[0].IsOptional);
     }
 
-    private static void AssertMethod(
+    private static void AssertAsyncMethod(
         IEnumerable<System.Reflection.MethodInfo> methods,
         string methodName,
         Type intentType)
     {
         var method = methods.Single(candidate => candidate.Name == methodName);
-        Assert.AreEqual(typeof(Result), method.ReturnType);
+        Assert.AreEqual(typeof(ValueTask<Result>), method.ReturnType);
 
         var parameters = method.GetParameters();
         Assert.HasCount(2, parameters);
@@ -60,5 +61,19 @@ public sealed class ReplayApiTests
         Assert.AreEqual(typeof(CancellationToken), parameters[1].ParameterType);
         Assert.IsFalse(parameters[1].IsOptional);
         Assert.IsFalse(parameters[1].HasDefaultValue);
+    }
+
+    private static void AssertFocusMethod(
+        IEnumerable<System.Reflection.MethodInfo> methods)
+    {
+        var method = methods.Single(
+            candidate => candidate.Name == nameof(IReplayController.FocusPlayerAsync));
+        Assert.AreEqual(typeof(ValueTask<Result>), method.ReturnType);
+        var parameters = method.GetParameters();
+        Assert.HasCount(2, parameters);
+        Assert.AreEqual(typeof(string), parameters[0].ParameterType);
+        Assert.IsFalse(parameters[0].IsOptional);
+        Assert.AreEqual(typeof(CancellationToken), parameters[1].ParameterType);
+        Assert.IsFalse(parameters[1].IsOptional);
     }
 }

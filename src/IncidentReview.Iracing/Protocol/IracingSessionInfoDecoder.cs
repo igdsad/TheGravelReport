@@ -4,6 +4,29 @@ namespace IncidentReview.Iracing.Protocol;
 
 internal static class IracingSessionInfoDecoder
 {
+    public static bool TryGetReplayMetadata(
+        string sessionInfo,
+        out IracingReplayMetadata? metadata)
+    {
+        ArgumentNullException.ThrowIfNull(sessionInfo);
+        metadata = null;
+
+        if (!TryTokenize(sessionInfo, out var lines) ||
+            !TryGetSection(lines, "DriverInfo", out var driverLines) ||
+            !TryGetSection(lines, "CameraInfo", out var cameraLines) ||
+            !TryReadPlayer(driverLines, out var playerCarIndex, out var playerCarNumberRaw) ||
+            !TryReadCameraGroups(cameraLines, out var cameraGroups))
+        {
+            return false;
+        }
+
+        metadata = new IracingReplayMetadata(
+            playerCarIndex,
+            playerCarNumberRaw,
+            cameraGroups);
+        return true;
+    }
+
     public static long? TryGetSubSessionId(string sessionInfo)
     {
         ArgumentNullException.ThrowIfNull(sessionInfo);
@@ -28,6 +51,445 @@ internal static class IracingSessionInfoDecoder
         ArgumentNullException.ThrowIfNull(sessionInfo);
         return TryGetUniqueWeekendScalar(sessionInfo, "Encoding", out var scalar) &&
             string.Equals(scalar, "UTF8", StringComparison.Ordinal);
+    }
+
+    private static bool TryReadPlayer(
+        IReadOnlyList<YamlLine> lines,
+        out int playerCarIndex,
+        out int playerCarNumberRaw)
+    {
+        playerCarIndex = default;
+        playerCarNumberRaw = default;
+        if (!TryGetDirectIndent(lines, out var directIndent) ||
+            !TryGetUniqueInteger(lines, directIndent, "DriverCarIdx", out playerCarIndex) ||
+            playerCarIndex < 0 ||
+            !TryGetUniqueEmptyMapping(lines, directIndent, "Drivers", out var driversIndex))
+        {
+            return false;
+        }
+
+        var matchingNumber = default(int?);
+        for (var index = driversIndex + 1; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (!line.IsSequence ||
+                !string.Equals(line.Key, "CarIdx", StringComparison.Ordinal) ||
+                line.Indent < directIndent ||
+                !TryParseNonNegativeInt(line.Scalar, out var carIndex))
+            {
+                continue;
+            }
+
+            var entryEnd = FindNextSequenceAtOrAbove(lines, index + 1, line.Indent);
+            if (carIndex != playerCarIndex)
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (matchingNumber is not null ||
+                !TryGetUniqueInteger(
+                    lines,
+                    index + 1,
+                    entryEnd,
+                    line.Indent + 1,
+                    "CarNumberRaw",
+                    out var number) ||
+                number < 0)
+            {
+                return false;
+            }
+
+            matchingNumber = number;
+            index = entryEnd - 1;
+        }
+
+        if (matchingNumber is not { } rawNumber)
+        {
+            return false;
+        }
+
+        playerCarNumberRaw = rawNumber;
+        return true;
+    }
+
+    private static bool TryReadCameraGroups(
+        IReadOnlyList<YamlLine> lines,
+        out IReadOnlyList<IracingCameraGroupMetadata> groups)
+    {
+        groups = [];
+        if (!TryGetDirectIndent(lines, out var directIndent) ||
+            !TryGetUniqueEmptyMapping(lines, directIndent, "Groups", out var groupsIndex))
+        {
+            return false;
+        }
+
+        var result = new List<IracingCameraGroupMetadata>();
+        var seenNumbers = new HashSet<int>();
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = groupsIndex + 1; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (!line.IsSequence ||
+                !string.Equals(line.Key, "GroupNum", StringComparison.Ordinal) ||
+                line.Indent < directIndent ||
+                !TryParseNonNegativeInt(line.Scalar, out var groupNumber))
+            {
+                continue;
+            }
+
+            var groupEnd = FindNextSequenceWithKeyAtOrAbove(
+                lines,
+                index + 1,
+                line.Indent,
+                "GroupNum");
+            if (!TryGetUniqueScalar(
+                    lines,
+                    index + 1,
+                    groupEnd,
+                    line.Indent + 1,
+                    "GroupName",
+                    out var groupName) ||
+                string.IsNullOrWhiteSpace(groupName) ||
+                !TryFindEmptyMapping(
+                    lines,
+                    index + 1,
+                    groupEnd,
+                    line.Indent + 1,
+                    "Cameras",
+                    out var camerasIndex) ||
+                !TryReadCameraNumbers(
+                    lines,
+                    camerasIndex + 1,
+                    groupEnd,
+                    lines[camerasIndex].Indent,
+                    out var cameraNumbers) ||
+                !seenNumbers.Add(groupNumber) ||
+                !seenNames.Add(groupName))
+            {
+                return false;
+            }
+
+            result.Add(new IracingCameraGroupMetadata(
+                groupNumber,
+                groupName,
+                cameraNumbers));
+            index = groupEnd - 1;
+        }
+
+        if (result.Count == 0)
+        {
+            return false;
+        }
+
+        groups = result;
+        return true;
+    }
+
+    private static bool TryReadCameraNumbers(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        out IReadOnlyList<int> cameraNumbers)
+    {
+        var result = new List<int>();
+        var seen = new HashSet<int>();
+        for (var index = start; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.IsSequence &&
+                line.Indent >= minimumIndent &&
+                string.Equals(line.Key, "CameraNum", StringComparison.Ordinal))
+            {
+                if (!TryParseNonNegativeInt(line.Scalar, out var cameraNumber) ||
+                    !seen.Add(cameraNumber))
+                {
+                    cameraNumbers = [];
+                    return false;
+                }
+
+                result.Add(cameraNumber);
+            }
+        }
+
+        cameraNumbers = result;
+        return result.Count > 0;
+    }
+
+    private static int FindNextSequenceAtOrAbove(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int maximumIndent)
+    {
+        for (var index = start; index < lines.Count; index++)
+        {
+            if (lines[index].IsSequence && lines[index].Indent <= maximumIndent)
+            {
+                return index;
+            }
+        }
+
+        return lines.Count;
+    }
+
+    private static int FindNextSequenceWithKeyAtOrAbove(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int maximumIndent,
+        string key)
+    {
+        for (var index = start; index < lines.Count; index++)
+        {
+            if (lines[index].IsSequence &&
+                lines[index].Indent <= maximumIndent &&
+                string.Equals(lines[index].Key, key, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return lines.Count;
+    }
+
+    private static bool TryGetSection(
+        IReadOnlyList<YamlLine> lines,
+        string sectionName,
+        out IReadOnlyList<YamlLine> section)
+    {
+        var sectionStart = -1;
+        var sectionEnd = lines.Count;
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (line.Indent != 0 || line.IsSequence)
+            {
+                continue;
+            }
+
+            if (sectionStart >= 0)
+            {
+                sectionEnd = index;
+                break;
+            }
+
+            if (string.Equals(line.Key, sectionName, StringComparison.Ordinal) &&
+                line.Scalar.Length == 0)
+            {
+                sectionStart = index;
+            }
+        }
+
+        if (sectionStart < 0)
+        {
+            section = [];
+            return false;
+        }
+
+        for (var index = sectionEnd; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (line.Indent == 0 &&
+                !line.IsSequence &&
+                string.Equals(line.Key, sectionName, StringComparison.Ordinal))
+            {
+                section = [];
+                return false;
+            }
+        }
+
+        section = lines.Skip(sectionStart + 1).Take(sectionEnd - sectionStart - 1).ToArray();
+        return true;
+    }
+
+    private static bool TryGetDirectIndent(
+        IReadOnlyList<YamlLine> lines,
+        out int directIndent)
+    {
+        directIndent = lines
+            .Where(static line => !line.IsSequence)
+            .Select(static line => line.Indent)
+            .DefaultIfEmpty(-1)
+            .Min();
+        return directIndent > 0;
+    }
+
+    private static bool TryGetUniqueInteger(
+        IReadOnlyList<YamlLine> lines,
+        int indent,
+        string key,
+        out int value) =>
+        TryGetUniqueInteger(lines, 0, lines.Count, indent, key, out value);
+
+    private static bool TryGetUniqueInteger(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key,
+        out int value)
+    {
+        if (!TryGetUniqueScalar(lines, start, end, minimumIndent, key, out var scalar))
+        {
+            value = default;
+            return false;
+        }
+
+        return TryParseNonNegativeInt(scalar, out value);
+    }
+
+    private static bool TryGetUniqueScalar(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key,
+        out string value)
+    {
+        value = string.Empty;
+        var found = false;
+        for (var index = start; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.IsSequence ||
+                line.Indent < minimumIndent ||
+                !string.Equals(line.Key, key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (found)
+            {
+                return false;
+            }
+
+            value = Unquote(line.Scalar.AsSpan()).ToString();
+            found = true;
+        }
+
+        return found;
+    }
+
+    private static bool TryGetUniqueEmptyMapping(
+        IReadOnlyList<YamlLine> lines,
+        int indent,
+        string key,
+        out int index)
+    {
+        index = -1;
+        for (var candidate = 0; candidate < lines.Count; candidate++)
+        {
+            var line = lines[candidate];
+            if (!line.IsSequence &&
+                line.Indent == indent &&
+                string.Equals(line.Key, key, StringComparison.Ordinal) &&
+                line.Scalar.Length == 0)
+            {
+                if (index >= 0)
+                {
+                    return false;
+                }
+
+                index = candidate;
+            }
+        }
+
+        return index >= 0;
+    }
+
+    private static bool TryFindEmptyMapping(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key,
+        out int index)
+    {
+        index = -1;
+        for (var candidate = start; candidate < end; candidate++)
+        {
+            var line = lines[candidate];
+            if (!line.IsSequence &&
+                line.Indent >= minimumIndent &&
+                string.Equals(line.Key, key, StringComparison.Ordinal) &&
+                line.Scalar.Length == 0)
+            {
+                if (index >= 0)
+                {
+                    return false;
+                }
+
+                index = candidate;
+            }
+        }
+
+        return index >= 0;
+    }
+
+    private static bool TryParseNonNegativeInt(string scalar, out int value) =>
+        int.TryParse(
+            Unquote(scalar.AsSpan()),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out value) && value >= 0;
+
+    private static bool TryTokenize(string sessionInfo, out IReadOnlyList<YamlLine> lines)
+    {
+        var result = new List<YamlLine>();
+        foreach (var rawLine in sessionInfo.Split('\n'))
+        {
+            var line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
+            if (line.Contains('\r', StringComparison.Ordinal))
+            {
+                lines = [];
+                return false;
+            }
+
+            var contentStart = 0;
+            while (contentStart < line.Length && line[contentStart] == ' ')
+            {
+                contentStart++;
+            }
+
+            if (contentStart < line.Length && line[contentStart] == '\t')
+            {
+                lines = [];
+                return false;
+            }
+
+            var content = StripComment(line.AsSpan(contentStart)).TrimEnd();
+            if (content.IsEmpty)
+            {
+                continue;
+            }
+
+            if (contentStart == 0 &&
+                (content.SequenceEqual("---") || content.SequenceEqual("...")))
+            {
+                continue;
+            }
+
+            var isSequence = content.StartsWith("- ", StringComparison.Ordinal);
+            if (isSequence)
+            {
+                content = content[2..].TrimStart();
+            }
+
+            if (!TrySplitMapping(content, out var key, out var scalar))
+            {
+                lines = [];
+                return false;
+            }
+
+            result.Add(new YamlLine(
+                contentStart,
+                isSequence,
+                key,
+                scalar.ToString()));
+        }
+
+        lines = result;
+        return true;
     }
 
     private static bool TryGetUniqueWeekendScalar(
@@ -213,4 +675,10 @@ internal static class IracingSessionInfoDecoder
 
         return scalar;
     }
+
+    private sealed record YamlLine(
+        int Indent,
+        bool IsSequence,
+        string Key,
+        string Scalar);
 }

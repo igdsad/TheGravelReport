@@ -40,4 +40,24 @@ public static class IracingErrorCodes
     /// <summary>The operating system did not accept a replay message for delivery.</summary>
     public static ErrorCode ReplayDeliveryFailed { get; } =
         ErrorCode.Define("iracing.replay.delivery-failed");
+
+    /// <summary>iRacing did not confirm an accepted replay seek in time.</summary>
+    public static ErrorCode ReplaySeekTimeout { get; } =
+        ErrorCode.Define("iracing.replay.seek-timeout");
+
+    /// <summary>iRacing did not confirm an accepted camera selection in time.</summary>
+    public static ErrorCode ReplayCameraTimeout { get; } =
+        ErrorCode.Define("iracing.replay.camera-timeout");
+
+    /// <summary>iRacing did not confirm an accepted playback change in time.</summary>
+    public static ErrorCode ReplayPlaybackTimeout { get; } =
+        ErrorCode.Define("iracing.replay.playback-timeout");
+
+    /// <summary>The session metadata needed to focus the local player is unavailable.</summary>
+    public static ErrorCode ReplayMetadataUnavailable { get; } =
+        ErrorCode.Define("iracing.replay.metadata-unavailable");
+
+    /// <summary>The requested camera group is absent from the current session metadata.</summary>
+    public static ErrorCode ReplayCameraNotFound { get; } =
+        ErrorCode.Define("iracing.replay.camera-not-found");
 }
