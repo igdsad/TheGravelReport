@@ -524,6 +524,7 @@ The application resolves the descriptor before incident detection: query `GetSes
 | Replay session number changes | Resolve/create a new identity even when the enclosing subsession is unchanged | Finalize prior context and establish a new baseline |
 | Durable subsession/session-instance evidence changes | Resolve/create a new identity | Establish a new baseline |
 | Required identity evidence is missing, malformed, or contradictory | Create a clearly marked connection-scoped provisional identity; never guess a cross-restart match | Establish a baseline and surface degraded identity state |
+| Replay matches the same provisional connection key and session number | Retain the active provisional identity for that connection only; mode is not identity evidence | Pause incident detection; replay seeking remains available |
 | Reconnect with only provisional evidence | Create a new provisional identity unless future verified evidence proves continuity | Establish a baseline; do not merge records heuristically |
 | Replay mode matches an existing durable key | Reuse identity for review only | Pause incident detection; replay seeking remains available |
 | Standalone/unmatched replay playback | Use an ephemeral replay context | Do not persist inferred incidents or create a durable session automatically |
@@ -594,10 +595,10 @@ Replay review behavior:
 
 1. Load the incident through an application use case.
 2. Subtract the configured lead-in and clamp to zero.
-3. Confirm telemetry indicates a state in which iRacing can accept replay control.
+3. Confirm that iRacing is connected, the SDK authoritatively reports `NotOnTrack`, no review command is already in flight, and the incident's session is the one currently loaded.
 4. Ask `IReplayController` to seek to the target session/time.
 5. Pause or start an exactly representable playback speed according to user settings.
-6. Return a structured failure if iRacing is disconnected or does not expose a usable replay state.
+6. Return one structured, actionable failure for the exact failed precondition: disconnected telemetry, unknown on-track state, driver still on track, another command in progress, a different session loaded, or insufficient simulator identity evidence to verify a provisional replay after continuity was lost.
 
 `ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
 
