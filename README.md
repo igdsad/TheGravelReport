@@ -1,17 +1,40 @@
 # GravelReview
 
-A local Windows companion that watches iRacing's local telemetry, records scored incident-counter increases for eligible participants across the field exposed to the local SDK, keeps the resulting review points in SQLite, and lets the user jump directly to each incident in iRacing replay.
+GravelReview helps you find race incidents in iRacing. It saves the time, points, and driver name for each scored incident it can see. Pick a row, and GravelReview moves the iRacing replay to that spot. No more hunting through a long replay like a lost squirrel.
 
-The repository contains a runnable MVP. Automated Release startup and protocol-simulator coverage exist, but acceptance against a recorded current real iRacing build is still required before treating it as a public release.
+GravelReview runs on your Windows PC. Your race data stays on your PC. It does not say who was at fault. A driver name tells you which car's score went up, not who caused the crash.
 
-## Quick start
+This is a test release. The app has passed 615 tests. It still needs more tests with the live iRacing game.
 
-Prerequisites:
+## How to use it
 
-- Windows x64;
-- the .NET SDK selected by [`global.json`](global.json) (`10.0.400` feature band);
-- iRacing for live telemetry/replay use. It is not needed to build or run the automated tests;
-- iRacing's **Max Cars** setting set to **63** for the intended field-wide coverage. A lower value can prevent entrants from being transmitted to the local SDK, while [iRacing's connection guidance](https://support.iracing.com/support/solutions/articles/31000149355-connection-type-max-cars) warns that even 63 does not guarantee every car will be sent.
+You need:
+
+- a 64-bit Windows PC;
+- iRacing;
+- **Max Cars** set to **63** in iRacing, so the game can send as many cars as it can to the app.
+
+Then:
+
+1. Download `GravelReview-win-x64.zip` from the GitHub release.
+2. Unzip the file.
+3. Open `GravelReview-win-x64.exe`. You do not need to install .NET.
+   Windows may warn you because this test app is not signed yet. Only run a file from a release you trust.
+4. Start iRacing and join a session. You may also open GravelReview first. It will wait for iRacing.
+5. Drive. GravelReview will add a row when it sees scored incident points go up.
+6. Get out of the car before you review an incident.
+7. Find the row by its **Recorded at** time and **Driver** name.
+8. Pick **-2 sec**, **0 sec**, or **+2 sec**. iRacing will move the replay to that car and time.
+
+**Recorded at** shows the full time, down to a tiny part of a second. This keeps close events in the right order. If a driver name is missing, the app shows the team, car number, or **Unknown driver**.
+
+GravelReview saves the list on its own. The button at the bottom right changes the app between the Windows theme, light mode, and dark mode. Only one copy of GravelReview can run at a time. One pit crew is enough.
+
+GravelReview can only save what iRacing sends to it. iRacing may not send every car in every race. A `0x` touch does not add points, so the app cannot see it.
+
+## Build and run from source
+
+Developers need the .NET SDK selected by [`global.json`](global.json) (`10.0.400` feature band). iRacing is not needed to build or run the automated tests.
 
 From PowerShell in the repository root:
 
@@ -21,12 +44,6 @@ From PowerShell in the repository root:
 dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.csproj `
     --configuration Release --no-restore --no-build
 ```
-
-The app can start while iRacing is closed and will wait and reconnect. Once a live session produces an eligible participant's scored incident-counter increase, exit the car so telemetry reports `NotOnTrack`, then choose **-2 sec**, **0 sec**, or **+2 sec** on that incident's row. The workflow preflights the active session, seeks relative to the stored event time, requires `CurrentSessionNum` to match both the live and replay session numbers, and resolves the incident's deterministic participant identity by exact current-roster match before applying the selected camera group and stored playback behavior. If that car slot now has different identity evidence, replay focus fails clearly rather than focusing the replacement. Each external step succeeds only after a later stable telemetry frame confirms that iRacing applied it; Windows accepting a broadcast message is not reported as replay success. An exact seek, camera, or playback timeout is shown if that stage is not confirmed. Review deliberately does not mark the incident reviewed automatically.
-
-The far-right status-bar button cycles the appearance through **Follow desktop → Light → Dark → Follow desktop**. Its monitor, sun, or moon icon shows the configured mode, and its tooltip states both the current mode and what the next click will select. Follow desktop reacts to Windows theme changes while the app is running; forced Light and Dark do not. The choice is applied immediately and saved to SQLite. If saving fails, GravelReview restores the previous appearance and reports that exact failure in the shared status/event stream.
-
-Only one app instance may run in the Windows user session.
 
 ## Field-wide incident tracking
 
