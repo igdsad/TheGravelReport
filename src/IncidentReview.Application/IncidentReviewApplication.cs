@@ -1112,6 +1112,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private static ReviewIncident MapIncident(StoredIncident incident) => ReviewIncident.Create(
         incident.Id,
         incident.Session,
+        incident.Participant,
         incident.Position,
         incident.ObservedAt,
         incident.Points,

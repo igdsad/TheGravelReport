@@ -56,9 +56,11 @@ internal static class TestModelFactory
         long observedAt,
         long replayTime,
         int total,
-        int delta) => ReviewIncident.Create(
+        int delta,
+        IncidentParticipant? participant = null) => ReviewIncident.Create(
             IncidentId.Generate(),
             session,
+            participant ?? Participant(),
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(1).Value,
                 SessionTime.TryCreateMilliseconds(replayTime).Value).Value,
@@ -69,6 +71,16 @@ internal static class TestModelFactory
             LapDistance.TryCreate(0.25).Value,
             IncidentReviewStatus.Pending,
             IncidentAnnotation.TryCreate(null, null).Value);
+
+    public static IncidentParticipant Participant(
+        string identity = "car-index:2:team:22",
+        string? driverName = "Test Driver",
+        string? teamName = "Test Team",
+        string? carNumber = "22") => IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate(identity).Value,
+            driverName,
+            teamName,
+            carNumber).Value;
 
     private static SimulatorSessionDescriptor Descriptor() => SimulatorSessionDescriptor.TryCreate(
         SimulatorCode.TryCreate("iracing").Value,

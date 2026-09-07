@@ -59,6 +59,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
     [TestProperty("Requirement", "IR-SES-001")]
     [TestProperty("Requirement", "IR-SES-003")]
     [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "IR-UI-005")]
     [TestProperty("Requirement", "QR-TST-001")]
     public async Task TransientTelemetryFailureRetainsActiveSessionAndIncident()
     {
@@ -90,6 +91,9 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(session, unavailable.Value.ActiveSession!.Id);
         Assert.HasCount(1, unavailable.Value.ActiveSession.Incidents);
         Assert.AreEqual(incident.Id, unavailable.Value.ActiveSession.Incidents[0].Id);
+        Assert.AreEqual(
+            incident.Participant,
+            unavailable.Value.ActiveSession.Incidents[0].Participant);
 
         await host.Telemetry.PublishAsync(CreateSample(
             counter: 4,
@@ -104,6 +108,9 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(session, recovered.Value.ActiveSession!.Id);
         Assert.HasCount(1, recovered.Value.ActiveSession.Incidents);
         Assert.AreEqual(incident.Id, recovered.Value.ActiveSession.Incidents[0].Id);
+        Assert.AreEqual(
+            incident.Participant,
+            recovered.Value.ActiveSession.Incidents[0].Participant);
         Assert.AreEqual(1, host.Store.EnsureSessionCount);
         Assert.AreEqual(1, host.Store.BaselineCount);
         Assert.AreEqual(1, host.Store.RecordAttemptCount);

@@ -51,6 +51,7 @@ public sealed class DesktopThemeOrderingTests
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-003")]
     [TestProperty("Requirement", "IR-UI-004")]
+    [TestProperty("Requirement", "IR-UI-005")]
     [TestProperty("Requirement", "QR-TST-001")]
     public async Task StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary()
     {
@@ -176,8 +177,24 @@ public sealed class DesktopThemeOrderingTests
 
                 Assert.IsTrue(window.IsVisible);
                 Assert.HasCount(1, viewModel.State.Incidents);
+                Assert.AreEqual("Test Driver", viewModel.State.Incidents[0].DriverText);
                 Assert.HasCount(3, viewModel.State.CameraChoices);
                 Assert.AreEqual("Cockpit", viewModel.State.SelectedCameraChoice.CameraName);
+                var incidentGrid = window.FindName("IncidentGrid") as DataGrid;
+                Assert.IsNotNull(incidentGrid);
+                Assert.AreEqual("Recorded at", incidentGrid.Columns[0].Header);
+                Assert.AreEqual(
+                    nameof(IncidentListItem.ObservedAt),
+                    incidentGrid.Columns[0].SortMemberPath);
+                Assert.AreEqual("Driver", incidentGrid.Columns[5].Header);
+                Assert.AreEqual(
+                    nameof(IncidentListItem.DriverText),
+                    incidentGrid.Columns[5].SortMemberPath);
+                Assert.IsFalse(incidentGrid.Columns.Any(
+                    static column => string.Equals(
+                        column.Header as string,
+                        "Status",
+                        StringComparison.Ordinal)));
             }
             catch (Exception exception)
             {

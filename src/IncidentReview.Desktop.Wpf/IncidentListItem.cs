@@ -16,7 +16,9 @@ public sealed class IncidentListItem
 
     public IncidentId Id => Incident.Id;
 
-    public string ObservedAtText => ObservedAt.LocalDateTime.ToString("g", CultureInfo.CurrentCulture);
+    public string ObservedAtText => ObservedAt.ToLocalTime().ToString(
+        "yyyy-MM-dd HH:mm:ss.fff zzz",
+        CultureInfo.InvariantCulture);
 
     public string IncidentIdText
     {
@@ -42,7 +44,11 @@ public sealed class IncidentListItem
         ? "—"
         : Incident.Lap.Value.ToString(CultureInfo.CurrentCulture);
 
-    public string Status => Incident.ReviewStatus.ToString();
+    public string DriverText => Incident.Participant.DriverName ??
+        Incident.Participant.TeamName ??
+        (Incident.Participant.CarNumber is { } carNumber
+            ? string.Concat("Car #", carNumber)
+            : "Unknown driver");
 
     public string Notes => Incident.Annotation.Notes ?? string.Empty;
 

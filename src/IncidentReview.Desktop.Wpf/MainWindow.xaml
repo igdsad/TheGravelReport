@@ -125,9 +125,10 @@
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                           MouseDoubleClick="OnIncidentActivated">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Recorded"
+                        <DataGridTextColumn Header="Recorded at"
                                             Binding="{Binding ObservedAtText}"
-                                            Width="142" />
+                                            SortMemberPath="ObservedAt"
+                                            Width="214" />
                         <DataGridTemplateColumn Header="Incident ID" Width="100">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -145,9 +146,10 @@
                         <DataGridTextColumn Header="Lap"
                                             Binding="{Binding Lap}"
                                             Width="56" />
-                        <DataGridTextColumn Header="Status"
-                                            Binding="{Binding Status}"
-                                            Width="90" />
+                        <DataGridTextColumn Header="Driver"
+                                            Binding="{Binding DriverText}"
+                                            SortMemberPath="DriverText"
+                                            Width="180" />
                         <DataGridTemplateColumn Header="Review" Width="*" MinWidth="225">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>

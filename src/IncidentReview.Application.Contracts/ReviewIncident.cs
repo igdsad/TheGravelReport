@@ -8,6 +8,7 @@ public sealed record ReviewIncident
     private ReviewIncident(
         IncidentId id,
         SessionIdentity session,
+        IncidentParticipant participant,
         ReplayPosition position,
         UtcInstant observedAt,
         IncidentPoints points,
@@ -19,6 +20,7 @@ public sealed record ReviewIncident
     {
         Id = id;
         Session = session;
+        Participant = participant;
         Position = position;
         ObservedAt = observedAt;
         Points = points;
@@ -31,6 +33,7 @@ public sealed record ReviewIncident
 
     public IncidentId Id { get; }
     public SessionIdentity Session { get; }
+    public IncidentParticipant Participant { get; }
     public ReplayPosition Position { get; }
     public UtcInstant ObservedAt { get; }
     public IncidentPoints Points { get; }
@@ -43,6 +46,7 @@ public sealed record ReviewIncident
     public static ReviewIncident Create(
         IncidentId id,
         SessionIdentity session,
+        IncidentParticipant participant,
         ReplayPosition position,
         UtcInstant observedAt,
         IncidentPoints points,
@@ -54,6 +58,7 @@ public sealed record ReviewIncident
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(participant);
         ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(observedAt);
         ArgumentNullException.ThrowIfNull(points);
@@ -63,6 +68,7 @@ public sealed record ReviewIncident
         return new ReviewIncident(
             id,
             session,
+            participant,
             position,
             observedAt,
             points,

@@ -1,3 +1,4 @@
+using System.Globalization;
 using IncidentReview.Application.Contracts;
 using IncidentReview.Domain;
 
@@ -7,6 +8,8 @@ namespace IncidentReview.Desktop.Wpf.Tests;
 public sealed class MainWindowReducerTests
 {
     private static readonly DateTimeOffset TestTime = new(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
+    private static readonly string[] ExpectedDriverFallbacks =
+        ["Driver Name", "Team Name", "Car #03", "Unknown driver"];
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
@@ -91,6 +94,119 @@ public sealed class MainWindowReducerTests
         Assert.IsFalse(state.IsCameraSelectionDirty);
         Assert.AreEqual("Refreshed incident log: 2 incidents loaded.", state.StatusDetail);
         Assert.AreSame(state.EventLog[^1], state.CurrentStatusEvent);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-005")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void SameMinuteIncidentsShowDriversAndFullTimestampsInMillisecondOrder()
+    {
+        var sessionId = SessionIdentity.Generate();
+        var minute = new DateTimeOffset(2026, 9, 6, 20, 3, 0, TimeSpan.Zero);
+        var earlierMilliseconds = minute.AddSeconds(13).AddMilliseconds(123)
+            .ToUnixTimeMilliseconds();
+        var laterMilliseconds = minute.AddSeconds(13).AddMilliseconds(987)
+            .ToUnixTimeMilliseconds();
+        var later = TestModelFactory.Incident(
+            sessionId,
+            laterMilliseconds,
+            replayTime: 13_383,
+            total: 4,
+            delta: 4,
+            participant: TestModelFactory.Participant(
+                identity: "car-index:9:team:92",
+                driverName: "Driver Two"));
+        var earlier = TestModelFactory.Incident(
+            sessionId,
+            earlierMilliseconds,
+            replayTime: 13_383,
+            total: 4,
+            delta: 4,
+            participant: TestModelFactory.Participant(
+                identity: "car-index:4:team:41",
+                driverName: "Driver One"));
+
+        var state = ReduceSnapshot(
+            MainWindowReducer.InitialState,
+            Snapshot(
+                revision: 1,
+                session: TestModelFactory.Session(sessionId, later, earlier)),
+            SnapshotRefreshMode.Automatic);
+
+        Assert.AreEqual(earlier.Id, state.Incidents[0].Id);
+        Assert.AreEqual(later.Id, state.Incidents[1].Id);
+        Assert.AreEqual("Driver One", state.Incidents[0].DriverText);
+        Assert.AreEqual("Driver Two", state.Incidents[1].DriverText);
+        Assert.AreEqual(
+            DateTimeOffset.FromUnixTimeMilliseconds(earlierMilliseconds)
+                .ToLocalTime()
+                .ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture),
+            state.Incidents[0].ObservedAtText);
+        Assert.AreNotEqual(
+            state.Incidents[0].ObservedAtText,
+            state.Incidents[1].ObservedAtText);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-UI-005")]
+    public void DriverTextFallsBackToTeamCarAndUnknownContext()
+    {
+        var sessionId = SessionIdentity.Generate();
+        var driver = TestModelFactory.Incident(
+            sessionId,
+            observedAt: 1_000,
+            replayTime: 1_000,
+            total: 1,
+            delta: 1,
+            participant: TestModelFactory.Participant(
+                identity: "driver",
+                driverName: "Driver Name",
+                teamName: "Team Name",
+                carNumber: "01"));
+        var team = TestModelFactory.Incident(
+            sessionId,
+            observedAt: 2_000,
+            replayTime: 2_000,
+            total: 2,
+            delta: 1,
+            participant: TestModelFactory.Participant(
+                identity: "team",
+                driverName: null,
+                teamName: "Team Name",
+                carNumber: "02"));
+        var car = TestModelFactory.Incident(
+            sessionId,
+            observedAt: 3_000,
+            replayTime: 3_000,
+            total: 3,
+            delta: 1,
+            participant: TestModelFactory.Participant(
+                identity: "car",
+                driverName: null,
+                teamName: null,
+                carNumber: "03"));
+        var unknown = TestModelFactory.Incident(
+            sessionId,
+            observedAt: 4_000,
+            replayTime: 4_000,
+            total: 4,
+            delta: 1,
+            participant: TestModelFactory.Participant(
+                identity: "unknown",
+                driverName: null,
+                teamName: null,
+                carNumber: null));
+
+        var state = ReduceSnapshot(
+            MainWindowReducer.InitialState,
+            Snapshot(
+                revision: 1,
+                session: TestModelFactory.Session(sessionId, driver, team, car, unknown)),
+            SnapshotRefreshMode.Automatic);
+
+        CollectionAssert.AreEqual(
+            ExpectedDriverFallbacks,
+            state.Incidents.Select(static incident => incident.DriverText).ToArray());
     }
 
     [TestMethod]

@@ -24,9 +24,15 @@ public sealed class ApplicationContractInvariantTests
         var session = SessionIdentity.Generate();
         var anotherSession = SessionIdentity.Generate();
         var instant = UtcInstant.TryCreateUnixMilliseconds(1_000).Value;
+        var participant = IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate("car-index:2:team:22").Value,
+            "Test Driver",
+            "Test Team",
+            "22").Value;
         var incident = ReviewIncident.Create(
             IncidentId.Generate(),
             anotherSession,
+            participant,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(1).Value,
                 SessionTime.TryCreateMilliseconds(1_000).Value).Value,
@@ -37,6 +43,8 @@ public sealed class ApplicationContractInvariantTests
             lapDistance: null,
             IncidentReviewStatus.Pending,
             IncidentAnnotation.TryCreate(null, null).Value);
+
+        Assert.AreSame(participant, incident.Participant);
 
         Assert.ThrowsExactly<ArgumentException>(() => ReviewSession.Create(
             session,
