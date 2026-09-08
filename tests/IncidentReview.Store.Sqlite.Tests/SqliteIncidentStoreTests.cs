@@ -304,6 +304,74 @@ public sealed class SqliteIncidentStoreTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-INC-003")]
+    [TestProperty("Requirement", "IR-STR-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task OneEventRoundTripsIncidentsAndCheckpointAcrossHeatNumbers()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        var session = await EnsureSessionAsync(context.Store, "league-night-event");
+        var firstBaseline = CreateCheckpoint(session, counter: 0, time: 100);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(null, firstBaseline).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var firstCheckpoint = CreateCheckpoint(session, counter: 4, time: 500);
+        var firstIncident = CreateIncident(session, total: 4, delta: 4, time: 500);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(
+                firstIncident,
+                firstBaseline,
+                firstCheckpoint).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var secondBaseline = CreateCheckpoint(
+            session,
+            counter: 0,
+            time: 600,
+            epoch: 1,
+            sessionNumber: 2);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(firstCheckpoint, secondBaseline).Value,
+            CancellationToken.None)).IsSuccess);
+        var secondCheckpoint = CreateCheckpoint(
+            session,
+            counter: 2,
+            time: 800,
+            epoch: 1,
+            sessionNumber: 2);
+        var secondIncident = CreateIncident(
+            session,
+            total: 2,
+            delta: 2,
+            time: 800,
+            epoch: 1,
+            sessionNumber: 2);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(
+                secondIncident,
+                secondBaseline,
+                secondCheckpoint).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var details = await context.Store.QueryAsync(
+            new GetSessionDetails(session),
+            CancellationToken.None);
+        var checkpoints = await context.Store.QueryAsync(
+            new GetIncidentCheckpoints(session),
+            CancellationToken.None);
+
+        Assert.IsTrue(details.IsSuccess);
+        Assert.HasCount(2, details.Value.Value!.Incidents);
+        Assert.AreEqual(1, details.Value.Value.Incidents[0].Position.SessionNumber.Value);
+        Assert.AreEqual(2, details.Value.Value.Incidents[1].Position.SessionNumber.Value);
+        Assert.HasCount(1, checkpoints.Value);
+        Assert.AreEqual(secondCheckpoint, checkpoints.Value[0]);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-INC-005")]
     [TestProperty("Requirement", "IR-STR-002")]
     public async Task EqualCounterTotalsRemainIndependentAcrossParticipants()
@@ -441,13 +509,15 @@ public sealed class SqliteIncidentStoreTests
         SessionIdentity session,
         int counter,
         long time,
-        string participantIdentity = "participant-1") => IncidentCheckpoint.TryCreate(
+        string participantIdentity = "participant-1",
+        int epoch = 0,
+        int sessionNumber = 1) => IncidentCheckpoint.TryCreate(
             session,
             ParticipantIdentity.TryCreate(participantIdentity).Value,
-            CounterEpoch.TryCreate(0).Value,
+            CounterEpoch.TryCreate(epoch).Value,
             IncidentCounter.TryCreate(counter).Value,
             ReplayPosition.TryCreate(
-                SessionNumber.TryCreate(1).Value,
+                SessionNumber.TryCreate(sessionNumber).Value,
                 SessionTime.TryCreateMilliseconds(time).Value).Value,
             UtcInstant.TryCreateUnixMilliseconds(time).Value).Value;
 
@@ -456,7 +526,9 @@ public sealed class SqliteIncidentStoreTests
         int total,
         int delta,
         long time,
-        string participantIdentity = "participant-1")
+        string participantIdentity = "participant-1",
+        int epoch = 0,
+        int sessionNumber = 1)
     {
         var instant = UtcInstant.TryCreateUnixMilliseconds(time).Value;
         return StoredIncident.Create(
@@ -468,11 +540,11 @@ public sealed class SqliteIncidentStoreTests
                 teamName: "Team One",
                 carNumber: "01").Value,
             ReplayPosition.TryCreate(
-                SessionNumber.TryCreate(1).Value,
+                SessionNumber.TryCreate(sessionNumber).Value,
                 SessionTime.TryCreateMilliseconds(time).Value).Value,
             instant,
             IncidentPoints.TryCreate(total, delta).Value,
-            CounterEpoch.TryCreate(0).Value,
+            CounterEpoch.TryCreate(epoch).Value,
             lap: null,
             lapDistance: null,
             IncidentReviewStatus.Pending,

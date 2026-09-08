@@ -5,7 +5,7 @@ namespace IncidentReview.Iracing.Tests;
 [TestClass]
 public sealed class IncidentMetadataTests
 {
-    private static readonly int[] ExpectedEligibleCarIndexes = [2, 4];
+    private static readonly int[] ExpectedEligibleCarIndexes = [2, 4, 8];
 
     [TestMethod]
     [TestProperty("Requirement", "IR-INC-006")]
@@ -30,6 +30,12 @@ public sealed class IncidentMetadataTests
         Assert.AreEqual(7, team.CarNumberRaw);
 
         Assert.AreEqual("car-index:4:user:404", metadata.Participants[1].Identity);
+
+        var driverFallback = metadata.Participants[2];
+        Assert.AreEqual(
+            "car-index:8:team:80:driver-user:808",
+            driverFallback.Identity);
+        Assert.AreEqual(3, driverFallback.IncidentCount);
     }
 
     [TestMethod]
@@ -45,6 +51,85 @@ public sealed class IncidentMetadataTests
 
         Assert.AreEqual(before.Participants[0].Identity, after.Participants[0].Identity);
         Assert.AreEqual("Relief Driver", after.Participants[0].DriverName);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void CurrentDriverCounterWinsConsistentlyWhenBothCounterShapesExist()
+    {
+        var metadata = IracingTestingRegistration.ReadIncidentMetadata(
+            SessionInfo.Replace(
+                "   TeamIncidentCount: 4",
+                "   CurDriverIncidentCount: 2\n   TeamIncidentCount: 4",
+                StringComparison.Ordinal));
+
+        var driver = metadata.Participants.Single(participant => participant.CarIndex == 2);
+        Assert.AreEqual("car-index:2:team:88:driver-user:202", driver.Identity);
+        Assert.AreEqual(2, driver.IncidentCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void CurrentDriverCounterKeepsTeamDriversInSeparateCounterStreams()
+    {
+        var modernShape = SessionInfo.Replace(
+            "   TeamIncidentCount: 4",
+            "   CurDriverIncidentCount: 2\n   TeamIncidentCount: 4",
+            StringComparison.Ordinal);
+        var before = IracingTestingRegistration.ReadIncidentMetadata(modernShape);
+        var after = IracingTestingRegistration.ReadIncidentMetadata(
+            modernShape.Replace(
+                "UserID: 202\n   UserName: First Driver",
+                "UserID: 909\n   UserName: Relief Driver",
+                StringComparison.Ordinal));
+
+        Assert.AreEqual(
+            "car-index:2:team:88:driver-user:202",
+            before.Participants[0].Identity);
+        Assert.AreEqual(
+            "car-index:2:team:88:driver-user:909",
+            after.Participants[0].Identity);
+        Assert.AreNotEqual(before.Participants[0].Identity, after.Participants[0].Identity);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void PresentButUnavailableDriverCounterDoesNotSwitchToTeamCounter()
+    {
+        var metadata = IracingTestingRegistration.ReadIncidentMetadata(
+            SessionInfo.Replace(
+                "   TeamIncidentCount: 4",
+                "   CurDriverIncidentCount: -1\n   TeamIncidentCount: 4",
+                StringComparison.Ordinal));
+
+        Assert.IsFalse(metadata.Participants.Any(participant => participant.CarIndex == 2));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void MalformedCurrentDriverCounterPinsItsShapeWithoutUsingTeamPoints()
+    {
+        var metadata = IracingTestingRegistration.ReadIncidentMetadata(
+            SessionInfo.Replace(
+                "   TeamIncidentCount: 4",
+                "   CurDriverIncidentCount: nope\n   TeamIncidentCount: 4",
+                StringComparison.Ordinal).Replace(
+                    "   TeamIncidentCount: 9",
+                    "   CurDriverIncidentCount: nope\n   TeamIncidentCount: 9",
+                    StringComparison.Ordinal));
+
+        Assert.IsFalse(metadata.Participants.Any(participant => participant.CarIndex == 2));
+        var local = metadata.Participants.Single(participant => participant.CarIndex == 4);
+        Assert.AreEqual("car-index:4:user:404", local.Identity);
+        Assert.IsNull(local.IncidentCount);
     }
 
     [TestMethod]
@@ -113,6 +198,7 @@ public sealed class IncidentMetadataTests
            TeamID: 80
            UserID: 808
            TeamIncidentCount: -1
+           CurDriverIncidentCount: 3
          - CarIdx: 4
            TeamID: 0
            UserID: 404

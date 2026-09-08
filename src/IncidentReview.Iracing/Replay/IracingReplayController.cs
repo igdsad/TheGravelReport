@@ -79,7 +79,7 @@ internal sealed class IracingReplayController : IReplayController
         if (metadata.CameraGroups.Count == 0 ||
             metadata.CurrentSessionNumber is not { } currentSessionNumber ||
             available.Frame.LiveSessionNumber != currentSessionNumber ||
-            available.Frame.ReplaySessionNumber != currentSessionNumber)
+            available.Frame.ReplaySessionNumber is not { } replaySessionNumber)
         {
             return Result.Failure(IracingErrors.ReplayMetadataUnavailable);
         }
@@ -138,6 +138,7 @@ internal sealed class IracingReplayController : IReplayController
                 participant.Identity.Value,
                 target,
                 currentSessionNumber,
+                replaySessionNumber,
                 cameraGroupNumber),
             IracingErrors.ReplayCameraTimeout,
             cancellationToken).ConfigureAwait(false);
@@ -147,12 +148,13 @@ internal sealed class IracingReplayController : IReplayController
         ReplayFrameState frame,
         string identity,
         IracingReplayParticipantMetadata expectedTarget,
-        int expectedSessionNumber,
+        int expectedCurrentSessionNumber,
+        int expectedReplaySessionNumber,
         int expectedCameraGroupNumber)
     {
-        if (frame.Metadata.CurrentSessionNumber != expectedSessionNumber ||
-            frame.LiveSessionNumber != expectedSessionNumber ||
-            frame.ReplaySessionNumber != expectedSessionNumber ||
+        if (frame.Metadata.CurrentSessionNumber != expectedCurrentSessionNumber ||
+            frame.LiveSessionNumber != expectedCurrentSessionNumber ||
+            frame.ReplaySessionNumber != expectedReplaySessionNumber ||
             frame.CameraCarIndex != expectedTarget.CarIndex ||
             frame.CameraGroupNumber != expectedCameraGroupNumber)
         {
@@ -181,8 +183,15 @@ internal sealed class IracingReplayController : IReplayController
                 : null;
         }
 
+        if (!IracingParticipantIdentity.TryGetReplayFocusIdentity(
+                identity,
+                out var focusIdentity))
+        {
+            return null;
+        }
+
         return metadata.Participants.SingleOrDefault(participant =>
-            string.Equals(participant.Identity, identity, StringComparison.Ordinal));
+            string.Equals(participant.Identity, focusIdentity, StringComparison.Ordinal));
     }
 
     public async ValueTask<Result> SetPlaybackAsync(

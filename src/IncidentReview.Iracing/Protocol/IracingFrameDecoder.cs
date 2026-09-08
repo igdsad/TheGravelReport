@@ -70,7 +70,7 @@ internal static class IracingFrameDecoder
         var sessionKeyText = isDurable
             ? string.Create(
                 CultureInfo.InvariantCulture,
-                $"v1:subsession:{subSessionId!.Value}:session:{sessionNumber.Value.Value}")
+                $"v2:event:subsession:{subSessionId!.Value}")
             : connectionIdentity;
         var sessionKey = SimulatorSessionKey.TryCreate(sessionKeyText);
         var descriptor = SimulatorSessionDescriptor.TryCreate(
@@ -145,10 +145,12 @@ internal static class IracingFrameDecoder
                 isLocal &&
                 TryReadInt32(
                     snapshot,
-                    IracingProtocol.TeamIncidentCountVariable,
-                    out var localTeamIncidentCount))
+                    source.CounterSource == IracingIncidentCounterSource.CurrentDriver
+                        ? IracingProtocol.DriverIncidentCountVariable
+                        : IracingProtocol.TeamIncidentCountVariable,
+                    out var localIncidentCount))
             {
-                rawIncidentCount = localTeamIncidentCount;
+                rawIncidentCount = localIncidentCount;
             }
 
             if (rawIncidentCount is not { } incidentCountValue)

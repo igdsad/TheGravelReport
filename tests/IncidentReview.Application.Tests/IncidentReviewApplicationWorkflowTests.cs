@@ -19,6 +19,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
     private static readonly string[] SeekOnlyCommandOrder = ["seek"];
     private static readonly string[] SeekAndFocusCommandOrder = ["seek", "focus-player"];
     private static readonly string[] ReplayCameraGroups = ["Cockpit", "TV1"];
+    private static readonly int[] LeagueNightSessionNumbers = [2, 3];
+    private static readonly int[] ExpectedDriverSwapDeltas = [4, 2, 2];
     private static readonly ParticipantIdentity DefaultParticipantIdentity =
         ParticipantIdentity.TryCreate("local-player").Value;
     private static readonly IncidentParticipant DefaultParticipant = IncidentParticipant.TryCreate(
@@ -269,6 +271,119 @@ public sealed class IncidentReviewApplicationWorkflowTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-INC-003")]
+    [TestProperty("Requirement", "IR-UI-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task LeagueNightHeatsShareOneIncidentListAndRebaselineWithoutFalsePoints()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            sessionNumber: 2,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        var leagueNight = host.Store.Session!.Id;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_000,
+            sessionNumber: 2,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 100,
+            sessionNumber: 3,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 2);
+        Assert.AreEqual(1, host.Store.RecordAttemptCount);
+        Assert.AreEqual(1, host.Store.LastBaseline!.NextCheckpoint.CounterEpoch.Value);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 2,
+            time: 500,
+            sessionNumber: 3,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 2);
+
+        var snapshot = await host.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.AreEqual(leagueNight, snapshot.Value.ActiveSession!.Id);
+        Assert.HasCount(2, snapshot.Value.ActiveSession.Incidents);
+        CollectionAssert.AreEqual(
+            LeagueNightSessionNumbers,
+            snapshot.Value.ActiveSession.Incidents
+                .Select(static incident => incident.Position.SessionNumber.Value)
+                .ToArray());
+        Assert.AreEqual(1, host.Store.EnsureSessionCount);
+        Assert.AreEqual(1, host.Store.CheckpointQueryCount);
+
+        var review = await host.Service.ReviewIncidentAsync(
+            snapshot.Value.ActiveSession.Incidents[0].Id,
+            ReplayOffset.Zero,
+            CancellationToken.None);
+        Assert.IsTrue(review.IsSuccess);
+        Assert.AreEqual(2, host.Replay.LastSeek!.SessionNumber.Value);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-002")]
+    [TestProperty("Requirement", "IR-INC-003")]
+    [TestProperty("Requirement", "IR-STR-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task DurableLeagueEventResumesIntoAnotherHeatAfterApplicationRestart()
+    {
+        var store = new StatefulStore();
+        await using (var firstHeat = new TestHost(store))
+        {
+            await firstHeat.StartConnectedAsync();
+            await firstHeat.Telemetry.PublishAsync(CreateSample(
+                counter: 0,
+                time: 1_000,
+                scope: SimulatorIdentityScope.Durable,
+                sessionNumber: 2));
+            await WaitUntilAsync(() => store.BaselineCount == 1);
+            await firstHeat.Telemetry.PublishAsync(CreateSample(
+                counter: 4,
+                time: 2_000,
+                scope: SimulatorIdentityScope.Durable,
+                sessionNumber: 2));
+            await WaitUntilAsync(() => store.RecordAttemptCount == 1);
+            await firstHeat.StopAsync();
+        }
+
+        var leagueEvent = store.Session!.Id;
+        await using var secondHeat = new TestHost(store);
+        await secondHeat.StartConnectedAsync();
+        await secondHeat.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 100,
+            scope: SimulatorIdentityScope.Durable,
+            sessionNumber: 3));
+        await WaitUntilAsync(() => store.BaselineCount == 2);
+        await secondHeat.Telemetry.PublishAsync(CreateSample(
+            counter: 2,
+            time: 500,
+            scope: SimulatorIdentityScope.Durable,
+            sessionNumber: 3));
+        await WaitUntilAsync(() => store.RecordAttemptCount == 2);
+
+        var snapshot = await secondHeat.Service.GetSnapshotAsync(CancellationToken.None);
+
+        Assert.IsTrue(snapshot.IsSuccess);
+        Assert.AreEqual(leagueEvent, snapshot.Value.ActiveSession!.Id);
+        Assert.HasCount(2, snapshot.Value.ActiveSession.Incidents);
+        Assert.AreEqual(1, store.EnsureSessionCount);
+        Assert.AreEqual(2, store.CheckpointQueryCount);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-INC-006")]
     [TestProperty("Requirement", "IR-INC-007")]
     public async Task EqualCounterIncreasesForTwoParticipantsProduceTwoIncidents()
@@ -354,6 +469,70 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(2, incident.Points.Delta);
         Assert.AreEqual("Driver Two", incident.Participant.DriverName);
         Assert.AreEqual(originalDriver.Identity, incident.Participant.Identity);
+        Assert.AreEqual(2, host.Store.BaselineCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task DriverScopedSwapAndReturnResumeIndependentPureCounterStreams()
+    {
+        var firstDriver = CreateParticipant(
+            "car-index:4:team:41:driver-user:401",
+            "Driver One",
+            "Endurance Team",
+            "14");
+        var secondDriver = CreateParticipant(
+            "car-index:4:team:41:driver-user:402",
+            "Driver Two",
+            "Endurance Team",
+            "14");
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            incidentCounters: [CreateParticipantCounter(firstDriver, 0)]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            incidentCounters: [CreateParticipantCounter(firstDriver, 4)]));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 3_000,
+            incidentCounters: [CreateParticipantCounter(secondDriver, 0)]));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 2);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 4_000,
+            incidentCounters: [CreateParticipantCounter(secondDriver, 2)]));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 2);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 5_000,
+            incidentCounters: [CreateParticipantCounter(firstDriver, 4)]));
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 6_000,
+            incidentCounters: [CreateParticipantCounter(firstDriver, 6)]));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 3);
+
+        CollectionAssert.AreEqual(
+            new[] { firstDriver.Identity, secondDriver.Identity, firstDriver.Identity },
+            host.Store.RecordAttempts
+                .Select(static record => record.Incident.Participant.Identity)
+                .ToArray());
+        CollectionAssert.AreEqual(
+            ExpectedDriverSwapDeltas,
+            host.Store.RecordAttempts
+                .Select(static record => record.Incident.Points.Delta)
+                .ToArray());
         Assert.AreEqual(2, host.Store.BaselineCount);
     }
 
@@ -575,6 +754,58 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-RPY-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task AnotherHeatInMatchingDurableReplayUsesCachedLeagueNight()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            sessionNumber: 2));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 2_000,
+            scope: SimulatorIdentityScope.Durable,
+            sessionNumber: 2));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        var incident = host.Store.LastRecord!.Incident;
+        var sessionLookups = host.Store.SessionLookupCount;
+        var checkpointQueries = host.Store.CheckpointQueryCount;
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 4,
+            time: 100,
+            mode: SessionMode.Replay,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.NotOnTrack,
+            sessionNumber: 3));
+        await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Unavailable);
+
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(incident.Session, current.Value.Id);
+        Assert.AreEqual(sessionLookups, host.Store.SessionLookupCount);
+        Assert.AreEqual(checkpointQueries, host.Store.CheckpointQueryCount);
+
+        await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
+        await WaitUntilAsync(async () =>
+            (await host.Service.GetStatusAsync(CancellationToken.None)).Value ==
+            ReviewServiceStatus.Connected);
+        var review = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
+
+        Assert.IsTrue(review.IsSuccess);
+        Assert.AreEqual(2, host.Replay.LastSeek!.SessionNumber.Value);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
     public async Task DifferentConnectionKeyDoesNotMatchConnectionScopedReplay()
     {
         await using var host = new TestHost();
@@ -617,7 +848,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
     [TestMethod]
     [TestProperty("Requirement", "IR-SES-001")]
     [TestProperty("Requirement", "IR-RPY-003")]
-    public async Task DifferentConnectionScopedReplaySessionFailsClosed()
+    public async Task AnotherHeatInSameConnectionScopedReplayRetainsLeagueNight()
     {
         await using var host = new TestHost();
         await host.StartConnectedAsync();
@@ -639,8 +870,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
             ReviewServiceStatus.Unavailable);
 
         var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
-        Assert.IsFalse(current.IsSuccess);
-        Assert.AreEqual(ApplicationErrorCodes.NoCurrentSession, current.Error!.Code);
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(incident.Session, current.Value.Id);
 
         await host.Telemetry.PublishAsync(TelemetryConnected.Instance);
         await WaitUntilAsync(async () =>
@@ -648,10 +879,9 @@ public sealed class IncidentReviewApplicationWorkflowTests
             ReviewServiceStatus.Connected);
         var review = await host.Service.ReviewIncidentAsync(incident.Id, CancellationToken.None);
 
-        Assert.IsFalse(review.IsSuccess);
-        Assert.AreEqual(ApplicationErrorCodes.ReplaySessionNotLoaded, review.Error!.Code);
-        Assert.AreEqual(0, host.Replay.SeekCount);
-        Assert.AreEqual(0, host.Replay.PlaybackCount);
+        Assert.IsTrue(review.IsSuccess);
+        Assert.AreEqual(1, host.Replay.SeekCount);
+        Assert.AreEqual(1, host.Replay.PlaybackCount);
     }
 
     [TestMethod]
@@ -671,6 +901,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             time: 2_000,
             mode: SessionMode.Replay,
             onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "different-connection",
             sessionNumber: 3));
         await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
         var updates = await collected;
@@ -698,6 +929,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             time: 2_000,
             mode: SessionMode.Replay,
             onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "different-connection",
             sessionNumber: 3));
         await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
         await WaitUntilAsync(async () =>
@@ -1106,6 +1338,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             time: 2_200,
             mode: SessionMode.Replay,
             onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "different-connection",
             sessionNumber: 3));
         await host.Telemetry.PublishAsync(TelemetryUnavailable.Create(TestError));
         await WaitUntilAsync(async () =>
@@ -1533,6 +1766,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
             time: 2_200,
             mode: SessionMode.Replay,
             onTrackState: OnTrackState.NotOnTrack,
+            sessionKey: "different-connection",
             sessionNumber: 3));
         await WaitUntilAsync(async () =>
             !(await host.Service.GetCurrentSessionAsync(CancellationToken.None)).IsSuccess);

@@ -299,6 +299,37 @@ public sealed class ReplayControllerTests
     [TestMethod]
     [TestProperty("Requirement", "IR-RPY-001")]
     [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task FocusParticipantUsesStableTeamCarForDriverScopedCounterIdentity()
+    {
+        var context = IracingTestingRegistration.CreateReplayContext(
+            sessionInfo: OpponentReplaySessionInfo);
+        context.ObserveFrame(State(sessionInfo: OpponentReplaySessionInfo));
+        var opponent = IncidentParticipant.TryCreate(
+            ParticipantIdentity.TryCreate(
+                "car-index:2:team:22:driver-user:999").Value,
+            "Earlier Team Driver",
+            "Stored Team",
+            "display-only").Value;
+
+        var result = await context.Controller.FocusParticipantAsync(
+            opponent,
+            "TV1",
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(
+            new IracingTestReplayMessage(
+                Command: 1,
+                WParam: 1 | (12 << 16),
+                LParam: 2 | (20 << 16)),
+            context.Messages.Single());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-RPY-001")]
+    [TestProperty("Requirement", "IR-INC-006")]
     [TestProperty("Requirement", "QR-TST-001")]
     public async Task FocusParticipantRejectsPriorEntrantAfterExplicitIdentityChange()
     {
@@ -337,7 +368,7 @@ public sealed class ReplayControllerTests
     [TestProperty("Requirement", "IR-RPY-001")]
     [TestProperty("Requirement", "IR-INC-006")]
     [TestProperty("Requirement", "QR-TST-001")]
-    public async Task FocusParticipantRejectsMismatchedLiveOrReplaySessionMetadata()
+    public async Task FocusParticipantAllowsAnotherReplayHeatButRejectsStaleLiveMetadata()
     {
         var context = IracingTestingRegistration.CreateReplayContext(
             sessionInfo: OpponentReplaySessionInfo);
@@ -356,7 +387,7 @@ public sealed class ReplayControllerTests
             replaySessionNumber: 1,
             sessionInfo: OpponentReplaySessionInfo,
             liveSessionNumber: 0));
-        var replayMismatch = await context.Controller.FocusParticipantAsync(
+        var earlierHeat = await context.Controller.FocusParticipantAsync(
             opponent,
             "TV1",
             CancellationToken.None);
@@ -364,10 +395,8 @@ public sealed class ReplayControllerTests
         Assert.AreEqual(
             IracingErrorCodes.ReplayMetadataUnavailable,
             liveMismatch.Error?.Code);
-        Assert.AreEqual(
-            IracingErrorCodes.ReplayMetadataUnavailable,
-            replayMismatch.Error?.Code);
-        Assert.IsEmpty(context.Messages);
+        Assert.IsTrue(earlierHeat.IsSuccess);
+        Assert.HasCount(1, context.Messages);
     }
 
     [TestMethod]

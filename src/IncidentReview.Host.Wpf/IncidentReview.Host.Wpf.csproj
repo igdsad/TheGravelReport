@@ -11,6 +11,7 @@
     <ApplicationIcon>../../assets/branding/favicon-simplified.ico</ApplicationIcon>
     <AssemblyTitle>GravelReview</AssemblyTitle>
     <Product>GravelReview</Product>
+    <Version>0.0.2-alpha</Version>
   </PropertyGroup>
 
   <ItemGroup>

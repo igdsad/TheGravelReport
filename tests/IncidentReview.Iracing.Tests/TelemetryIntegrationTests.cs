@@ -54,7 +54,7 @@ public sealed class TelemetryIntegrationTests
         Assert.AreEqual(ObservedAt.ToUnixTimeMilliseconds(), initial.ObservedAt.UnixMilliseconds);
         Assert.AreEqual(SimulatorIdentityScope.Durable, initial.Session.IdentityScope);
         Assert.AreEqual(
-            "v1:subsession:987654321:session:2",
+            "v2:event:subsession:987654321",
             initial.Session.SessionKey.Value);
 
         await simulator.SendAsync("team-publish 10 13.999999");
@@ -77,7 +77,7 @@ public sealed class TelemetryIntegrationTests
             Counter(replay, "car-index:4:user:444").IncidentCounter.Value,
             "CurrentSessionNum is compared with live SessionNum, not ReplaySessionNum.");
         Assert.AreEqual(
-            "v1:subsession:987654321:session:5",
+            "v2:event:subsession:987654321",
             replay.Session.SessionKey.Value);
 
         await simulator.SendAsync("identity none");
@@ -140,6 +140,101 @@ public sealed class TelemetryIntegrationTests
         Assert.IsNull(sanitizedOpponent.Participant.DriverName);
         Assert.AreEqual("Opponent Team", sanitizedOpponent.Participant.TeamName);
         Assert.AreEqual("012", sanitizedOpponent.Participant.CarNumber);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task CurrentDriverCounterCoversOpponentWhenTeamCounterIsWithheld()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var source = CreateSource(simulator);
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+
+        await simulator.SendAsync("opponent-driver-publish 2 13.25");
+        var baseline = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        var baselineOpponent = Counter(
+            baseline,
+            "car-index:2:team:22:driver-user:222");
+        Assert.AreEqual(2, baselineOpponent.IncidentCounter.Value);
+
+        await simulator.SendAsync("opponent-driver-publish 3 13.5");
+        var increased = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        var opponent = Counter(
+            increased,
+            baselineOpponent.Participant.Identity.Value);
+
+        Assert.AreEqual(3, opponent.IncidentCounter.Value);
+        Assert.AreEqual("Opponent Driver", opponent.Participant.DriverName);
+        Assert.AreEqual("Opponent Team", opponent.Participant.TeamName);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-006")]
+    [TestProperty("Requirement", "IR-INC-007")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task LocalDriverScalarPreservesDriverScopeWhenYamlValueIsUnavailable()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var source = CreateSource(simulator);
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        _ = await NextAsync(observer);
+
+        await simulator.SendAsync("player-driver-scalar-publish 44 3 9 13.75");
+        var fallback = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        var player = Counter(
+            fallback,
+            "car-index:4:team:44:driver-user:444");
+
+        Assert.AreEqual(
+            3,
+            player.IncidentCounter.Value,
+            "Driver-scoped YAML must fall back to the matching driver scalar, not team points.");
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-INC-003")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task HeatNumbersShareOneDurableEventKey()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        var source = CreateSource(simulator);
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        _ = await NextAsync(observer);
+        var firstHeat = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+
+        await simulator.SendAsync("heat-publish 6 0 1.25");
+        var secondHeat = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+
+        Assert.AreEqual(2, firstHeat.Position.SessionNumber.Value);
+        Assert.AreEqual(6, secondHeat.Position.SessionNumber.Value);
+        Assert.AreEqual(firstHeat.Session.SessionKey, secondHeat.Session.SessionKey);
+        Assert.AreEqual("v2:event:subsession:987654321", secondHeat.Session.SessionKey.Value);
 
         await ((IAsyncDisposable)source).DisposeAsync();
     }
@@ -346,7 +441,7 @@ public sealed class TelemetryIntegrationTests
         var legacy = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
         Assert.AreEqual(
-            "v1:subsession:111222333:session:2",
+            "v2:event:subsession:111222333",
             legacy.Session.SessionKey.Value,
             "Without an Encoding: UTF8 signal, 0xE9 in René must decode as ISO-8859-1.");
 
@@ -354,7 +449,7 @@ public sealed class TelemetryIntegrationTests
         var utf8 = Assert.IsInstanceOfType<TelemetrySampleObserved>(
             await NextAsync(observer)).Sample;
         Assert.AreEqual(
-            "v1:subsession:444555666:session:2",
+            "v2:event:subsession:444555666",
             utf8.Session.SessionKey.Value,
             "The official UTF8 signal must select strict UTF-8 decoding.");
 

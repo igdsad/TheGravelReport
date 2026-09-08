@@ -31,8 +31,9 @@ public sealed record EstablishIncidentCheckpoint : IStoreCommand
               expectedCheckpoint.ParticipantIdentity != nextCheckpoint.ParticipantIdentity ||
               expectedCheckpoint.CounterEpoch.Value == int.MaxValue ||
               nextCheckpoint.CounterEpoch.Value != expectedCheckpoint.CounterEpoch.Value + 1 ||
-              nextCheckpoint.LastCounter.Value >= expectedCheckpoint.LastCounter.Value ||
-              nextCheckpoint.LastPosition.SessionNumber != expectedCheckpoint.LastPosition.SessionNumber)))
+              (nextCheckpoint.LastPosition.SessionNumber ==
+                   expectedCheckpoint.LastPosition.SessionNumber &&
+               nextCheckpoint.LastCounter.Value >= expectedCheckpoint.LastCounter.Value))))
         {
             return Result<EstablishIncidentCheckpoint>.Failure(StoreErrors.InvalidCommand);
         }

@@ -12,6 +12,7 @@ public sealed class IncidentTransitionDecisionTests
     {
         Assert.AreEqual("Initial", IncidentBaselineReason.Initial.ToString());
         Assert.AreEqual("SessionChanged", IncidentBaselineReason.SessionChanged.ToString());
+        Assert.AreEqual("HeatChanged", IncidentBaselineReason.HeatChanged.ToString());
         Assert.AreEqual("CounterReset", IncidentBaselineReason.CounterReset.ToString());
         Assert.AreNotEqual(IncidentBaselineReason.Initial, IncidentBaselineReason.CounterReset);
     }

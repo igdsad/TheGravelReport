@@ -767,9 +767,10 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         lock (_stateLock)
         {
             _replayDescriptor = null;
-            cachedSession = _activeSession?.Descriptor == sample.Session
-                ? _activeSession
-                : null;
+            cachedSession = _activeSession is { } activeSession &&
+                IsSameSimulatorEvent(activeSession.Descriptor, sample.Session)
+                    ? activeSession
+                    : null;
             if (cachedSession is not null && _currentSession != cachedSession.Id)
             {
                 _currentSession = cachedSession.Id;
@@ -838,7 +839,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
         }
 
-        if (resolved is null || resolved.Descriptor.SessionNumber != sample.Session.SessionNumber)
+        if (resolved is null || !IsSameSimulatorEvent(resolved.Descriptor, sample.Session))
         {
             SetUnavailable(StoreErrors.SessionIdentityConflict);
             return null;
@@ -885,12 +886,22 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         SessionIdentity? connectionScopedSession = null;
         lock (_stateLock)
         {
-            if (_replayDescriptor == sample.Session)
+            if (_replayDescriptor is not null &&
+                IsSameSimulatorEvent(_replayDescriptor, sample.Session))
             {
+                _replayDescriptor = sample.Session;
                 return true;
             }
 
             previousSession = _currentSession;
+            if (_activeSession is { } activeSession &&
+                IsSameSimulatorEvent(activeSession.Descriptor, sample.Session))
+            {
+                _replayDescriptor = sample.Session;
+                _currentSession = activeSession.Id;
+                return true;
+            }
+
             if (sample.Session.IdentityScope == SimulatorIdentityScope.ConnectionScoped)
             {
                 _replayDescriptor = sample.Session;
@@ -965,7 +976,7 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         activeSession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
         replaySession.Mode == SessionMode.Replay &&
         replaySession.IdentityScope == SimulatorIdentityScope.ConnectionScoped &&
-        IsSameSimulatorSession(activeSession, replaySession);
+        IsSameSimulatorEvent(activeSession, replaySession);
 
     private bool SampleMatchesCurrentSession(SimulatorSessionDescriptor sampleSession)
     {
@@ -977,18 +988,17 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         var activeSession = _activeSession;
         return (activeSession is not null &&
                 activeSession.Id == _currentSession &&
-                IsSameSimulatorSession(activeSession.Descriptor, sampleSession)) ||
+                IsSameSimulatorEvent(activeSession.Descriptor, sampleSession)) ||
             (_replayDescriptor is not null &&
-                IsSameSimulatorSession(_replayDescriptor, sampleSession));
+                IsSameSimulatorEvent(_replayDescriptor, sampleSession));
     }
 
-    private static bool IsSameSimulatorSession(
+    private static bool IsSameSimulatorEvent(
         SimulatorSessionDescriptor first,
         SimulatorSessionDescriptor second) =>
         first.IdentityScope == second.IdentityScope &&
         first.Simulator == second.Simulator &&
-        first.SessionKey == second.SessionKey &&
-        first.SessionNumber == second.SessionNumber;
+        first.SessionKey == second.SessionKey;
 
     private void PublishClearedSession(SessionIdentity? previousSession)
     {

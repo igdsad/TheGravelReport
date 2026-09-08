@@ -155,7 +155,7 @@ public sealed class ApplicationStoreContractTests
     [TestMethod]
     [TestProperty("Requirement", "IR-INC-003")]
     [TestProperty("Requirement", "IR-INC-005")]
-    public void BaselineCommandAllowsOnlyInitialOrExactCounterResetTransitions()
+    public void BaselineCommandAllowsInitialCounterResetOrNewHeatTransitions()
     {
         var session = SessionIdentity.Generate();
         var initial = CreateCheckpoint(session, counter: 4, epoch: 0, time: 1_000);
@@ -178,12 +178,12 @@ public sealed class ApplicationStoreContractTests
             session,
             ParticipantIdentity.TryCreate("participant-1").Value,
             CounterEpoch.TryCreate(1).Value,
-            IncidentCounter.TryCreate(1).Value,
+            IncidentCounter.TryCreate(5).Value,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(2).Value,
                 SessionTime.TryCreateMilliseconds(2_000).Value).Value,
             UtcInstant.TryCreateUnixMilliseconds(2_000).Value).Value;
-        AssertInvalidBaseline(initial, otherSessionNumber);
+        Assert.IsTrue(EstablishIncidentCheckpoint.TryCreate(initial, otherSessionNumber).IsSuccess);
     }
 
     [TestMethod]

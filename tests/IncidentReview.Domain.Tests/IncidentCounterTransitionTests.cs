@@ -185,12 +185,11 @@ public sealed class IncidentCounterTransitionTests
     [TestMethod]
     [TestProperty("Requirement", "IR-INC-003")]
     [TestProperty("Requirement", "IR-INC-005")]
-    [TestProperty("Requirement", "QR-ERR-001")]
     [TestProperty("Requirement", "QR-TST-001")]
     [DataRow(3)]
     [DataRow(4)]
     [DataRow(5)]
-    public void SameSessionReplaySessionMismatchAlwaysReturnsConflict(int observedCounter)
+    public void NewHeatAlwaysEstablishesANewBaselineWithoutAnIncident(int observedCounter)
     {
         var checkpoint = IncidentTransitionTestData.Checkpoint(
             counter: 4,
@@ -199,9 +198,31 @@ public sealed class IncidentCounterTransitionTests
             counter: observedCounter,
             replaySessionNumber: 2);
 
+        var decision = AssertBaseline(
+            IncidentCounterTransition.Evaluate(checkpoint, observation),
+            IncidentBaselineReason.HeatChanged);
+
+        AssertCheckpointMatchesObservation(decision.NextCheckpoint, observation, expectedEpoch: 1);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-003")]
+    [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "QR-ERR-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public void NewHeatAtMaximumEpochReturnsConflictInsteadOfWrapping()
+    {
+        var checkpoint = IncidentTransitionTestData.Checkpoint(
+            epoch: int.MaxValue,
+            counter: 4,
+            replaySessionNumber: 1);
+        var observation = IncidentTransitionTestData.Observation(
+            counter: 0,
+            replaySessionNumber: 2);
+
         AssertConflict(
             IncidentCounterTransition.Evaluate(checkpoint, observation),
-            "domain.incident-transition.session-number-mismatch");
+            "domain.incident-transition.counter-epoch-overflow");
     }
 
     [TestMethod]

@@ -130,9 +130,11 @@ public sealed class MainWindowReducerTests
             MainWindowReducer.InitialState,
             Snapshot(
                 revision: 1,
-                session: TestModelFactory.Session(sessionId, later, earlier)),
+                session: TestModelFactory.Session(sessionId, later, earlier),
+                driver: "Active Driver"),
             SnapshotRefreshMode.Automatic);
 
+        Assert.AreEqual("Active Driver", state.ActiveDriverName);
         Assert.AreEqual(earlier.Id, state.Incidents[0].Id);
         Assert.AreEqual(later.Id, state.Incidents[1].Id);
         Assert.AreEqual("Driver One", state.Incidents[0].DriverText);

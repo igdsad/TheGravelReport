@@ -26,6 +26,7 @@ internal static class IracingProtocol
     public const string SessionNumberVariable = "SessionNum";
     public const string SessionTimeVariable = "SessionTime";
     public const string TeamIncidentCountVariable = "PlayerCarTeamIncidentCount";
+    public const string DriverIncidentCountVariable = "PlayerCarDriverIncidentCount";
     public const string LapVariable = "Lap";
     public const string LapDistanceVariable = "LapDistPct";
     public const string IsOnTrackVariable = "IsOnTrack";

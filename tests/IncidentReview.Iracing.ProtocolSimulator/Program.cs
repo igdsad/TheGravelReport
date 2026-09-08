@@ -57,21 +57,23 @@ internal sealed class ProtocolSimulator : IDisposable
     private const int BufferDescriptorOffset = 48;
     private const int BufferDescriptorLength = 16;
     private const int BufferCount = 3;
-    private const int VariableCount = 10;
+    private const int VariableCount = 11;
 
     private readonly MemoryMappedFile _mapping;
     private readonly MemoryMappedViewAccessor _view;
     private readonly EventWaitHandle _dataEvent;
     private int _incidentCounter = 4;
     private int _teamIncidentCounter = 9;
+    private int _playerDriverIncidentCounter = 9;
     private int _opponentIncidentCounter = 2;
+    private int _opponentDriverIncidentCounter = 2;
     private string _opponentDriverName = "Opponent Driver";
     private int _opponentTeamId = 22;
     private int _opponentUserId = 222;
     private int _playerTeamId;
     private int _playerUserId = 444;
     private readonly int _lap = 7;
-    private readonly int _sessionNumber = 2;
+    private int _sessionNumber = 2;
     private int _replaySessionNumber = 3;
     private int _tick = 1;
     private int _currentBuffer;
@@ -86,7 +88,9 @@ internal sealed class ProtocolSimulator : IDisposable
     private int _sessionInfoUpdate = 1;
     private int _sessionInfoCurrentSessionNumber = 2;
     private bool _reverseRoster;
+    private bool _omitOpponentTeamIncidentCount;
     private bool _omitPlayerRosterIncidentCount;
+    private bool _exposeUnavailablePlayerDriverIncidentCount;
     private SessionTextEncoding _sessionTextEncoding = SessionTextEncoding.Utf8;
 
     public ProtocolSimulator(string mappingName, string eventName)
@@ -138,7 +142,23 @@ internal sealed class ProtocolSimulator : IDisposable
             case "opponent-publish" when parts.Length == 3:
                 _isReplayPlaying = false;
                 _opponentIncidentCounter = ParseInt32(parts[1]);
+                _opponentDriverIncidentCounter = _opponentIncidentCounter;
                 _sessionSeconds = ParseDouble(parts[2]);
+                PublishSessionInformationChange();
+                break;
+            case "opponent-driver-publish" when parts.Length == 3:
+                _isReplayPlaying = false;
+                _omitOpponentTeamIncidentCount = true;
+                _opponentDriverIncidentCounter = ParseInt32(parts[1]);
+                _sessionSeconds = ParseDouble(parts[2]);
+                PublishSessionInformationChange();
+                break;
+            case "heat-publish" when parts.Length == 4:
+                _isReplayPlaying = false;
+                _sessionNumber = ParseInt32(parts[1]);
+                _sessionInfoCurrentSessionNumber = _sessionNumber;
+                _teamIncidentCounter = ParseInt32(parts[2]);
+                _sessionSeconds = ParseDouble(parts[3]);
                 PublishSessionInformationChange();
                 break;
             case "opponent-evidence-publish" when parts.Length == 5:
@@ -155,6 +175,15 @@ internal sealed class ProtocolSimulator : IDisposable
                 _playerUserId = ParseInt32(parts[2]);
                 _teamIncidentCounter = ParseInt32(parts[3]);
                 _sessionSeconds = ParseDouble(parts[4]);
+                PublishSessionInformationChange();
+                break;
+            case "player-driver-scalar-publish" when parts.Length == 5:
+                _isReplayPlaying = false;
+                _playerTeamId = ParseInt32(parts[1]);
+                _playerDriverIncidentCounter = ParseInt32(parts[2]);
+                _teamIncidentCounter = ParseInt32(parts[3]);
+                _sessionSeconds = ParseDouble(parts[4]);
+                _exposeUnavailablePlayerDriverIncidentCount = true;
                 PublishSessionInformationChange();
                 break;
             case "omit-player-roster-counter" when parts.Length == 1:
@@ -322,6 +351,7 @@ internal sealed class ProtocolSimulator : IDisposable
         WriteVariableHeader(7, type: 1, valueOffset: 33, "IsReplayPlaying");
         WriteVariableHeader(8, type: 2, valueOffset: 36, "ReplaySessionNum");
         WriteVariableHeader(9, type: 5, valueOffset: 40, "ReplaySessionTime");
+        WriteVariableHeader(10, type: 2, valueOffset: 48, "PlayerCarDriverIncidentCount");
     }
 
     private void WriteSessionInfo(bool publishVersion = true)
@@ -337,17 +367,30 @@ internal sealed class ProtocolSimulator : IDisposable
         var paceCar = string.Create(
             CultureInfo.InvariantCulture,
             $" - CarIdx: 0\n   UserName: Pace Car\n   TeamID: 0\n   UserID: 0\n   TeamName: Pace Car\n   CarNumber: \"0\"\n   CarNumberRaw: 0\n   CarIsPaceCar: 1\n   IsSpectator: 0\n   TeamIncidentCount: 0\n");
+        var opponentTeamIncidentCounter = _omitOpponentTeamIncidentCount
+            ? "   TeamIncidentCount: -1\n"
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"   TeamIncidentCount: {_opponentIncidentCounter}\n");
+        var opponentCurrentDriverIncidentCounter = _omitOpponentTeamIncidentCount
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"   CurDriverIncidentCount: {_opponentDriverIncidentCounter}\n")
+            : string.Empty;
         var opponent = string.Create(
             CultureInfo.InvariantCulture,
-            $" - CarIdx: 2\n   UserName: {_opponentDriverName}\n   TeamID: {_opponentTeamId}\n   UserID: {_opponentUserId}\n   TeamName: Opponent Team\n   CarNumber: \"012\"\n   CarNumberRaw: 12\n   CarIsPaceCar: 0\n   IsSpectator: 0\n   TeamIncidentCount: {_opponentIncidentCounter}\n");
+            $" - CarIdx: 2\n   UserName: {_opponentDriverName}\n   TeamID: {_opponentTeamId}\n   UserID: {_opponentUserId}\n   TeamName: Opponent Team\n   CarNumber: \"012\"\n   CarNumberRaw: 12\n   CarIsPaceCar: 0\n   IsSpectator: 0\n{opponentCurrentDriverIncidentCounter}{opponentTeamIncidentCounter}");
         var playerIncidentCounter = _omitPlayerRosterIncidentCount
             ? string.Empty
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"   TeamIncidentCount: {_teamIncidentCounter}\n");
+        var playerDriverIncidentCounter = _exposeUnavailablePlayerDriverIncidentCount
+            ? "   CurDriverIncidentCount: -1\n"
+            : string.Empty;
         var player = string.Create(
             CultureInfo.InvariantCulture,
-            $" - CarIdx: 4\n   UserName: René Test Driver\n   TeamID: {_playerTeamId}\n   UserID: {_playerUserId}\n   TeamName: Local Team\n   CarNumber: \"023\"\n   CarNumberRaw: 23\n   CarIsPaceCar: 0\n   IsSpectator: 0\n{playerIncidentCounter}");
+            $" - CarIdx: 4\n   UserName: René Test Driver\n   TeamID: {_playerTeamId}\n   UserID: {_playerUserId}\n   TeamName: Local Team\n   CarNumber: \"023\"\n   CarNumberRaw: 23\n   CarIsPaceCar: 0\n   IsSpectator: 0\n{playerDriverIncidentCounter}{playerIncidentCounter}");
         var spectator = string.Create(
             CultureInfo.InvariantCulture,
             $" - CarIdx: 5\n   UserName: Spectator\n   TeamID: 0\n   UserID: 555\n   TeamName: Spectator Team\n   CarNumber: \"5\"\n   CarNumberRaw: 5\n   CarIsPaceCar: 0\n   IsSpectator: 1\n   TeamIncidentCount: 7\n");
@@ -424,6 +467,9 @@ internal sealed class ProtocolSimulator : IDisposable
         BinaryPrimitives.WriteInt64LittleEndian(
             frame.AsSpan(40, 8),
             BitConverter.DoubleToInt64Bits(_replaySessionSeconds));
+        BinaryPrimitives.WriteInt32LittleEndian(
+            frame.AsSpan(48, 4),
+            _playerDriverIncidentCounter);
         _view.WriteArray(CurrentFrameOffset, frame, 0, frame.Length);
     }
 

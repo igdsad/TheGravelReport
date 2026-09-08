@@ -126,14 +126,28 @@ internal static class IracingSessionInfoDecoder
                 return new IracingIncidentMetadata(currentSessionNumber, playerCarIndex, []);
             }
 
-            var hasUsableIncidentCount = TryGetOptionalInteger(
+            var hasValidTeamIncidentCount = TryGetOptionalInteger(
                 driverLines,
                 index + 1,
                 entryEnd,
                 line.Indent + 1,
                 "TeamIncidentCount",
-                allowNegative: false,
-                out var incidentCount);
+                allowNegative: true,
+                out var teamIncidentCount);
+            var hasValidCurrentDriverIncidentCount = TryGetOptionalInteger(
+                driverLines,
+                index + 1,
+                entryEnd,
+                line.Indent + 1,
+                "CurDriverIncidentCount",
+                allowNegative: true,
+                out var currentDriverIncidentCount);
+            var hasCurrentDriverIncidentCountField = ContainsKey(
+                driverLines,
+                index + 1,
+                entryEnd,
+                line.Indent + 1,
+                "CurDriverIncidentCount");
             if (!TryGetOptionalBoolean(
                     driverLines,
                     index + 1,
@@ -174,7 +188,25 @@ internal static class IracingSessionInfoDecoder
                 continue;
             }
 
-            if ((!hasUsableIncidentCount || incidentCount is null) &&
+            if (!IracingParticipantIdentity.TrySelectCounter(
+                carIndex,
+                identity,
+                teamId,
+                userId,
+                hasValidTeamIncidentCount,
+                teamIncidentCount,
+                hasCurrentDriverIncidentCountField,
+                hasValidCurrentDriverIncidentCount,
+                currentDriverIncidentCount,
+                out var selectedIdentity,
+                out var incidentCount,
+                out var counterSource))
+            {
+                index = entryEnd - 1;
+                continue;
+            }
+
+            if (incidentCount is null &&
                 playerCarIndex != carIndex)
             {
                 index = entryEnd - 1;
@@ -192,8 +224,9 @@ internal static class IracingSessionInfoDecoder
 
             participants.Add(new IracingParticipantIncidentMetadata(
                 carIndex,
-                identity,
-                hasUsableIncidentCount ? incidentCount : null,
+                selectedIdentity,
+                incidentCount,
+                counterSource,
                 teamId,
                 userId,
                 ReadOptionalScalar(
@@ -379,7 +412,9 @@ internal static class IracingSessionInfoDecoder
                 "UserID",
                 allowNegative: true,
                 out userId);
-            identity = $"car-index:{carIndex}:team:{teamId.Value}";
+            identity = IracingParticipantIdentity.CreateTeamScoped(
+                carIndex,
+                teamId.Value);
             return true;
         }
 
@@ -396,7 +431,9 @@ internal static class IracingSessionInfoDecoder
             return false;
         }
 
-        identity = $"car-index:{carIndex}:user:{userId.Value}";
+        identity = IracingParticipantIdentity.CreateUserScoped(
+            carIndex,
+            userId.Value);
         return true;
     }
 
@@ -896,6 +933,27 @@ internal static class IracingSessionInfoDecoder
 
         value = raw == 1;
         return true;
+    }
+
+    private static bool ContainsKey(
+        IReadOnlyList<YamlLine> lines,
+        int start,
+        int end,
+        int minimumIndent,
+        string key)
+    {
+        for (var index = start; index < end; index++)
+        {
+            var line = lines[index];
+            if (!line.IsSequence &&
+                line.Indent >= minimumIndent &&
+                string.Equals(line.Key, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? ReadOptionalScalar(

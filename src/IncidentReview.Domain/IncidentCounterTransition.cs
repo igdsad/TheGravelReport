@@ -9,11 +9,6 @@ public static class IncidentCounterTransition
         "domain.incident-transition.invalid-observation",
         "An incident-counter transition requires a validated observation.");
 
-    private static readonly Error SessionNumberMismatchError = Error.Create(
-        ErrorCode.Define("domain.incident-transition.session-number-mismatch"),
-        ErrorKind.Conflict,
-        "The same application session cannot change replay session number.");
-
     private static readonly Error ParticipantMismatchError = Error.Create(
         ErrorCode.Define("domain.incident-transition.participant-mismatch"),
         ErrorKind.Conflict,
@@ -56,7 +51,15 @@ public static class IncidentCounterTransition
 
         if (checkpoint.LastPosition.SessionNumber != observation.Position.SessionNumber)
         {
-            return Result<IncidentTransitionDecision>.Failure(SessionNumberMismatchError);
+            if (checkpoint.CounterEpoch.Value == int.MaxValue)
+            {
+                return Result<IncidentTransitionDecision>.Failure(CounterEpochOverflowError);
+            }
+
+            return EstablishBaseline(
+                observation,
+                IncidentBaselineReason.HeatChanged,
+                checkpoint.CounterEpoch.Value + 1);
         }
 
         if (checkpoint.LastCounter == observation.IncidentCounter)
