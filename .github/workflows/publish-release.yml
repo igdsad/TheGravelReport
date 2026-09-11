@@ -115,6 +115,9 @@ jobs:
                       --configuration Release `
                       --no-restore `
                       --no-build `
+                      --no-ansi `
+                      --no-progress `
+                      --minimum-expected-tests 712 `
                       --filter "FullyQualifiedName!=$excludedTest" *>&1 |
                       Tee-Object -FilePath $logPath
                   if ($LASTEXITCODE -ne 0) {
@@ -163,57 +166,104 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          $serverArchive =
-              "artifacts/release/linux-x64/GravelReview-server-linux-x64-$($env:RELEASE_TAG).tar.gz"
-          $serverChecksum = "$serverArchive.sha256"
+          function Invoke-GitHubCli {
+              param(
+                  [Parameter(Mandatory)]
+                  [string] $Description,
 
-          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -ne 0) {
-              $releaseArguments = @(
-                  "release", "create", $env:RELEASE_TAG,
-                  "--repo", $env:GITHUB_REPOSITORY,
-                  "--verify-tag",
-                  "--title", "GravelReview $env:RELEASE_TAG",
-                  "--notes-from-tag"
+                  [Parameter(Mandatory)]
+                  [string[]] $ArgumentList
               )
-              if ($env:RELEASE_TAG.Contains("-")) {
-                  $releaseArguments += "--prerelease"
+
+              $output = @(& gh @ArgumentList 2>&1)
+              $exitCode = $LASTEXITCODE
+              $output | Write-Host
+              if ($exitCode -ne 0) {
+                  throw "$Description exited with code $exitCode.`n$($output -join "`n")"
               }
 
-              & gh @releaseArguments
-              if ($LASTEXITCODE -ne 0) {
-                  throw "The GitHub release could not be created."
+              return $output
+          }
+
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+              $serverArchive =
+                  "artifacts/release/linux-x64/GravelReview-server-linux-x64-$($env:RELEASE_TAG).tar.gz"
+              $serverChecksum = "$serverArchive.sha256"
+
+              $releaseTags = @(
+                  Invoke-GitHubCli `
+                      -Description 'GitHub release lookup' `
+                      -ArgumentList @(
+                          'release', 'list',
+                          '--repo', $env:GITHUB_REPOSITORY,
+                          '--limit', '100',
+                          '--json', 'tagName',
+                          '--jq', '.[].tagName'
+                      )
+              )
+              if ($env:RELEASE_TAG -notin $releaseTags) {
+                  $releaseArguments = @(
+                      'release', 'create', $env:RELEASE_TAG,
+                      '--repo', $env:GITHUB_REPOSITORY,
+                      '--verify-tag',
+                      '--title', "GravelReview $env:RELEASE_TAG",
+                      '--notes-from-tag'
+                  )
+                  if ($env:RELEASE_TAG.Contains('-')) {
+                      $releaseArguments += '--prerelease'
+                  }
+
+                  Invoke-GitHubCli `
+                      -Description 'GitHub release creation' `
+                      -ArgumentList $releaseArguments |
+                      Out-Null
+              }
+
+              Invoke-GitHubCli `
+                  -Description 'GitHub release asset upload' `
+                  -ArgumentList @(
+                      'release', 'upload', $env:RELEASE_TAG,
+                      'artifacts/release/win-x64/GravelReview-win-x64.exe',
+                      'artifacts/release/win-x64/GravelReview-win-x64.zip',
+                      $serverArchive,
+                      $serverChecksum,
+                      '--repo', $env:GITHUB_REPOSITORY,
+                      '--clobber'
+                  ) |
+                  Out-Null
+
+              $expectedAssets = @(
+                  'GravelReview-win-x64.exe',
+                  'GravelReview-win-x64.zip',
+                  (Split-Path -Leaf $serverArchive),
+                  (Split-Path -Leaf $serverChecksum)
+              )
+              $actualAssets = @(
+                  Invoke-GitHubCli `
+                      -Description 'GitHub release asset verification' `
+                      -ArgumentList @(
+                          'release', 'view', $env:RELEASE_TAG,
+                          '--repo', $env:GITHUB_REPOSITORY,
+                          '--json', 'assets',
+                          '--jq', '.assets[].name'
+                      )
+              )
+              $missingAssets = @(
+                  $expectedAssets | Where-Object { $_ -notin $actualAssets }
+              )
+              if ($missingAssets.Count -ne 0) {
+                  throw "The published release is missing: $($missingAssets -join ', ')."
               }
           }
+          catch {
+              $diagnostic = $_ | Out-String
+              if ($diagnostic.Length -gt 6000) {
+                  $diagnostic = $diagnostic.Substring($diagnostic.Length - 6000)
+              }
 
-          gh release upload $env:RELEASE_TAG `
-              artifacts/release/win-x64/GravelReview-win-x64.exe `
-              artifacts/release/win-x64/GravelReview-win-x64.zip `
-              $serverArchive `
-              $serverChecksum `
-              --repo $env:GITHUB_REPOSITORY `
-              --clobber
-          if ($LASTEXITCODE -ne 0) {
-              throw "The release assets could not be uploaded."
-          }
-
-          $expectedAssets = @(
-              "GravelReview-win-x64.exe",
-              "GravelReview-win-x64.zip",
-              (Split-Path -Leaf $serverArchive),
-              (Split-Path -Leaf $serverChecksum)
-          )
-          $actualAssets = @(
-              gh release view $env:RELEASE_TAG `
-                  --repo $env:GITHUB_REPOSITORY `
-                  --json assets `
-                  --jq '.assets[].name'
-          )
-          if ($LASTEXITCODE -ne 0) {
-              throw "The published release assets could not be verified."
-          }
-
-          $missingAssets = @($expectedAssets | Where-Object { $_ -notin $actualAssets })
-          if ($missingAssets.Count -ne 0) {
-              throw "The published release is missing: $($missingAssets -join ', ')."
+              $diagnostic = $diagnostic.Replace('%', '%25')
+              $diagnostic = $diagnostic.Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error title=Release publication failed::$diagnostic"
+              exit 1
           }
