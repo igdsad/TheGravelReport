@@ -340,7 +340,6 @@ jobs:
               if ($env:RELEASE_TAG -notin $releaseTags) {
                   $releaseArguments = @(
                       'release', 'create', $env:RELEASE_TAG,
-                      '--repo', $env:GITHUB_REPOSITORY,
                       '--verify-tag',
                       '--title', "GravelReview $env:RELEASE_TAG",
                       '--notes-from-tag'
