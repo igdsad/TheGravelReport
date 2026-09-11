@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using IncidentReview.Application.Contracts;
 using IncidentReview.Application.DependencyInjection;
 using IncidentReview.Domain;
+using IncidentReview.EventSync.Contracts;
 using IncidentReview.Replay.Contracts;
 using IncidentReview.Results;
 using IncidentReview.Store.Contracts;
@@ -28,6 +29,317 @@ public sealed class IncidentReviewApplicationWorkflowTests
         "Test Driver",
         "Test Team",
         "01").Value;
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-EVT-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task CustomEventCreationRecordsPendingDeterministicIdentityAndConfiguredSubmitter()
+    {
+        var store = new StatefulStore
+        {
+            Preferences = UserPreferences.TryCreateMilliseconds(
+                replayLeadInMilliseconds: 3_000,
+                playbackSpeed: 1,
+                autoPause: true,
+                preferredCamera: null,
+                submitterName: "  Alex Driver  ").Value,
+        };
+        var publisher = new RecordingCustomEventPublisher();
+        await using var host = new TestHost(store: store, customEventPublisher: publisher);
+        await host.StartConnectedAsync();
+        var observed = CreateSample(counter: 0, time: 1_000, onTrackState: OnTrackState.OnTrack);
+        await host.Telemetry.PublishAsync(observed);
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+
+        var result = await host.Service.CreateCustomEventAsync(CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.HasCount(1, host.Store.CustomEvents);
+        var recorded = host.Store.CustomEvents[0];
+        Assert.AreEqual(
+            CustomEventId.CreateDeterministic(host.Store.Session!.Id, observed.Sample.Position),
+            recorded.Id);
+        Assert.AreEqual("Alex Driver", recorded.Submitter.Value);
+        Assert.AreEqual(observed.Sample.Position, recorded.Position);
+        Assert.IsInstanceOfType<CustomEventSynchronization.Pending>(recorded.Synchronization);
+        Assert.AreEqual(0, publisher.PublishCount);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-EVT-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task CustomEventCreationUsesCurrentTelemetrySnapshotInsteadOfOlderObservedSample()
+    {
+        var store = new StatefulStore
+        {
+            Preferences = UserPreferences.TryCreateMilliseconds(
+                replayLeadInMilliseconds: 3_000,
+                playbackSpeed: 1,
+                autoPause: true,
+                preferredCamera: null,
+                submitterName: "Alex Driver").Value,
+        };
+        var olderObserved = CreateSample(
+            counter: 0,
+            time: 1_000,
+            onTrackState: OnTrackState.OnTrack);
+        var currentSnapshot = CreateSample(
+            counter: 0,
+            time: 9_000,
+            onTrackState: OnTrackState.OnTrack).Sample;
+        var currentTelemetry = new RecordingCurrentTelemetryReader(currentSnapshot);
+        await using var host = new TestHost(
+            store: store,
+            currentTelemetryReader: currentTelemetry);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(olderObserved);
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+
+        var result = await host.Service.CreateCustomEventAsync(CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(1, currentTelemetry.ReadCount);
+        Assert.HasCount(1, host.Store.CustomEvents);
+        var recorded = host.Store.CustomEvents[0];
+        Assert.AreEqual(currentSnapshot.Position, recorded.Position);
+        Assert.AreNotEqual(olderObserved.Sample.Position, recorded.Position);
+        Assert.AreEqual(
+            CustomEventId.CreateDeterministic(host.Store.Session!.Id, currentSnapshot.Position),
+            recorded.Id);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SYNC-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task SharedServerJoinCodeUsesTheCurrentDeterministicSessionIdentity()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            sessionKey: "v1:subsession:321:session:2"));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+
+        var result = await host.Service.CreateCustomEventJoinCodeAsync(
+            new Uri("http://138.197.164.63:5088"),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess, result.Error?.ToString());
+        var parsed = JoinCode.TryParse(result.Value);
+        Assert.IsTrue(parsed.IsSuccess, parsed.Error?.ToString());
+        Assert.AreEqual(new Uri("http://138.197.164.63:5088/"), parsed.Value.ServerBaseUri);
+        Assert.AreEqual(host.Store.Session!.Id, parsed.Value.SessionIdentity);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SYNC-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task PendingCustomEventsStayLocalUntilExplicitNotOnTrackSample()
+    {
+        var simulator = SimulatorCode.TryCreate("iracing").Value;
+        var sessionKey = SimulatorSessionKey.TryCreate("test-session").Value;
+        var sessionIdentity = SessionIdentity.CreateDurable(simulator, sessionKey);
+        var joinCode = JoinCode.TryCreate(
+            new Uri("http://127.0.0.1:5088/", UriKind.Absolute),
+            sessionIdentity).Value;
+        var store = new StatefulStore
+        {
+            Preferences = UserPreferences.TryCreateMilliseconds(
+                replayLeadInMilliseconds: 3_000,
+                playbackSpeed: 1,
+                autoPause: true,
+                preferredCamera: null,
+                submitterName: "Alex Driver",
+                eventJoinCode: joinCode.Value).Value,
+        };
+        var publisher = new RecordingCustomEventPublisher();
+        await using var host = new TestHost(store: store, customEventPublisher: publisher);
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.OnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        Assert.IsTrue((await host.Service.CreateCustomEventAsync(CancellationToken.None)).IsSuccess);
+        Assert.AreEqual(0, publisher.PublishCount);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 1,
+            time: 2_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.Unknown));
+        await WaitUntilAsync(() => host.Store.RecordAttemptCount == 1);
+        Assert.IsTrue((await host.Service.CreateCustomEventAsync(CancellationToken.None)).IsSuccess);
+        Assert.AreEqual(0, publisher.PublishCount);
+        Assert.HasCount(2, host.Store.PendingCustomEvents);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 1,
+            time: 3_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.NotOnTrack));
+
+        await WaitUntilAsync(() => publisher.PublishCount == 2);
+        Assert.HasCount(2, host.Store.CustomEvents);
+        Assert.IsEmpty(host.Store.PendingCustomEvents);
+        Assert.IsTrue(host.Store.CustomEvents.All(customEvent =>
+            customEvent.Synchronization is CustomEventSynchronization.Synchronized));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SYNC-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task ReturningOnTrackCancelsAnActivePublishAndRetriesNextTimeOutOfCar()
+    {
+        var simulator = SimulatorCode.TryCreate("iracing").Value;
+        var sessionKey = SimulatorSessionKey.TryCreate("test-session").Value;
+        var sessionIdentity = SessionIdentity.CreateDurable(simulator, sessionKey);
+        var joinCode = JoinCode.TryCreate(
+            new Uri("http://127.0.0.1:5088/", UriKind.Absolute),
+            sessionIdentity).Value;
+        var store = new StatefulStore
+        {
+            Preferences = UserPreferences.TryCreateMilliseconds(
+                replayLeadInMilliseconds: 3_000,
+                playbackSpeed: 1,
+                autoPause: true,
+                preferredCamera: null,
+                submitterName: "Alex Driver",
+                eventJoinCode: joinCode.Value).Value,
+        };
+        var publisher = new CancelFirstCustomEventPublisher();
+        await using var host = new TestHost(store: store, customEventPublisher: publisher);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.OnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+        Assert.IsTrue((await host.Service.CreateCustomEventAsync(CancellationToken.None)).IsSuccess);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 2_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.NotOnTrack));
+        await publisher.FirstPublishStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 3_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.OnTrack));
+        await publisher.FirstPublishCanceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.HasCount(1, host.Store.PendingCustomEvents);
+        Assert.AreEqual(1, publisher.PublishCount);
+
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 4_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.NotOnTrack));
+        await WaitUntilAsync(() => publisher.PublishCount == 2);
+        await WaitUntilAsync(() => host.Store.PendingCustomEvents.Length == 0);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SYNC-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task ReceivedDuplicateUsesFirstDeterministicIdentityWinner()
+    {
+        await using var host = new TestHost();
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.OnTrack));
+        await WaitUntilAsync(() => host.Store.BaselineCount == 1);
+
+        var session = host.Store.Session!.Id;
+        var position = ReplayPosition.TryCreate(
+            SessionNumber.TryCreate(2).Value,
+            SessionTime.TryCreateMilliseconds(4_000).Value).Value;
+        var eventId = CustomEventId.CreateDeterministic(session, position);
+        var first = CustomEventSubmission.TryCreate(
+            eventId,
+            session,
+            position,
+            SubmitterName.TryCreate("First Driver").Value,
+            UtcInstant.TryCreateUnixMilliseconds(19_000).Value).Value;
+        var duplicate = CustomEventSubmission.TryCreate(
+            eventId,
+            session,
+            position,
+            SubmitterName.TryCreate("Later Driver").Value,
+            UtcInstant.TryCreateUnixMilliseconds(19_500).Value).Value;
+
+        var accepted = await host.CustomEventReceiver.ReceiveAsync(first, CancellationToken.None);
+        var rejected = await host.CustomEventReceiver.ReceiveAsync(duplicate, CancellationToken.None);
+
+        Assert.IsTrue(accepted.IsSuccess);
+        Assert.AreEqual(CustomEventPublishOutcome.Accepted, accepted.Value);
+        Assert.IsTrue(rejected.IsSuccess);
+        Assert.AreEqual(CustomEventPublishOutcome.Duplicate, rejected.Value);
+        Assert.HasCount(1, host.Store.CustomEvents);
+        var winner = host.Store.CustomEvents[0];
+        Assert.AreEqual(eventId, winner.Id);
+        Assert.AreEqual("First Driver", winner.Submitter.Value);
+        Assert.AreEqual(first.OccurredAt, winner.OccurredAt);
+        Assert.IsInstanceOfType<CustomEventSynchronization.Synchronized>(winner.Synchronization);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SYNC-002")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task StoreLevelReceivedRaceReturnsDuplicateAndKeepsCommittedWinner()
+    {
+        var store = new StatefulStore();
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+        await host.Telemetry.PublishAsync(CreateSample(
+            counter: 0,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable,
+            onTrackState: OnTrackState.OnTrack));
+        await WaitUntilAsync(() => store.BaselineCount == 1);
+
+        var session = store.Session!.Id;
+        var position = ReplayPosition.TryCreate(
+            SessionNumber.TryCreate(2).Value,
+            SessionTime.TryCreateMilliseconds(4_500).Value).Value;
+        var occurredAt = UtcInstant.TryCreateUnixMilliseconds(19_000).Value;
+        var synchronizedAt = UtcInstant.TryCreateUnixMilliseconds(19_100).Value;
+        var winner = StoredCustomEvent.Create(
+            CustomEventId.CreateDeterministic(session, position),
+            session,
+            position,
+            SubmitterName.TryCreate("Race Winner").Value,
+            occurredAt,
+            CustomEventSynchronization.Synchronized.Create(synchronizedAt));
+        store.ReceivedConflictWinner = winner;
+        var arriving = CustomEventSubmission.TryCreate(
+            winner.Id,
+            session,
+            position,
+            SubmitterName.TryCreate("Later Driver").Value,
+            UtcInstant.TryCreateUnixMilliseconds(19_050).Value).Value;
+
+        var result = await host.CustomEventReceiver.ReceiveAsync(
+            arriving,
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess, result.Error?.ToString());
+        Assert.AreEqual(CustomEventPublishOutcome.Duplicate, result.Value);
+        Assert.HasCount(1, store.CustomEvents);
+        Assert.AreEqual(winner, store.CustomEvents[0]);
+    }
 
     [TestMethod]
     [TestProperty("Requirement", "IR-UI-001")]
@@ -420,6 +732,16 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 .ToArray());
         Assert.IsTrue(host.Store.RecordAttempts.All(record =>
             record.Incident.Points.Total == 2 && record.Incident.Points.Delta == 2));
+        var session = host.Store.Session!.Id;
+        Assert.IsTrue(host.Store.RecordAttempts.All(record =>
+            record.Incident.Id == IncidentId.CreateDetected(
+                session,
+                record.Incident.Participant.Identity,
+                record.Incident.CounterEpoch,
+                record.Incident.Points)));
+        Assert.AreNotEqual(
+            host.Store.RecordAttempts[0].Incident.Id,
+            host.Store.RecordAttempts[1].Incident.Id);
     }
 
     [TestMethod]
@@ -650,6 +972,39 @@ public sealed class IncidentReviewApplicationWorkflowTests
         Assert.AreEqual(2, store.BaselineCount);
         Assert.AreEqual(second.Identity, store.LastRecord!.Incident.Participant.Identity);
         Assert.AreEqual(2, store.LastRecord.Incident.Points.Delta);
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-SES-002")]
+    public async Task LiveResolutionPromotesLegacyDurableSessionToDeterministicIdentity()
+    {
+        var sample = CreateSample(
+            counter: 2,
+            time: 1_000,
+            scope: SimulatorIdentityScope.Durable);
+        var legacyIdentity = SessionIdentity.Generate();
+        var store = new StatefulStore();
+        store.SeedSession(StoredSession.Create(
+            legacyIdentity,
+            sample.Sample.Session,
+            UtcInstant.TryCreateUnixMilliseconds(1_000).Value));
+        await using var host = new TestHost(store);
+        await host.StartConnectedAsync();
+
+        await host.Telemetry.PublishAsync(sample);
+        await WaitUntilAsync(() => store.BaselineCount == 1);
+
+        var deterministicIdentity = SessionIdentity.CreateDurable(
+            sample.Sample.Session.Simulator,
+            sample.Sample.Session.SessionKey);
+        Assert.AreEqual(1, store.PromoteSessionIdentityCount);
+        Assert.AreEqual(0, store.EnsureSessionCount);
+        Assert.AreEqual(deterministicIdentity, store.Session!.Id);
+        var current = await host.Service.GetCurrentSessionAsync(CancellationToken.None);
+        Assert.IsTrue(current.IsSuccess, current.Error?.ToString());
+        Assert.AreEqual(deterministicIdentity, current.Value.Id);
+        Assert.AreEqual(5, current.Value.Id.Value.Version);
     }
 
     [TestMethod]
@@ -1943,16 +2298,30 @@ public sealed class IncidentReviewApplicationWorkflowTests
     private static StoredIncident CreateStoredIncident(long positionMilliseconds)
     {
         var createdAt = UtcInstant.TryCreateUnixMilliseconds(10_000).Value;
+        var descriptor = CreateSample(
+            counter: 0,
+            time: 1_000,
+            mode: SessionMode.Live,
+            scope: SimulatorIdentityScope.Durable).Sample.Session;
+        var session = SessionIdentity.CreateDurable(
+            descriptor.Simulator,
+            descriptor.SessionKey);
+        var points = IncidentPoints.TryCreate(total: 4, delta: 4).Value;
+        var epoch = CounterEpoch.TryCreate(0).Value;
         return StoredIncident.Create(
-            IncidentId.Generate(),
-            SessionIdentity.Generate(),
+            IncidentId.CreateDetected(
+                session,
+                DefaultParticipantIdentity,
+                epoch,
+                points),
+            session,
             DefaultParticipant,
             ReplayPosition.TryCreate(
                 SessionNumber.TryCreate(2).Value,
                 SessionTime.TryCreateMilliseconds(positionMilliseconds).Value).Value,
             createdAt,
-            IncidentPoints.TryCreate(total: 4, delta: 4).Value,
-            CounterEpoch.TryCreate(0).Value,
+            points,
+            epoch,
             LapNumber.TryCreate(1).Value,
             LapDistance.TryCreate(0.5).Value,
             IncidentReviewStatus.Pending,
@@ -2001,22 +2370,32 @@ public sealed class IncidentReviewApplicationWorkflowTests
             StatefulStore? store = null,
             RecordingReplayController? replay = null,
             RecordingReplayContextReader? replayContext = null,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null,
+            ICustomEventPublisher? customEventPublisher = null,
+            ICurrentTelemetryReader? currentTelemetryReader = null)
         {
             Store = store ?? new StatefulStore();
             Replay = replay ?? new RecordingReplayController();
             ReplayContext = replayContext ?? new RecordingReplayContextReader();
+            CustomEventPublisher = customEventPublisher ?? new RecordingCustomEventPublisher();
             Telemetry = new ControllableTelemetrySource();
             var services = new ServiceCollection();
             _ = services.AddSingleton<ITelemetrySource>(Telemetry);
             _ = services.AddSingleton<IReplayController>(Replay);
             _ = services.AddSingleton<IReplayContextReader>(ReplayContext);
             _ = services.AddSingleton<IStore>(Store);
+            _ = services.AddSingleton<ICustomEventPublisher>(CustomEventPublisher);
+            if (currentTelemetryReader is not null)
+            {
+                _ = services.AddSingleton(currentTelemetryReader);
+            }
+
             _ = services.AddSingleton(timeProvider ?? new FixedTimeProvider(FixedNow));
             _ = services.AddIncidentReviewApplication();
             _provider = services.BuildServiceProvider();
             Runtime = _provider.GetRequiredService<IApplicationRuntime>();
             Service = _provider.GetRequiredService<IIncidentReviewService>();
+            CustomEventReceiver = (ICustomEventReceiver)Service;
         }
 
         public static DateTimeOffset FixedNow { get; } =
@@ -2024,9 +2403,11 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public StatefulStore Store { get; }
         public RecordingReplayController Replay { get; }
         public RecordingReplayContextReader ReplayContext { get; }
+        public ICustomEventPublisher CustomEventPublisher { get; }
         public ControllableTelemetrySource Telemetry { get; }
         public IApplicationRuntime Runtime { get; }
         public IIncidentReviewService Service { get; }
+        public ICustomEventReceiver CustomEventReceiver { get; }
 
         public async Task StartConnectedAsync()
         {
@@ -2165,15 +2546,102 @@ public sealed class IncidentReviewApplicationWorkflowTests
         }
     }
 
+    private sealed class RecordingCustomEventPublisher : ICustomEventPublisher
+    {
+        private readonly object _lock = new();
+        private readonly List<(JoinCode JoinCode, CustomEventSubmission Submission)> _published = [];
+
+        public int PublishCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _published.Count;
+                }
+            }
+        }
+
+        public Task<Result<CustomEventPublishOutcome>> PublishAsync(
+            JoinCode joinCode,
+            CustomEventSubmission submission,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(joinCode);
+            ArgumentNullException.ThrowIfNull(submission);
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_lock)
+            {
+                _published.Add((joinCode, submission));
+            }
+
+            return Task.FromResult(Result<CustomEventPublishOutcome>.Success(
+                CustomEventPublishOutcome.Accepted));
+        }
+    }
+
+    private sealed class CancelFirstCustomEventPublisher : ICustomEventPublisher
+    {
+        private int _publishCount;
+
+        public TaskCompletionSource FirstPublishStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource FirstPublishCanceled { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int PublishCount => Volatile.Read(ref _publishCount);
+
+        public async Task<Result<CustomEventPublishOutcome>> PublishAsync(
+            JoinCode joinCode,
+            CustomEventSubmission submission,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(joinCode);
+            ArgumentNullException.ThrowIfNull(submission);
+            var attempt = Interlocked.Increment(ref _publishCount);
+            if (attempt == 1)
+            {
+                FirstPublishStarted.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    FirstPublishCanceled.TrySetResult();
+                    throw;
+                }
+            }
+
+            return Result<CustomEventPublishOutcome>.Success(
+                CustomEventPublishOutcome.Accepted);
+        }
+    }
+
+    private sealed class RecordingCurrentTelemetryReader(TelemetrySample sample) :
+        ICurrentTelemetryReader
+    {
+        public int ReadCount { get; private set; }
+
+        public Result<TelemetrySample> Read()
+        {
+            ReadCount++;
+            return Result<TelemetrySample>.Success(sample);
+        }
+    }
+
     private sealed class StatefulStore : IStore
     {
         private readonly object _lock = new();
         private readonly HashSet<OperationId> _committedOperations = [];
         private readonly List<StoredIncident> _incidents = [];
+        private readonly List<StoredCustomEvent> _customEvents = [];
         private readonly List<EstablishIncidentCheckpoint> _baselines = [];
         private readonly List<RecordDetectedIncident> _recordAttempts = [];
         private readonly Dictionary<ParticipantIdentity, IncidentCheckpoint> _checkpoints = [];
         private int _ensureSessionCount;
+        private int _promoteSessionIdentityCount;
         private int _checkpointQueryCount;
         private int _sessionLookupCount;
         private int _operationOutcomeQueryCount;
@@ -2197,6 +2665,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public bool FailSessionLookup { get; init; }
         public bool BlockPreferencesQuery { get; init; }
         public bool BlockSessionLookup { get; set; }
+        public StoredCustomEvent? ReceivedConflictWinner { get; set; }
         public TaskCompletionSource PreferencesQueryEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SessionLookupEntered { get; } =
@@ -2220,6 +2689,7 @@ public sealed class IncidentReviewApplicationWorkflowTests
         public AnnotateIncident? LastAnnotation { get; private set; }
         public UpdatePreferences? LastPreferencesUpdate { get; private set; }
         public int EnsureSessionCount => Volatile.Read(ref _ensureSessionCount);
+        public int PromoteSessionIdentityCount => Volatile.Read(ref _promoteSessionIdentityCount);
         public int CheckpointQueryCount => Volatile.Read(ref _checkpointQueryCount);
         public int SessionLookupCount => Volatile.Read(ref _sessionLookupCount);
         public int OperationOutcomeQueryCount => Volatile.Read(ref _operationOutcomeQueryCount);
@@ -2302,6 +2772,31 @@ public sealed class IncidentReviewApplicationWorkflowTests
             }
         }
 
+        public StoredCustomEvent[] CustomEvents
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _customEvents.ToArray();
+                }
+            }
+        }
+
+        public StoredCustomEvent[] PendingCustomEvents
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _customEvents
+                        .Where(customEvent =>
+                            customEvent.Synchronization is CustomEventSynchronization.Pending)
+                        .ToArray();
+                }
+            }
+        }
+
         public void SeedIncident(StoredIncident incident)
         {
             lock (_lock)
@@ -2363,6 +2858,13 @@ public sealed class IncidentReviewApplicationWorkflowTests
                             .Where(item => item.Session == incidents.Session)
                             .ToArray())),
                     GetIncidentCheckpoints checkpoints => QueryCheckpoints(checkpoints),
+                    GetCustomEvent customEvent => Result<StoreLookup<StoredCustomEvent>>.Success(
+                        LookupCustomEvent(customEvent.CustomEvent)),
+                    GetCustomEvents customEvents => Result<IReadOnlyList<StoredCustomEvent>>.Success(
+                        QueryCustomEvents(customEvents.Session, pendingOnly: false)),
+                    GetPendingCustomEvents pending =>
+                        Result<IReadOnlyList<StoredCustomEvent>>.Success(
+                            QueryCustomEvents(pending.Session, pendingOnly: true)),
                     ListSessions => QuerySessions(),
                     _ => Result<T>.Failure(TestError),
                 };
@@ -2389,8 +2891,13 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 var result = command switch
                 {
                     EnsureSession ensure => EnsureSession(ensure),
+                    PromoteSessionIdentity promote => PromoteSessionIdentity(promote),
                     EstablishIncidentCheckpoint baseline => EstablishBaseline(baseline),
                     RecordDetectedIncident record => RecordIncident(record),
+                    RecordCustomEvent record => RecordCustomEvent(record),
+                    RecordReceivedCustomEvent received => RecordReceivedCustomEvent(received),
+                    MarkCustomEventSynchronized synchronized => MarkCustomEventSynchronized(
+                        synchronized),
                     MarkIncidentReviewed reviewed => MarkReviewed(reviewed),
                     AnnotateIncident annotate => Annotate(annotate),
                     UpdatePreferences update => UpdatePreferences(update),
@@ -2440,7 +2947,8 @@ public sealed class IncidentReviewApplicationWorkflowTests
             return Result<StoreLookup<StoredSessionDetails>>.Success(
                 StoreLookup.Found(StoredSessionDetails.Create(
                     Session,
-                    _incidents.Where(item => item.Session == query.Session))));
+                    _incidents.Where(item => item.Session == query.Session),
+                    _customEvents.Where(item => item.Session == query.Session))));
         }
 
         private Result<IReadOnlyList<IncidentCheckpoint>> QueryCheckpoints(
@@ -2478,6 +2986,23 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 : StoreLookup.Found(found);
         }
 
+        private StoreLookup<StoredCustomEvent> LookupCustomEvent(CustomEventId customEvent)
+        {
+            var found = _customEvents.SingleOrDefault(item => item.Id == customEvent);
+            return found is null
+                ? StoreLookup.Missing<StoredCustomEvent>()
+                : StoreLookup.Found(found);
+        }
+
+        private StoredCustomEvent[] QueryCustomEvents(
+            SessionIdentity session,
+            bool pendingOnly) => _customEvents
+                .Where(item => item.Session == session &&
+                    (!pendingOnly ||
+                        item.Synchronization is CustomEventSynchronization.Pending))
+                .OrderBy(item => item.Position.SessionTime.Milliseconds)
+                .ToArray();
+
         private Result EnsureSession(EnsureSession command)
         {
             Interlocked.Increment(ref _ensureSessionCount);
@@ -2490,6 +3015,89 @@ public sealed class IncidentReviewApplicationWorkflowTests
                 command.ProposedIdentity,
                 command.Descriptor,
                 command.StartedAt);
+            _committedOperations.Add(command.OperationId);
+            return Result.Success();
+        }
+
+        private Result PromoteSessionIdentity(PromoteSessionIdentity command)
+        {
+            Interlocked.Increment(ref _promoteSessionIdentityCount);
+            if (Session is null || Session.Id != command.ExistingIdentity)
+            {
+                return Result.Failure(StoreErrors.EntityNotFound);
+            }
+
+            if (Session.Descriptor != command.Descriptor)
+            {
+                return Result.Failure(StoreErrors.InvalidCommand);
+            }
+
+            var promotedIdentity = command.DeterministicIdentity;
+            Session = StoredSession.Create(
+                promotedIdentity,
+                Session.Descriptor,
+                Session.StartedAt);
+            for (var index = 0; index < _incidents.Count; index++)
+            {
+                var incident = _incidents[index];
+                if (incident.Session != command.ExistingIdentity)
+                {
+                    continue;
+                }
+
+                _incidents[index] = StoredIncident.Create(
+                    IncidentId.CreateDetected(
+                        promotedIdentity,
+                        incident.Participant.Identity,
+                        incident.CounterEpoch,
+                        incident.Points),
+                    promotedIdentity,
+                    incident.Participant,
+                    incident.Position,
+                    incident.ObservedAt,
+                    incident.Points,
+                    incident.CounterEpoch,
+                    incident.Lap,
+                    incident.LapDistance,
+                    incident.ReviewStatus,
+                    incident.Annotation,
+                    incident.CreatedAt,
+                    incident.UpdatedAt);
+            }
+
+            foreach (var (participantIdentity, checkpoint) in _checkpoints.ToArray())
+            {
+                if (checkpoint.Session != command.ExistingIdentity)
+                {
+                    continue;
+                }
+
+                _checkpoints[participantIdentity] = IncidentCheckpoint.TryCreate(
+                    promotedIdentity,
+                    checkpoint.ParticipantIdentity,
+                    checkpoint.CounterEpoch,
+                    checkpoint.LastCounter,
+                    checkpoint.LastPosition,
+                    checkpoint.UpdatedAt).Value;
+            }
+
+            for (var index = 0; index < _customEvents.Count; index++)
+            {
+                var customEvent = _customEvents[index];
+                if (customEvent.Session != command.ExistingIdentity)
+                {
+                    continue;
+                }
+
+                _customEvents[index] = StoredCustomEvent.Create(
+                    CustomEventId.CreateDeterministic(promotedIdentity, customEvent.Position),
+                    promotedIdentity,
+                    customEvent.Position,
+                    customEvent.Submitter,
+                    customEvent.OccurredAt,
+                    customEvent.Synchronization);
+            }
+
             _committedOperations.Add(command.OperationId);
             return Result.Success();
         }
@@ -2551,6 +3159,60 @@ public sealed class IncidentReviewApplicationWorkflowTests
 
             _incidents.Add(command.Incident);
             _checkpoints[command.NextCheckpoint.ParticipantIdentity] = command.NextCheckpoint;
+            _committedOperations.Add(command.OperationId);
+            return Result.Success();
+        }
+
+        private Result RecordCustomEvent(RecordCustomEvent command)
+        {
+            if (_customEvents.All(item => item.Id != command.CustomEvent.Id))
+            {
+                _customEvents.Add(command.CustomEvent);
+            }
+
+            _committedOperations.Add(command.OperationId);
+            return Result.Success();
+        }
+
+        private Result RecordReceivedCustomEvent(RecordReceivedCustomEvent command)
+        {
+            if (ReceivedConflictWinner is not null &&
+                ReceivedConflictWinner.Id == command.CustomEvent.Id)
+            {
+                if (_customEvents.All(item => item.Id != ReceivedConflictWinner.Id))
+                {
+                    _customEvents.Add(ReceivedConflictWinner);
+                }
+
+                return Result.Failure(StoreErrors.CustomEventIdentityConflict);
+            }
+
+            if (_customEvents.Any(item => item.Id == command.CustomEvent.Id))
+            {
+                return Result.Failure(StoreErrors.CustomEventIdentityConflict);
+            }
+
+            _customEvents.Add(command.CustomEvent);
+            _committedOperations.Add(command.OperationId);
+            return Result.Success();
+        }
+
+        private Result MarkCustomEventSynchronized(MarkCustomEventSynchronized command)
+        {
+            var index = _customEvents.FindIndex(item => item.Id == command.CustomEvent);
+            if (index < 0)
+            {
+                return Result.Failure(StoreErrors.EntityNotFound);
+            }
+
+            var customEvent = _customEvents[index];
+            _customEvents[index] = StoredCustomEvent.Create(
+                customEvent.Id,
+                customEvent.Session,
+                customEvent.Position,
+                customEvent.Submitter,
+                customEvent.OccurredAt,
+                CustomEventSynchronization.Synchronized.Create(command.SynchronizedAt));
             _committedOperations.Add(command.OperationId);
             return Result.Success();
         }

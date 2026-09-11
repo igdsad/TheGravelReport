@@ -262,10 +262,21 @@ internal sealed partial class SqliteStore
             return Result<StoreLookup<StoredSessionDetails>>.Failure(incidents.Error!);
         }
 
+        var customEvents = QueryCustomEvents(
+            connection,
+            transaction,
+            session,
+            pendingOnly: false);
+        if (!customEvents.IsSuccess)
+        {
+            return Result<StoreLookup<StoredSessionDetails>>.Failure(customEvents.Error!);
+        }
+
         return Result<StoreLookup<StoredSessionDetails>>.Success(
             StoreLookup.Found(StoredSessionDetails.Create(
                 sessionResult.Value.Value!,
-                incidents.Value)));
+                incidents.Value,
+                customEvents.Value)));
     }
 
     private static Result<StoreLookup<StoredIncident>> QueryIncident(
@@ -373,6 +384,11 @@ internal sealed partial class SqliteStore
                         transaction,
                         ensure,
                         cancellationToken),
+                    PromoteSessionIdentity promote => PromoteSessionIdentityCore(
+                        connection,
+                        transaction,
+                        promote,
+                        cancellationToken),
                     EstablishIncidentCheckpoint establish => EstablishCheckpointCore(
                         connection,
                         transaction,
@@ -392,6 +408,21 @@ internal sealed partial class SqliteStore
                         connection,
                         transaction,
                         reviewed,
+                        cancellationToken),
+                    RecordCustomEvent customEvent => RecordCustomEventCore(
+                        connection,
+                        transaction,
+                        customEvent,
+                        cancellationToken),
+                    RecordReceivedCustomEvent received => RecordReceivedCustomEventCore(
+                        connection,
+                        transaction,
+                        received,
+                        cancellationToken),
+                    MarkCustomEventSynchronized synchronized => MarkCustomEventSynchronizedCore(
+                        connection,
+                        transaction,
+                        synchronized,
                         cancellationToken),
                     _ => Result.Failure(StoreErrors.UnsupportedRequest),
                 };
@@ -513,6 +544,157 @@ internal sealed partial class SqliteStore
             transaction: transaction);
         cancellationToken.ThrowIfCancellationRequested();
         return changed == 1 ? Result.Success() : Result.Failure(StoreErrors.PersistenceFailure);
+    }
+
+    private static Result PromoteSessionIdentityCore(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        PromoteSessionIdentity command,
+        CancellationToken cancellationToken)
+    {
+        var sourceRow = connection.QuerySingleOrDefault<SessionRow>(
+            CreateDapperCommand(
+                SelectSessionByIdSql,
+                new { SessionId = command.ExistingIdentity.ToString() },
+                transaction,
+                cancellationToken));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (sourceRow is null)
+        {
+            return Result.Failure(StoreErrors.EntityNotFound);
+        }
+
+        var source = MapSession(sourceRow);
+        if (!source.IsSuccess)
+        {
+            return Result.Failure(source.Error!);
+        }
+
+        if (source.Value.Descriptor != command.Descriptor ||
+            command.DeterministicIdentity != SessionIdentity.CreateDurable(
+                command.Descriptor.Simulator,
+                command.Descriptor.SessionKey))
+        {
+            return Result.Failure(StoreErrors.InvalidCommand);
+        }
+
+        var targetExists = connection.QuerySingle<long>(
+            CreateDapperCommand(
+                "SELECT EXISTS (SELECT 1 FROM \"Session\" WHERE session_id = @SessionId);",
+                new { SessionId = command.DeterministicIdentity.ToString() },
+                transaction,
+                cancellationToken));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (targetExists == 1)
+        {
+            return Result.Failure(StoreErrors.SessionIdentityConflict);
+        }
+
+        var incidents = QueryIncidents(
+            connection,
+            transaction,
+            command.ExistingIdentity);
+        if (!incidents.IsSuccess)
+        {
+            return Result.Failure(incidents.Error!);
+        }
+
+        var customEvents = QueryCustomEvents(
+            connection,
+            transaction,
+            command.ExistingIdentity,
+            pendingOnly: false);
+        if (!customEvents.IsSuccess)
+        {
+            return Result.Failure(customEvents.Error!);
+        }
+
+        // Historical schemas use ON UPDATE RESTRICT. Move dependents first under deferred
+        // validation, then replace the parent key, so the transaction is never externally
+        // observable in a partially promoted state.
+        _ = connection.Execute(
+            "PRAGMA defer_foreign_keys = ON;",
+            transaction: transaction);
+        var parameters = new
+        {
+            ExistingIdentity = command.ExistingIdentity.ToString(),
+            DeterministicIdentity = command.DeterministicIdentity.ToString(),
+            PromotedAt = command.PromotedAt.UnixMilliseconds,
+        };
+        foreach (var incident in incidents.Value)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var promotedIncidentIdentity = IncidentId.CreateDetected(
+                command.DeterministicIdentity,
+                incident.Participant.Identity,
+                incident.CounterEpoch,
+                incident.Points);
+            var incidentChanged = connection.Execute(
+                """
+                UPDATE Incident
+                SET incident_id = @PromotedIncidentIdentity,
+                    session_id = @DeterministicIdentity
+                WHERE incident_id = @ExistingIncidentIdentity
+                  AND session_id = @ExistingIdentity;
+                """,
+                new
+                {
+                    ExistingIncidentIdentity = incident.Id.ToString(),
+                    PromotedIncidentIdentity = promotedIncidentIdentity.ToString(),
+                    parameters.ExistingIdentity,
+                    parameters.DeterministicIdentity,
+                },
+                transaction: transaction);
+            if (incidentChanged != 1)
+            {
+                return Result.Failure(StoreErrors.PersistenceFailure);
+            }
+        }
+
+        _ = connection.Execute(
+            "UPDATE IncidentCheckpoint SET session_id = @DeterministicIdentity WHERE session_id = @ExistingIdentity;",
+            parameters,
+            transaction: transaction);
+        foreach (var customEvent in customEvents.Value)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var promotedEventIdentity = CustomEventId.CreateDeterministic(
+                command.DeterministicIdentity,
+                customEvent.Position);
+            var eventChanged = connection.Execute(
+                """
+                UPDATE CustomEvent
+                SET custom_event_id = @PromotedEventIdentity,
+                    session_id = @DeterministicIdentity
+                WHERE custom_event_id = @ExistingEventIdentity
+                  AND session_id = @ExistingIdentity;
+                """,
+                new
+                {
+                    ExistingEventIdentity = customEvent.Id.ToString(),
+                    PromotedEventIdentity = promotedEventIdentity.ToString(),
+                    parameters.ExistingIdentity,
+                    parameters.DeterministicIdentity,
+                },
+                transaction: transaction);
+            if (eventChanged != 1)
+            {
+                return Result.Failure(StoreErrors.PersistenceFailure);
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var changed = connection.Execute(
+            """
+            UPDATE "Session"
+            SET session_id = @DeterministicIdentity,
+                updated_at_utc_ms = MAX(updated_at_utc_ms, @PromotedAt)
+            WHERE session_id = @ExistingIdentity;
+            """,
+            parameters,
+            transaction: transaction);
+        cancellationToken.ThrowIfCancellationRequested();
+        return changed == 1 ? Result.Success() : Result.Failure(StoreErrors.EntityNotFound);
     }
 
     private static Result EstablishCheckpointCore(
@@ -746,10 +928,16 @@ internal sealed partial class SqliteStore
     private static long GetCommandTimestamp(IStoreCommand command) => command switch
     {
         EnsureSession ensure => ensure.StartedAt.UnixMilliseconds,
+        PromoteSessionIdentity promote => promote.PromotedAt.UnixMilliseconds,
         EstablishIncidentCheckpoint establish => establish.NextCheckpoint.UpdatedAt.UnixMilliseconds,
         RecordDetectedIncident record => record.Incident.UpdatedAt.UnixMilliseconds,
         AnnotateIncident annotate => annotate.UpdatedAt.UnixMilliseconds,
         MarkIncidentReviewed reviewed => reviewed.ReviewedAt.UnixMilliseconds,
+        RecordCustomEvent customEvent => customEvent.CustomEvent.OccurredAt.UnixMilliseconds,
+        RecordReceivedCustomEvent received =>
+            ((CustomEventSynchronization.Synchronized)received.CustomEvent.Synchronization)
+            .SynchronizedAt.UnixMilliseconds,
+        MarkCustomEventSynchronized synchronized => synchronized.SynchronizedAt.UnixMilliseconds,
         _ => throw new InvalidOperationException("The command has no application-store timestamp."),
     };
 

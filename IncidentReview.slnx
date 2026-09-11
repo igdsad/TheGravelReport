@@ -6,13 +6,20 @@
     <Project Path="src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
     <Project Path="src/IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />
     <Project Path="src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <Project Path="src/IncidentReview.EventSync.Contracts/IncidentReview.EventSync.Contracts.csproj" />
+    <Project Path="src/IncidentReview.EventSync.Http/IncidentReview.EventSync.Http.csproj" />
+    <Project Path="src/IncidentReview.EventSync.Sqlite/IncidentReview.EventSync.Sqlite.csproj" />
     <Project Path="src/IncidentReview.Application/IncidentReview.Application.csproj" />
     <Project Path="src/IncidentReview.Store.Sqlite/IncidentReview.Store.Sqlite.csproj" />
     <Project Path="src/IncidentReview.Iracing/IncidentReview.Iracing.csproj" />
     <Project Path="src/IncidentReview.Desktop.Wpf/IncidentReview.Desktop.Wpf.csproj" />
     <Project Path="src/IncidentReview.Host.Wpf/IncidentReview.Host.Wpf.csproj" />
+    <Project Path="src/IncidentReview.Host.Server/IncidentReview.Host.Server.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/IncidentReview.EventSync.Contracts.Tests/IncidentReview.EventSync.Contracts.Tests.csproj" />
+    <Project Path="tests/IncidentReview.EventSync.Http.Tests/IncidentReview.EventSync.Http.Tests.csproj" />
+    <Project Path="tests/IncidentReview.EventSync.Sqlite.Tests/IncidentReview.EventSync.Sqlite.Tests.csproj" />
     <Project Path="tests/IncidentReview.TestKit/IncidentReview.TestKit.csproj" />
     <Project Path="tests/IncidentReview.Architecture.Tests/IncidentReview.Architecture.Tests.csproj" />
     <Project Path="tests/IncidentReview.Results.Tests/IncidentReview.Results.Tests.csproj" />

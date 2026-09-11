@@ -393,14 +393,14 @@ public sealed class SqlitePreferencesStoreTests
 
         using var connection = database.OpenConnection();
         Assert.AreEqual(
-            "d40667793045d6a7d4d56b5f406793561a9979b8062e31e20e867cdd2ddb92e7",
+            "340365874aaea5b7d322939754ba4e28da1aced44fe73dc4a918bffe66b55c89",
             ExecuteScalarString(
                 connection,
                 "SELECT lower(hex(payload_fingerprint_sha256)) FROM StoreOperation;"));
         Assert.AreEqual(
             "preferences.update",
             ExecuteScalarString(connection, "SELECT command_kind FROM StoreOperation;"));
-        Assert.AreEqual(2L, ExecuteScalarInt64(connection, "SELECT command_version FROM StoreOperation;"));
+        Assert.AreEqual(3L, ExecuteScalarInt64(connection, "SELECT command_version FROM StoreOperation;"));
     }
 
     [TestMethod]

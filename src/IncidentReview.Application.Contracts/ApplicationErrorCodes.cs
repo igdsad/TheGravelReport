@@ -34,4 +34,22 @@ public static class ApplicationErrorCodes
 
     public static ErrorCode RuntimeStopped { get; } =
         ErrorCode.Define("application.runtime.stopped");
+
+    public static ErrorCode CustomEventUnavailable { get; } =
+        ErrorCode.Define("application.custom-event.unavailable");
+
+    public static ErrorCode CustomEventNameRequired { get; } =
+        ErrorCode.Define("application.custom-event.name-required");
+
+    public static ErrorCode CustomEventNotFound { get; } =
+        ErrorCode.Define("application.custom-event.not-found");
+
+    public static ErrorCode EventSyncUnavailable { get; } =
+        ErrorCode.Define("application.event-sync.unavailable");
+
+    public static ErrorCode CustomEventDuplicate { get; } =
+        ErrorCode.Define("application.custom-event.duplicate");
+
+    public static ErrorCode InvalidEventJoinCode { get; } =
+        ErrorCode.Define("application.event-sync.join-code.invalid");
 }

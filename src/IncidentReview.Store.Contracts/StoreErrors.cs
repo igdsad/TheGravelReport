@@ -45,6 +45,11 @@ public static class StoreErrors
         ErrorKind.Conflict,
         "The incident checkpoint changed before the command could commit.");
 
+    public static Error CustomEventIdentityConflict { get; } = Error.Create(
+        StoreErrorCodes.CustomEventIdentityConflict,
+        ErrorKind.Conflict,
+        "The custom-event identity is already assigned to the first committed payload.");
+
     public static Error EntityNotFound { get; } = Error.Create(
         StoreErrorCodes.EntityNotFound,
         ErrorKind.NotFound,

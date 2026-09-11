@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <AssemblyName>IncidentReview.Host.Server</AssemblyName>
+    <RootNamespace>IncidentReview.Host.Server</RootNamespace>
+    <AssemblyTitle>GravelReview Server</AssemblyTitle>
+    <Product>GravelReview</Product>
+    <Version>0.0.3-alpha</Version>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>None</DebugType>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.EventSync.Http/IncidentReview.EventSync.Http.csproj" />
+    <ProjectReference Include="../IncidentReview.EventSync.Sqlite/IncidentReview.EventSync.Sqlite.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../deploy/server/README.md"
+          Link="DEPLOYMENT.md"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

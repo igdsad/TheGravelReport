@@ -5,7 +5,7 @@
     items directly. Do not copy this allowlist into another build or test file.
   -->
   <PropertyGroup>
-    <ArchitecturePolicyVersion>1</ArchitecturePolicyVersion>
+    <ArchitecturePolicyVersion>2</ArchitecturePolicyVersion>
   </PropertyGroup>
 
   <ItemGroup Label="Projects">
@@ -33,6 +33,18 @@
       <Kind>Production</Kind>
       <RootNamespace>IncidentReview.Application.Contracts</RootNamespace>
     </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Contracts">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.EventSync.Contracts</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Http">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.EventSync.Http</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Sqlite">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.EventSync.Sqlite</RootNamespace>
+    </ArchitectureProject>
     <ArchitectureProject Include="IncidentReview.Application">
       <Kind>Production</Kind>
       <RootNamespace>IncidentReview.Application</RootNamespace>
@@ -52,6 +64,11 @@
     <ArchitectureProject Include="IncidentReview.Host.Wpf">
       <Kind>Production</Kind>
       <RootNamespace>IncidentReview.Host.Wpf</RootNamespace>
+      <NoPublicApi>true</NoPublicApi>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.Host.Server">
+      <Kind>Production</Kind>
+      <RootNamespace>IncidentReview.Host.Server</RootNamespace>
       <NoPublicApi>true</NoPublicApi>
     </ArchitectureProject>
 
@@ -99,6 +116,18 @@
     <ArchitectureProject Include="IncidentReview.Application.Tests">
       <Kind>Test</Kind>
       <RootNamespace>IncidentReview.Application.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Contracts.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.EventSync.Contracts.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Http.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.EventSync.Http.Tests</RootNamespace>
+    </ArchitectureProject>
+    <ArchitectureProject Include="IncidentReview.EventSync.Sqlite.Tests">
+      <Kind>Test</Kind>
+      <RootNamespace>IncidentReview.EventSync.Sqlite.Tests</RootNamespace>
     </ArchitectureProject>
     <ArchitectureProject Include="IncidentReview.Store.ContractTests">
       <Kind>Test</Kind>
@@ -154,8 +183,17 @@
     <AllowedProjectReference Include="IncidentReview.Replay.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite"><To>IncidentReview.Results</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
@@ -176,12 +214,17 @@
     <AllowedProjectReference Include="IncidentReview.Desktop.Wpf"><To>IncidentReview.Results</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Application</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.EventSync.Http</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Desktop.Wpf</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Store.Sqlite</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Iracing</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Host.Wpf"><To>IncidentReview.Results</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.Host.Server"><To>IncidentReview.EventSync.Http</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Server"><To>IncidentReview.EventSync.Sqlite</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Host.Server"><To>IncidentReview.Results</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Export.Contracts"><To>IncidentReview.Domain</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Export.Contracts"><To>IncidentReview.Results</To></AllowedProjectReference>
@@ -219,12 +262,25 @@
 
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Application.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Telemetry.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Replay.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Application.Tests"><To>IncidentReview.TestKit</To></AllowedProjectReference>
+
+    <AllowedProjectReference Include="IncidentReview.EventSync.Contracts.Tests"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Contracts.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Contracts.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http.Tests"><To>IncidentReview.EventSync.Http</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http.Tests"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Http.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite.Tests"><To>IncidentReview.EventSync.Sqlite</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite.Tests"><To>IncidentReview.EventSync.Contracts</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite.Tests"><To>IncidentReview.Domain</To></AllowedProjectReference>
+    <AllowedProjectReference Include="IncidentReview.EventSync.Sqlite.Tests"><To>IncidentReview.Results</To></AllowedProjectReference>
 
     <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.Store.Contracts</To></AllowedProjectReference>
     <AllowedProjectReference Include="IncidentReview.Store.ContractTests"><To>IncidentReview.Domain</To></AllowedProjectReference>
@@ -264,11 +320,16 @@
     <PackageOwner Include="dbup-sqlite"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="SQLitePCLRaw.bundle_winsqlite3"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Data.Sqlite"><Project>IncidentReview.EventSync.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Data.Sqlite"><Project>IncidentReview.EventSync.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Data.Sqlite.Core"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.Application.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.EventSync.Http.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection"><Project>IncidentReview.EventSync.Sqlite.Tests</Project></PackageOwner>
 
     <PackageOwner Include="Microsoft.Extensions.Hosting"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Hosting"><Project>IncidentReview.EventSync.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Configuration.Binder"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Configuration.CommandLine"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Configuration.EnvironmentVariables"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
@@ -278,11 +339,14 @@
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Iracing</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.EventSync.Sqlite</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Hosting.Abstractions"><Project>IncidentReview.EventSync.Sqlite</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Application</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Store.Sqlite</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Iracing</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.Host.Wpf</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Extensions.Logging.Abstractions"><Project>IncidentReview.EventSync.Sqlite</Project></PackageOwner>
 
     <PackageOwner Include="Microsoft.CodeAnalysis.CSharp"><Project>IncidentReview.Analyzers</Project></PackageOwner>
     <PackageOwner Include="Microsoft.CodeAnalysis.Analyzers"><Project>IncidentReview.Analyzers</Project></PackageOwner>
@@ -294,6 +358,9 @@
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Telemetry.Contracts.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Replay.Contracts.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Application.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.EventSync.Contracts.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.EventSync.Http.Tests</Project></PackageOwner>
+    <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.EventSync.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.ContractTests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Store.Sqlite.Tests</Project></PackageOwner>
     <PackageOwner Include="Microsoft.Testing.Extensions.CodeCoverage"><Project>IncidentReview.Iracing.Tests</Project></PackageOwner>
@@ -310,9 +377,17 @@
     <AllowedPublicNamespace Include="IncidentReview.Telemetry.Contracts"><Namespace>IncidentReview.Telemetry.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Replay.Contracts"><Namespace>IncidentReview.Replay.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Application.Contracts"><Namespace>IncidentReview.Application.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Contracts"><Namespace>IncidentReview.EventSync.Contracts</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
 
     <AllowedPublicNamespace Include="IncidentReview.Application"><Namespace>IncidentReview.Application</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Application"><Namespace>IncidentReview.Application.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Http"><Namespace>IncidentReview.EventSync.Http</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Http"><Namespace>IncidentReview.EventSync.Http.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Http"><Namespace>IncidentReview.EventSync.Http.Options</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Sqlite"><Namespace>IncidentReview.EventSync.Sqlite</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Sqlite"><Namespace>IncidentReview.EventSync.Sqlite.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Sqlite"><Namespace>IncidentReview.EventSync.Sqlite.Options</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
+    <AllowedPublicNamespace Include="IncidentReview.EventSync.Sqlite"><Namespace>IncidentReview.EventSync.Sqlite.Testing</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite</Namespace><AllowDescendants>false</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite.DependencyInjection</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
     <AllowedPublicNamespace Include="IncidentReview.Store.Sqlite"><Namespace>IncidentReview.Store.Sqlite.Options</Namespace><AllowDescendants>true</AllowDescendants></AllowedPublicNamespace>
@@ -340,6 +415,10 @@
       <Project>IncidentReview.Iracing</Project>
       <BridgeFile>IracingTestingRegistration.cs</BridgeFile>
     </TestingFacadeOwner>
+    <TestingFacadeOwner Include="IncidentReview.EventSync.Sqlite.Testing">
+      <Project>IncidentReview.EventSync.Sqlite</Project>
+      <BridgeFile>SqliteEventInboxTestingRegistration.cs</BridgeFile>
+    </TestingFacadeOwner>
 
     <PlatformPublicAssembly Include="mscorlib" />
     <PlatformPublicAssembly Include="netstandard" />
@@ -350,6 +429,10 @@
     <PlatformPublicAssemblyPrefix Include="System." />
 
     <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Application</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.EventSync.Http</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.AspNetCore.Http.Abstractions"><Project>IncidentReview.EventSync.Http</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.AspNetCore.Routing"><Project>IncidentReview.EventSync.Http</Project></AllowedExternalPublicAssembly>
+    <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.EventSync.Sqlite</Project></AllowedExternalPublicAssembly>
     <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Store.Sqlite</Project></AllowedExternalPublicAssembly>
     <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Iracing</Project></AllowedExternalPublicAssembly>
     <AllowedExternalPublicAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions"><Project>IncidentReview.Desktop.Wpf</Project></AllowedExternalPublicAssembly>

@@ -27,6 +27,18 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
 
     public Result ReviewResult { get; set; } = Result.Success();
 
+    public Result CreateCustomEventResult { get; set; } = Result.Success();
+
+    public Result ReviewCustomEventResult { get; set; } = Result.Success();
+
+    public Result<string> StartCustomEventSessionResult { get; set; } =
+        Result<string>.Success("test-join-code");
+
+    public Result<string> CreateCustomEventJoinCodeResult { get; set; } =
+        Result<string>.Success("test-shared-join-code");
+
+    public Result StopCustomEventSessionResult { get; set; } = Result.Success();
+
     public Result UpdatePreferencesResult { get; set; } = Result.Success();
 
     public Dictionary<SessionIdentity, ReviewSession> Sessions { get; } = [];
@@ -39,7 +51,19 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
 
     public int ReviewCalls { get; private set; }
 
+    public int CreateCustomEventCalls { get; private set; }
+
+    public int StartCustomEventSessionCalls { get; private set; }
+
+    public int CreateCustomEventJoinCodeCalls { get; private set; }
+
+    public int StopCustomEventSessionCalls { get; private set; }
+
+    public int UpdatePreferencesCalls { get; private set; }
+
     public UserPreferences? UpdatedPreferences { get; private set; }
+
+    public Uri? SharedEventServerBaseUri { get; private set; }
 
     public int StatusCalls { get; private set; }
 
@@ -50,6 +74,8 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
     public Func<CancellationToken, Task<Result<ReviewSnapshot>>>? SnapshotHandler { get; set; }
 
     public Func<IncidentId, ReplayOffset, CancellationToken, Task<Result>>? ReviewHandler { get; set; }
+
+    public Func<CancellationToken, Task<Result>>? CreateCustomEventHandler { get; set; }
 
     public Func<UserPreferences, CancellationToken, Task<Result>>? UpdatePreferencesHandler { get; set; }
 
@@ -107,6 +133,43 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
         IncidentAnnotation annotation,
         CancellationToken cancellationToken) => throw new NotSupportedException();
 
+    public Task<Result> CreateCustomEventAsync(CancellationToken cancellationToken)
+    {
+        CreateCustomEventCalls++;
+        return CreateCustomEventHandler is null
+            ? Task.FromResult(CreateCustomEventResult)
+            : CreateCustomEventHandler(cancellationToken);
+    }
+
+    public Task<Result> ReviewCustomEventAsync(
+        CustomEventId customEventId,
+        ReplayOffset offset,
+        CancellationToken cancellationToken) => Task.FromResult(ReviewCustomEventResult);
+
+    public Task<Result<string>> StartCustomEventSessionAsync(
+        Uri listenUri,
+        Uri advertisedBaseUri,
+        CancellationToken cancellationToken)
+    {
+        StartCustomEventSessionCalls++;
+        return Task.FromResult(StartCustomEventSessionResult);
+    }
+
+    public Task<Result<string>> CreateCustomEventJoinCodeAsync(
+        Uri serverBaseUri,
+        CancellationToken cancellationToken)
+    {
+        CreateCustomEventJoinCodeCalls++;
+        SharedEventServerBaseUri = serverBaseUri;
+        return Task.FromResult(CreateCustomEventJoinCodeResult);
+    }
+
+    public Task<Result> StopCustomEventSessionAsync(CancellationToken cancellationToken)
+    {
+        StopCustomEventSessionCalls++;
+        return Task.FromResult(StopCustomEventSessionResult);
+    }
+
     public Task<Result<UserPreferences>> GetPreferencesAsync(CancellationToken cancellationToken) =>
         Task.FromResult(PreferencesResult);
 
@@ -114,6 +177,7 @@ internal sealed class FakeIncidentReviewService : IIncidentReviewService
         UserPreferences preferences,
         CancellationToken cancellationToken)
     {
+        UpdatePreferencesCalls++;
         UpdatedPreferences = preferences;
         var result = UpdatePreferencesHandler is null
             ? UpdatePreferencesResult

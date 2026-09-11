@@ -28,6 +28,20 @@ public sealed class TelemetryApiTests
 
     [TestMethod]
     [TestProperty("Requirement", "QR-ARC-002")]
+    [TestProperty("Requirement", "QR-ERR-002")]
+    public void CurrentReaderExposesOneSynchronousReadOnlySnapshotOperation()
+    {
+        var methods = typeof(ICurrentTelemetryReader).GetMethods();
+        Assert.HasCount(1, methods);
+
+        var read = methods[0];
+        Assert.AreEqual(nameof(ICurrentTelemetryReader.Read), read.Name);
+        Assert.AreEqual(typeof(Results.Result<TelemetrySample>), read.ReturnType);
+        Assert.IsEmpty(read.GetParameters());
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "QR-ARC-002")]
     public void OnTrackStatesHaveExplicitStableValues()
     {
         var values = Enum.GetValues<OnTrackState>();
@@ -54,6 +68,7 @@ public sealed class TelemetryApiTests
         CollectionAssert.AreEquivalent(
             new[]
             {
+                typeof(ICurrentTelemetryReader),
                 typeof(ITelemetrySource),
                 typeof(OnTrackState),
                 typeof(ParticipantIncidentCounter),

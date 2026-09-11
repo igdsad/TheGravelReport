@@ -119,6 +119,7 @@ public static class IracingTestingRegistration
             connectionState);
         return new IracingTestIntegrationContext(
             source,
+            new IracingCurrentTelemetryReader(connectionState),
             new IracingReplayController(sender, connectionState, confirmationTimeout),
             new IracingReplayContextReader(connectionState),
             sender);
@@ -418,11 +419,13 @@ public sealed class IracingTestIntegrationContext
 
     internal IracingTestIntegrationContext(
         ITelemetrySource telemetry,
+        ICurrentTelemetryReader currentTelemetry,
         IReplayController controller,
         IReplayContextReader contextReader,
         RecordingReplayMessageSender sender)
     {
         Telemetry = telemetry;
+        CurrentTelemetry = currentTelemetry;
         Controller = controller;
         ContextReader = contextReader;
         _sender = sender;
@@ -430,6 +433,9 @@ public sealed class IracingTestIntegrationContext
 
     /// <summary>Gets the shared-memory telemetry adapter.</summary>
     public ITelemetrySource Telemetry { get; }
+
+    /// <summary>Gets the current accepted telemetry snapshot reader.</summary>
+    public ICurrentTelemetryReader CurrentTelemetry { get; }
 
     /// <summary>Gets the replay controller observing every copied telemetry frame.</summary>
     public IReplayController Controller { get; }

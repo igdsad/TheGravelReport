@@ -54,4 +54,34 @@ public static class ApplicationErrors
         ApplicationErrorCodes.RuntimeStopped,
         ErrorKind.Unavailable,
         "The incident-review runtime has stopped.");
+
+    public static Error CustomEventUnavailable { get; } = Error.Create(
+        ApplicationErrorCodes.CustomEventUnavailable,
+        ErrorKind.Unavailable,
+        "A live iRacing session and replay position are required to mark a custom event.");
+
+    public static Error CustomEventNameRequired { get; } = Error.Create(
+        ApplicationErrorCodes.CustomEventNameRequired,
+        ErrorKind.Validation,
+        "Enter your name in Custom event settings before marking an event.");
+
+    public static Error CustomEventNotFound { get; } = Error.Create(
+        ApplicationErrorCodes.CustomEventNotFound,
+        ErrorKind.NotFound,
+        "The requested custom event was not found.");
+
+    public static Error EventSyncUnavailable { get; } = Error.Create(
+        ApplicationErrorCodes.EventSyncUnavailable,
+        ErrorKind.Unavailable,
+        "Custom-event network synchronization is unavailable.");
+
+    public static Error CustomEventDuplicate { get; } = Error.Create(
+        ApplicationErrorCodes.CustomEventDuplicate,
+        ErrorKind.Conflict,
+        "A custom event with the same deterministic identity was already received; the first event remains authoritative.");
+
+    public static Error InvalidEventJoinCode { get; } = Error.Create(
+        ApplicationErrorCodes.InvalidEventJoinCode,
+        ErrorKind.Validation,
+        "The custom-event join code is invalid or unsupported.");
 }

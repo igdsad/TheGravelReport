@@ -128,6 +128,49 @@ public abstract class MainWindowAction
         public string? CameraName { get; }
     }
 
+    /// <summary>Changes the unsaved custom-event preference drafts.</summary>
+    public sealed class EditCustomEventSettings : MainWindowAction
+    {
+        public EditCustomEventSettings(string submitterName, string key, string joinCode)
+        {
+            ArgumentNullException.ThrowIfNull(submitterName);
+            ArgumentNullException.ThrowIfNull(key);
+            ArgumentNullException.ThrowIfNull(joinCode);
+            SubmitterName = submitterName;
+            Key = key;
+            JoinCode = joinCode;
+        }
+
+        public string SubmitterName { get; }
+
+        public string Key { get; }
+
+        public string JoinCode { get; }
+    }
+
+    /// <summary>Changes the address draft used when hosting a joinable session.</summary>
+    public sealed class EditEventHostAddress : MainWindowAction
+    {
+        public EditEventHostAddress(string address)
+        {
+            ArgumentNullException.ThrowIfNull(address);
+            Address = address;
+        }
+
+        public string Address { get; }
+    }
+
+    /// <summary>Changes whether the local HTTP custom-event host is running.</summary>
+    public sealed class SetCustomEventSessionHosting : MainWindowAction
+    {
+        public SetCustomEventSessionHosting(bool isHosting)
+        {
+            IsHosting = isHosting;
+        }
+
+        public bool IsHosting { get; }
+    }
+
     /// <summary>Adds one event and makes that exact event the current status.</summary>
     public sealed class ShowNotice : MainWindowAction
     {

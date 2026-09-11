@@ -1,8 +1,8 @@
 # GravelReview — System Design
 
-- **Status:** Accepted architecture; adaptive-themed runnable MVP implemented, distribution and live-simulator acceptance pending
-- **Document version:** 1.6
-- **Last updated:** 2026-09-06
+- **Status:** Accepted architecture; deterministic custom-event MVP and headless alpha server implemented, production hardening and live-simulator acceptance pending
+- **Document version:** 1.7
+- **Last updated:** 2026-09-10
 - **Target platform:** Windows x64
 - **Target runtime:** .NET 10 LTS / C# 14
 
@@ -16,11 +16,11 @@ The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A depar
 
 ## 1. Executive summary
 
-GravelReview is a local Windows companion for iRacing. It observes the scored incident counters that iRacing exposes for eligible participants in a live field, records participant-scoped incident markers, presents the active event through a review UI, and lets the user review an incident at two seconds before, exactly at, or two seconds after its recorded time while focusing the recorded car and applying the stored playback state. An application `SessionIdentity` is the event container; one event may contain several SDK `SessionNum` heat coordinates.
+GravelReview is a local-first Windows companion for iRacing. It observes the scored incident counters that iRacing exposes for eligible participants in a live field, records deterministic participant-scoped incidents and user-triggered named custom markers, and presents the active event through a review UI. The user can review a marker at two seconds before, exactly at, or two seconds after its recorded time while focusing the recorded participant when that event carries one and applying the stored playback state. An application `SessionIdentity` is the event container; one event may contain several SDK `SessionNum` heat coordinates. Joined drivers may send custom markers to a central reviewer only after leaving the car.
 
 The WPF experience has three durable theme modes: follow the live Windows application theme, force Light, or force Dark. Native WPF semantic resource dictionaries provide the visual system; the configured preference and concrete resolved palette remain separate values in the same immutable presentation state as the rest of the screen.
 
-The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay messages, SQLite, Dapper, DbUp, WPF, and any future server protocol—must remain inside their owning assemblies. The WPF host is the sole composition root that selects concrete implementations.
+The system is built as independent .NET libraries connected through explicit interfaces. Infrastructure details—including iRacing shared memory, Windows replay/hot-key messages, SQLite, Dapper, DbUp, WPF, Kestrel, HTTP routing, and JSON wire DTOs—must remain inside their owning assemblies. `Host.Wpf` composes the desktop application and `Host.Server` independently composes the headless receiver; those are the only production composition roots, so a future container or alternate event transport does not rewrite application policy.
 
 SQLite is the initial durable store. Every application mutation is an immutable `IStore` command with idempotent committed effects whose implementation owns one transaction; application code never receives a database connection or transaction. Dapper performs parameterized SQL mapping, and DbUp applies immutable, ordered schema migrations before normal startup.
 
@@ -37,17 +37,28 @@ iRacing shared memory/event
     → IncidentReview.Iracing
     → ITelemetrySource
     → IncidentReview.Application
-    → typed IStore commands/queries
-    → IncidentReview.Store.Sqlite
-    → SQLite
+        ├─ detected incidents / custom-event outbox
+        │   → typed IStore commands/queries
+        │   → IncidentReview.Store.Sqlite
+        │   → SQLite
+        └─ pending custom events after NotOnTrack
+            → ICustomEventPublisher
+            → IncidentReview.EventSync.Http
+            → POST to joined host
 
-IncidentReview.Iracing → IReplayContextReader
+Joined client                              Reviewer desktop or headless server
+ICustomEventPublisher ── HTTP/JSON ──→ EventSync.Http versioned endpoint
+                                       → ICustomEventReceiver
+                                           ├─ Application → Store.Sqlite
+                                           └─ EventSync.Sqlite inbox
+
+IncidentReview.Iracing → IReplayContextReader / ICurrentTelemetryReader
                          → IncidentReview.Application
 
 WPF UI
     → IIncidentReviewService.GetSnapshotAsync
     ← coherent ReviewSnapshot
-    → ReviewIncidentAsync(IncidentId, ReplayOffset)
+    → CreateCustomEventAsync / ReviewIncidentAsync / ReviewCustomEventAsync
     → IReplayController
     → official iRacing replay broadcast messages
     ← later stable iRacing telemetry confirmation
@@ -56,15 +67,18 @@ WPF UI
 Implemented at this revision:
 
 - validated domain values plus shared `Result`/`Result<T>` failure primitives;
-- simulator-neutral telemetry, replay, store, and application contract assemblies;
-- field-wide eligible-participant scored incident detection, independent durable participant checkpoints, reconnect/restart session resolution, and indeterminate-command reconciliation;
-- the SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, and embedded checksum-pinned DbUp migrations, including the additive theme-preference upgrade;
+- simulator-neutral telemetry, replay, store, event-sync, and application contract assemblies;
+- namespaced deterministic UUIDv5 identity for durable sessions, detected incidents, and custom events, while retaining UUIDv7 compatibility for existing/provisional session and incident rows;
+- field-wide eligible-participant scored incident detection, independent durable participant checkpoints, reconnect/restart event resolution, local-first named custom-event capture, and indeterminate-command reconciliation;
+- the desktop SQLite implementation using parameterized Dapper SQL, serialized bounded execution, per-operation transactions, operation fingerprints, a durable custom-event outbox, and five embedded checksum-pinned DbUp migrations;
+- a replaceable HTTP event-sync adapter with a versioned join code containing the advertised server URI and deterministic session identity, bounded versioned JSON requests, first-ID-wins receiver semantics, and application-owned out-of-car publication timing;
+- a cross-platform `EventSync.Sqlite` first-write-wins inbox plus an independent `Host.Server` composition root with a health endpoint, validated listen/database configuration, and self-contained Linux/systemd deployment files;
 - a repository-owned adapter transcribed from the official iRacing SDK 1.20 archive, including shared-memory reads, bounded meaningful-event delivery, narrow session/driver/camera metadata extraction, and confirmed replay seek/camera/playback control;
-- one coherent `ReviewSnapshot` application read containing revisioned status, the active session and its incidents, stored preferences, and transient driver/camera context;
-- a WPF screen centered on the active session's chronological incident log, with a full local recorded timestamp, captured driver context with team/car fallback, `-2 sec`, `0 sec`, and `+2 sec` actions on each row, compact display identifiers backed by full stable IDs, transient active-driver context, a collapsed Advanced panel, GravelReview branding, and a quiet bottom status bar;
+- one coherent `ReviewSnapshot` application read containing revisioned status, the active session with incidents and custom events, stored preferences, and transient driver/camera context;
+- a WPF screen centered on the active event's chronological review events, with full local recorded timestamps, captured participant context with team/car fallback for incidents, `-2 sec`, `0 sec`, and `+2 sec` replay actions, compact display identifiers backed by full stable IDs, configurable named custom-event capture through a global keyboard gesture (including wheel buttons mapped to that gesture), local/shared host controls, transient active-driver context, a collapsed Advanced panel, GravelReview branding, and a quiet bottom status bar;
 - native light/dark WPF palettes plus a status-bar control for durable `FollowDesktop`, `Light`, and `Dark` selection, with live Windows-theme observation and pre-show application of the stored mode;
 - a single immutable `MainWindowState` reduced from explicit UI actions and replaced atomically for top-down WPF rendering; it owns the configured and resolved theme values, and its bounded tail-follow event stream and current status share the exact same event object;
-- a Generic Host composition root with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown;
+- two explicit composition roots: the WPF Generic Host with validated DI, ordered store bootstrap, runtime supervision, a per-user database default, a single-instance guard, and deterministic shutdown; and the slim ASP.NET Core server host with its own receiver/inbox lifetime;
 - automated domain, contract, application, SQLite, architecture, adapter/protocol-simulator, view-model, and Release-host-startup tests.
 
 The official archive is evidence, not a linked native or managed runtime dependency. The pinned `irsdk-1-20.zip` is 102,658 bytes with SHA-256 `af4948cc8efe03fa7c99332a63da1ab9d7b34e5b6107540c176ed682e48a2d79`. It was inspected without adding the upstream source to this repository. Exact reviewed entry hashes, ABI decisions, URLs, and licensing scope are recorded in [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md); the distributable copies [`vendor/third_party/iracing-sdk-1.20/NOTICE.md`](vendor/third_party/iracing-sdk-1.20/NOTICE.md).
@@ -74,7 +88,7 @@ Not yet complete or accepted for a public release:
 - acceptance against a recorded current real iRacing build, including a permitted redacted session-information fixture and field-wide participant-counter validation with `Max Cars = 63`;
 - packaged UI Automation through the independent protocol simulator, broad frame-mutation coverage, crash/power-loss campaigns, mutation/fuzz/stress runs, dependency inventory/SBOM automation, an installer/updater, and a persistent Release log sink;
 - WPF controls for annotations, classification, and explicit reviewed/dismissed state, even though annotation application support and reviewed-state store support already exist;
-- JSON export, remote storage, and synchronization.
+- JSON export, general remote `IStore`, authenticated/TLS event-sync deployment, and production container hosting.
 
 No test result or live-simulator acceptance is implied by this document alone. The exact commands in the root `README.md` produce the evidence for the current checkout.
 
@@ -82,7 +96,7 @@ No test result or live-simulator acceptance is implied by this document alone. T
 
 ### 2.1 Primary user outcome
 
-After completing or pausing an iRacing session, a driver can see the scored incidents exposed for eligible participants in the active session, choose `-2 sec`, `0 sec`, or `+2 sec` on one row, and have iRacing move its replay to that explicit offset from the event with the participant recorded on the incident and preferred—or current—camera group selected.
+During an iRacing event, a driver can see the scored incidents exposed for eligible participants and manually mark a noteworthy moment with a configured keyboard or wheel-mapped button. After leaving the car, the driver—or a central league reviewer receiving joined drivers' custom markers—can choose `-2 sec`, `0 sec`, or `+2 sec` and have iRacing move its replay to that explicit offset, focusing the incident's recorded participant when applicable and using the preferred—or current—camera group.
 
 ### 2.2 Primary workflow
 
@@ -91,14 +105,17 @@ After completing or pausing an iRacing session, a driver can see the scored inci
 3. The application waits for iRacing telemetry.
 4. When iRacing connects, the application identifies the active event from validated SDK evidence. A new SDK heat number does not by itself create another event.
 5. The adapter reads eligible `DriverInfo:Drivers` entries. Presence of `CurDriverIncidentCount` selects an independent current-driver counter; its absence selects the legacy team counter. The adapter emits a deterministic participant-counter collection without exposing SDK field names through the telemetry contract.
-6. The detector evaluates every participant against an independent persisted checkpoint. A positive increase creates a durable incident record containing that participant's identity and optional driver/team/car context, its replay position, the new total, and the complete observed delta.
-7. The application publishes a revision and the UI obtains one coherent `ReviewSnapshot`; one reducer transition replaces the immutable top-level state and shows the incident.
-8. The user exits the car; the current policy requires an authoritative `NotOnTrack` sample before replay control.
-9. The user chooses `-2 sec`, `0 sec`, or `+2 sec` on an incident row; double-click means `0 sec`.
-10. The application applies the selected `ReplayOffset` to the stored incident time, clamping a negative result to zero, and preflights the current simulator/session state and stored playback representation before sending an external command.
-11. The replay controller seeks to the explicit target and waits for a later stable telemetry frame to confirm the requested session/time.
-12. The controller resolves and focuses the participant stored with the incident using the stored camera-group preference, or preserves the current group when no preference is set, and waits for camera confirmation.
-13. The controller applies the stored pause or playback-speed compatibility preference and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
+6. The detector evaluates every participant against an independent persisted checkpoint. A positive increase creates a durable incident record containing that participant's identity and optional driver/team/car context, its replay position, the new total, and the complete observed delta. Its UUIDv5 identity is derived from the deterministic event session, participant identity, counter epoch, and resulting total.
+7. Independently, activating the configured custom-event gesture during a live event captures the current replay position and normalized submitter name. The event's UUIDv5 identity is derived from the deterministic session, replay session number, and exact integer session-time milliseconds; the event is committed locally in pending-outbox state before any network work.
+8. A reviewer may start an in-process joinable session using separate listen and advertised addresses, or generate a join code for the separately deployed shared server. The versioned code carries the advertised HTTP(S) base URI and deterministic event identity. Other clients persist that code to join; it is a locator, not a credential.
+9. The application publishes a revision and the UI obtains one coherent `ReviewSnapshot`; one reducer transition replaces the immutable top-level state and shows the incidents and custom events.
+10. The user exits the car. The current policy requires an authoritative `NotOnTrack` sample before replay control and before the application drains pending custom-event submissions.
+11. Each joined client posts pending events to the endpoint outside any store transaction. The receiver commits the first payload for an exact deterministic custom-event ID and returns `Duplicate` for later copies; either outcome completes that client's outbox item, while a transport failure leaves it pending for a later out-of-car attempt.
+12. The user chooses `-2 sec`, `0 sec`, or `+2 sec` on an incident or custom-event row; double-click means `0 sec`.
+13. The application applies the selected `ReplayOffset` to the stored event time, clamping a negative result to zero, and preflights the current simulator/session state and stored playback representation before sending an external command.
+14. The replay controller seeks to the explicit target and waits for a later stable telemetry frame to confirm the requested session/time.
+15. For an incident, the controller resolves and focuses the participant stored with the row. For a custom marker, it focuses the current local participant. In both cases it uses the stored camera-group preference, or preserves the current group when no preference is set, and waits for camera confirmation.
+16. The controller applies the stored pause or playback-speed compatibility preference and waits for playback confirmation. A failure identifies the exact precondition or seek, camera, or playback stage that failed.
 
 Classification, notes, explicit reviewed/dismissed actions, and export remain follow-on UI capabilities; they are not steps in the current WPF workflow.
 
@@ -107,6 +124,9 @@ The current WPF incident rows show the full local recorded time through millisec
 ### 2.3 Goals
 
 - Detect and persist cumulative scored incident-count increases independently for every eligible participant iRacing exposes in the current field.
+- Capture a named custom replay marker without taking focus from iRacing, using a configurable Windows key gesture that steering-wheel software can emit.
+- Preserve custom markers locally before network publication and synchronize them only while the driver is out of the car.
+- Let one reviewer host the deterministic iRacing event locally or through the headless shared service and accept joined clients through a self-contained server-address/session join code.
 - Preserve the iRacing session number and session time required for exact replay seeking.
 - Present a fast, accessible Windows UI whose primary log contains only the active session's incidents and whose complete visible state arrives and renders as one coherent top-down value.
 - Render a consistent native WPF visual system in Follow desktop, Light, and Dark modes without introducing a third-party theme framework.
@@ -127,7 +147,8 @@ The current WPF incident rows show the full local recorded time through millisec
 - Automatically detecting every contact between every car in the field.
 - Claiming visibility into entrants or incidents that iRacing does not expose to the local client, including a `0x` contact that does not change a scored counter.
 - Replacing iRacing's replay UI or rendering replay video ourselves.
-- Uploading data to a server or providing multi-device synchronization.
+- General remote storage or synchronization of sessions, automatic incidents, annotations, preferences, or raw telemetry; the initial network scope is custom-event submission only.
+- Authentication, authorization, confidentiality, Internet discovery, or a production public hosting service for the initial trusted-network event-sync protocol.
 - Calling the remote iRacing Data API.
 - Recording every 60 Hz telemetry field indefinitely.
 - Supporting operating systems other than Windows.
@@ -144,31 +165,37 @@ Requirements use stable identifiers. Tests MUST reference one or more requiremen
 |---|---|
 | IR-CON-001 | The application detects iRacing connection and disconnection without requiring a restart. |
 | IR-SES-001 | The application creates or resumes the correct local event record when telemetry identifies an event. Several SDK heat/session numbers under the same event key share that record and incident list. |
-| IR-SES-002 | Valid durable simulator event evidence resolves to the same application session across heat changes, reconnect, and restart; ambiguous evidence is never heuristically merged. |
+| IR-SES-002 | The canonical simulator code and exact validated durable simulator-event key resolve to one namespaced RFC UUIDv5 `SessionIdentity` across clients, heat changes, reconnects, and restarts; ambiguous evidence receives a connection-scoped UUIDv7 identity and is never heuristically merged or advertised for joining. |
 | IR-SES-003 | A malformed or inconsistent frame is transient unavailability, not an event boundary. Recovery before 30 seconds have elapsed since the last successfully decoded sample retains the same connection-scoped key, active application session, participant checkpoints, and recorded incidents. A real SDK disconnect or expiry of that deadline ends the provisional event; valid evidence of another simulator event selects that event instead. |
 | IR-INC-001 | A positive increase in an eligible participant's applicable cumulative scored incident counter records one participant-scoped incident marker. |
 | IR-INC-002 | The marker records both the new total and the positive incident-point delta. |
 | IR-INC-003 | A participant counter decrease, SDK heat-number change, application-event transition, or reconnect is handled as a state transition and never as a negative incident. A decrease or heat change establishes a new baseline and advances only that participant's counter epoch; the heat change retains the event's earlier incidents. |
-| IR-INC-004 | Duplicate or repeated telemetry samples do not create duplicate incident records. |
+| IR-INC-004 | A detected incident's namespaced RFC UUIDv5 identity is derived from its deterministic session, `ParticipantIdentity`, counter epoch, and resulting incident-points total; duplicate or repeated telemetry samples do not create duplicate incident records. |
 | IR-INC-005 | Detector progress and its incident record are persisted atomically so failure, retry, or restart cannot silently lose or duplicate an incident. |
 | IR-INC-006 | Each eligible scored entry exposed in current `DriverInfo:Drivers` has an independent checkpoint. A current-driver row is keyed by `CarIdx`, positive `UserID`, and positive `TeamID` when present; a legacy team row is keyed by `CarIdx` plus positive `TeamID`, otherwise positive `UserID`. Missing or insufficient identity evidence omits the participant. A team-car driver swap starts or resumes that driver's stream without resetting another driver or car. |
 | IR-INC-007 | One observed positive jump creates one marker with the complete delta, while same-update jumps by different participants create independent markers. Presence of `CurDriverIncidentCount`, including an unavailable value, selects driver semantics; only absence selects legacy `TeamIncidentCount`. The matching local `PlayerCarDriverIncidentCount` or `PlayerCarTeamIncidentCount` may substitute only within the selected scope. `PlayerCarMyIncidentCount` and cross-scope substitution are forbidden. A `0x` without a counter change is not observable, and field-wide coverage is bounded by the entries iRacing transmits to this client; intended coverage requires `Max Cars = 63`. |
-| IR-RPY-001 | A recorded incident contains a simulator-neutral replay position with session number and session time. |
-| IR-RPY-002 | Reviewing an incident accepts an explicit `-2 sec`, `0 sec`, or `+2 sec` offset, applies it to the recorded time with a zero lower bound, focuses the participant recorded with the incident using the preferred/current camera group, and applies the stored playback state in that order. The compatibility overload without an explicit offset continues to use the stored lead-in. |
+| IR-EVT-001 | A custom event's namespaced RFC UUIDv5 identity is derived exactly from deterministic session identity, replay session number, and session-time milliseconds. Submitter and wall-clock occurrence time are payload and cannot change that identity. |
+| IR-EVT-002 | Activating custom-event capture during a live session records one locally durable marker with replay position, normalized submitter name, occurrence time, and pending/synchronized outbox state. |
+| IR-EVT-003 | The custom-event gesture is a validated durable WPF key-gesture string, defaults to `F9`, registers application-wide with no-repeat semantics, and can be activated by a steering-wheel button mapped by its own software to that gesture. A failed rebind leaves the prior working registration intact. |
+| IR-SYNC-001 | A host creates a versioned canonical join code containing a separately configured advertised HTTP(S) base URI and deterministic UUIDv5 session identity. The code is a locator rather than a credential; the initial protocol intentionally provides no authentication or secrecy. |
+| IR-SYNC-002 | A received submission must prove its deterministic event ID matches its session/replay position. The first payload committed for an exact ID is authoritative; every later submission with that ID is ignored as `Duplicate` and produces a safe warning regardless of other payload differences. |
+| IR-SYNC-003 | Network publication occurs outside store transactions and only after authoritative `NotOnTrack` telemetry. `Accepted` and `Duplicate` responses mark the local outbox item synchronized; unavailable or indeterminate transport leaves it pending for a later out-of-car attempt. |
+| IR-RPY-001 | A recorded incident or custom event contains a simulator-neutral replay position with session number and session time. |
+| IR-RPY-002 | Reviewing an incident or custom event accepts an explicit `-2 sec`, `0 sec`, or `+2 sec` offset, applies it to the recorded time with a zero lower bound, focuses the incident's recorded participant or the current local participant for a custom marker with the preferred/current camera group, and applies the stored playback state in that order. The compatibility incident overload without an explicit offset continues to use the stored lead-in. |
 | IR-RPY-003 | Replay actions unavailable in the current iRacing state are disabled or return a clear structured failure. |
-| IR-STR-001 | Sessions and incidents survive application restart. |
+| IR-STR-001 | Sessions, incidents, custom events, and pending synchronization state survive application restart. |
 | IR-STR-002 | Every application data mutation executes inside a transaction. |
 | IR-STR-003 | A failed multi-step write leaves no partial application state. |
 | IR-STR-004 | Released schema migrations are applied once and are never edited in place. |
 | IR-STR-005 | Re-executing an identical command with the same operation identifier can produce at most one committed effect; a transient pre-commit failure may later succeed. |
 | IR-STR-006 | An indeterminate commit can be reconciled by operation identifier before retry. |
-| IR-HIS-001 | Past event sessions and incidents remain durably queryable through application/store contracts after restart; the primary WPF UI displays only the active event container and does not expose history navigation. Incidents from all heat numbers grouped into that event are shown together. |
-| IR-SET-001 | Mutable durable user preferences, including preferred camera and hidden lead-in/playback compatibility values, are stored through `IStore`; removing controls from the primary UI does not silently discard existing values. |
+| IR-HIS-001 | Past event sessions, incidents, and custom events remain durably queryable through application/store contracts after restart; the primary WPF UI displays only the active event container and does not expose history navigation. Incidents and custom events from all heat numbers grouped into that event are shown together. |
+| IR-SET-001 | Mutable durable user preferences, including preferred camera, hidden lead-in/playback compatibility values, custom-event submitter, key gesture, and optional join code, are stored atomically through `IStore`; removing or editing one control does not silently discard the others. |
 | IR-SET-002 | The durable theme preference is exactly `FollowDesktop`, `Light`, or `Dark`, defaults to `FollowDesktop` for new and upgraded databases, and is updated atomically with the existing replay preferences through `IStore`. A failed update preserves every previously stored preference. |
-| IR-UI-001 | One coherent revisioned `ReviewSnapshot` supplies the active session, chronological incidents, connection/error state, stored preferences, transient active driver, and live camera groups. WPF renders one immutable top-level `MainWindowState`; stale revisions cannot replace newer state and an automatic refresh preserves a dirty camera draft. |
+| IR-UI-001 | One coherent revisioned `ReviewSnapshot` supplies the active session, chronological incidents and custom events, connection/error state, stored preferences, transient active driver, and live camera groups. WPF renders one immutable top-level `MainWindowState`; stale revisions cannot replace newer state and an automatic refresh preserves valid dirty drafts. |
 | IR-UI-002 | Every safe actionable UI message is one immutable event appended to the bounded event stream and assigned by reference as `CurrentStatusEvent`. Except while a transient busy label obscures it, the status bar displays that exact event object's message; busy state MUST NOT create or replace a competing status event. |
 | IR-UI-003 | The status-bar theme control cycles `FollowDesktop → Light → Dark → FollowDesktop`, applies the newly resolved palette immediately, and persists it. `FollowDesktop` reacts live to Windows application-theme changes; forced modes ignore those changes. Persistence failure restores the complete prior preference and its current resolved palette before publishing one specific error event/status. The stored preference is applied before the main window is shown. |
-| IR-UI-004 | Publishing root state MUST NOT reinterpret WPF selector rebinding as new user input. Equivalent incident/camera selections return the existing state instance, selector setters ignore render-time write-back, and unrelated state transitions retain unchanged item-collection identities. |
+| IR-UI-004 | Publishing root state MUST NOT reinterpret WPF selector rebinding as new user input. Equivalent review-event/camera selections return the existing state instance, selector setters ignore render-time write-back, and unrelated state transitions retain unchanged item-collection identities. |
 | IR-UI-005 | Each primary incident row displays its captured driver name, falling back to team name, car number, or `Unknown driver`, and displays an unambiguous local recorded timestamp through milliseconds with its UTC offset. Initial chronology and interactive Recorded-at sorting use the underlying instant with full stored precision rather than formatted display text. Review status remains durable but is not a primary-grid column. |
 
 Deferred requirement: `DR-EXP-001` — a future export operation can serialize selected session data without exposing the SQLite schema.
@@ -191,6 +218,7 @@ Deferred requirement: `DR-EXP-001` — a future export operation can serialize s
 | QR-TST-003 | Release validation tests the compiled and packaged deliverable, not only Debug source-level execution. |
 | QR-DEP-001 | SDK and package versions are controlled from repository-root files. |
 | QR-DEP-002 | Restores are repeatable and CI rejects an unreviewed dependency graph change. |
+| QR-SEC-001 | Event-sync input is strictly bounded and validated at the HTTP adapter. Documentation and UI never present an unauthenticated join code as a secret or security boundary and explicitly disclose that the public alpha endpoint is unauthenticated and unencrypted. |
 | QR-VCS-001 | Repository commits follow Conventional Commits and contain one cohesive, reviewable change. |
 | QR-VCS-002 | Each commit is independently buildable and includes the tests and documentation required by its behavior. |
 | QR-VCS-003 | Generated output, local databases/logs, credentials, and unrelated user changes are never included in a commit. |
@@ -201,7 +229,7 @@ Deferred requirement: `DR-EXP-001` — a future export operation can serialize s
 2. **Depend inward on contracts.** Application policy does not depend on infrastructure mechanisms.
 3. **Behavior crosses boundaries through interfaces.** Immutable value records may cross boundaries directly; creating an interface for every DTO does not improve isolation.
 4. **Infrastructure types do not leak.** Database connections, SDK buffers, Windows messages, UI classes, and transport DTOs stay in their adapter assemblies.
-5. **The composition root is the only concrete meeting point.** It may reference implementations solely to register them.
+5. **Composition roots are the only concrete meeting points.** Each executable may reference implementations solely to register the adapters it owns.
 6. **Make invalid operations difficult to express.** Mutations are typed atomic store commands; transaction-bound handlers remain internal to the SQLite implementation.
 7. **Failures are data when callers can reasonably handle them.** Defects and invariant violations remain exceptions.
 8. **Test through the surface that production uses.** Test hooks enable conditions; they do not create alternate production behavior.
@@ -214,22 +242,33 @@ Deferred requirement: `DR-EXP-001` — a future export operation can serialize s
 
 ```text
 ┌──────────────────┐       shared memory / event       ┌────────────────────────┐
-│     iRacing      │ ─────────────────────────────────→ │ Telemetry implementation │
-│ simulator/replay │                                     └────────────┬───────────┘
-│                  │ ←─────────────────────────────────┐              │ contract values
-└──────────────────┘    Windows broadcast messages     │              ▼
-                                                   ┌───┴─────────────────────────┐
-                                                   │ Application + incident logic │
-                                                   └───────┬──────────────┬──────┘
-                                                           │              │
-                                                    IStore │              │ application contracts
-                                                           ▼              ▼
-                                                   ┌────────────┐   ┌───────────┐
-                                                   │   SQLite   │   │  WPF UI   │
-                                                   └────────────┘   └───────────┘
+│     iRacing      │ ─────────────────────────────────→ │ IncidentReview.Iracing │
+│ simulator/replay │ ←───────────────────────────────── │ telemetry + replay     │
+└──────────────────┘    Windows broadcast messages     └────────────┬───────────┘
+                                                                  │ contracts
+                                                                  ▼
+┌──────────────┐  application contracts  ┌─────────────────────────────────────┐
+│    WPF UI    │ ←──────────────────────→ │ IncidentReview.Application          │
+│ + key hook   │                          │ incident, custom-event, outbox policy│
+└──────────────┘                          └────────────┬───────────────┬─────────┘
+                                                     │ IStore        │ event-sync contracts
+                                                     ▼               ▼
+                                               ┌──────────┐   ┌────────────────┐
+                                               │  SQLite  │   │ HTTP publisher │
+                                               │ + outbox │   └───────┬────────┘
+                                               └──────────┘           │ versioned POST
+                                                                      ▼
+                                      ┌────────────────────────────────────────┐
+                                      │ EventSync.Http receiver endpoint        │
+                                      └────────────────┬───────────────────────┘
+                                                       │ ICustomEventReceiver
+                                       ┌───────────────┴────────────────┐
+                                       ▼                                ▼
+                              Reviewer Host.Wpf                  Headless Host.Server
+                              Application + Store.Sqlite         EventSync.Sqlite inbox
 ```
 
-The application runs locally under the user's Windows account. SQLite is embedded; there is no database server or daemon to start.
+Each desktop application runs under its user's Windows account and owns an embedded SQLite database. Event synchronization does not turn `IStore` into a remote database: it sends only immutable custom-event submissions to a reviewer-hosted HTTP endpoint. That endpoint can run in the reviewer's desktop process or in the independently deployed headless service. Both use the same HTTP adapter and `ICustomEventReceiver` contract; the headless service persists to its own cross-platform SQLite inbox without referencing desktop/application/store assemblies.
 
 ## 6. Solution and project structure
 
@@ -246,12 +285,16 @@ src/
   IncidentReview.Telemetry.Contracts/
   IncidentReview.Replay.Contracts/
   IncidentReview.Application.Contracts/
+  IncidentReview.EventSync.Contracts/
 
   IncidentReview.Application/
+  IncidentReview.EventSync.Http/
+  IncidentReview.EventSync.Sqlite/
   IncidentReview.Store.Sqlite/
   IncidentReview.Iracing/
   IncidentReview.Desktop.Wpf/
   IncidentReview.Host.Wpf/
+  IncidentReview.Host.Server/
 
 tests/
   IncidentReview.TestKit/
@@ -261,6 +304,9 @@ tests/
   IncidentReview.Telemetry.Contracts.Tests/
   IncidentReview.Replay.Contracts.Tests/
   IncidentReview.Application.Tests/
+  IncidentReview.EventSync.Contracts.Tests/
+  IncidentReview.EventSync.Http.Tests/
+  IncidentReview.EventSync.Sqlite.Tests/
   IncidentReview.Store.ContractTests/
   IncidentReview.Store.Sqlite.Tests/
   IncidentReview.Iracing.Tests/
@@ -279,9 +325,13 @@ eng/
   build.ps1
   test.ps1
   verify.ps1
+
+deploy/
+  server/
+  systemd/
 ```
 
-`Export.Contracts`, `Export.Json`, `Store.Remote`, and `Store.Sync` are reserved in the architecture policy but have not been created. Dedicated machine-readable requirement/release evidence and reusable fixture directories are also planned, not present. Until those assets exist, `DESIGN.md`, test metadata, the SDK baseline, and the code are the available evidence sources.
+`Export.Contracts`, `Export.Json`, `Store.Remote`, and general-purpose `Store.Sync` are reserved in the architecture policy but have not been created. The implemented `EventSync` boundary is narrower: it publishes only immutable custom events and does not masquerade as an `IStore`. Dedicated machine-readable requirement/release evidence and reusable fixture directories are also planned, not present. Until those assets exist, `DESIGN.md`, test metadata, the SDK baseline, and the code are the available evidence sources.
 
 ### 6.1 Project responsibilities
 
@@ -290,14 +340,18 @@ eng/
 | `Results` | Shared success/failure primitives | `Result`, `Result<T>`, `Error`, `ErrorKind` |
 | `Domain` | Simulator-neutral identities, values, incident rules, and invariants | Domain values and pure services |
 | `Store.Contracts` | Store capabilities expressed as typed queries, atomic commands, and host-only initialization | `IStore`, `IStoreInitializer`, store queries, store commands |
-| `Telemetry.Contracts` | Stream of simulator-neutral telemetry observations | `ITelemetrySource`, telemetry records |
+| `Telemetry.Contracts` | Stream and latest accepted snapshot of simulator-neutral telemetry observations | `ITelemetrySource`, `ICurrentTelemetryReader`, telemetry records |
 | `Replay.Contracts` | Replay command and read-only context capabilities in application vocabulary | `IReplayController`, `IReplayContextReader`, `ReplayContext`, replay records |
 | `Application.Contracts` | Use cases, runtime lifecycle, and coherent UI-facing state/events | Application service/lifecycle interfaces, `ReviewSnapshot`, and immutable models |
-| `Application` | Use-case orchestration and incident detection | Registration module; internal implementations |
-| `Store.Sqlite` | Dapper queries, SQLite mappings, transactions, DbUp migrations | Registration/options plus a narrowly named testing registration surface |
+| `EventSync.Contracts` | Transport-neutral custom-event publication and joinable-session capabilities | `JoinCode`, `CustomEventSubmission`, `ICustomEventPublisher`, `ICustomEventSessionHost`, `ICustomEventReceiver` |
+| `Application` | Use-case orchestration, incident detection, custom-event capture, first-ID-wins receive policy, and out-of-car outbox policy | Registration module; internal implementations |
+| `EventSync.Http` | Versioned bounded JSON/HTTP custom-event publisher plus reusable and in-process Kestrel endpoints | Registration/options and endpoint mapping only; concrete transport implementations and wire DTOs are internal |
+| `EventSync.Sqlite` | Cross-platform first-write-wins durable inbox for the headless receiver | Registration/options plus a narrowly named testing registration surface |
+| `Store.Sqlite` | Dapper queries, SQLite mappings, transactions, custom-event outbox, DbUp migrations | Registration/options plus a narrowly named testing registration surface |
 | `Iracing` | SDK shared-memory reader, session-info translation, replay broadcasts and telemetry confirmation | Registration/options plus a narrowly named testing registration surface |
 | `Desktop.Wpf` | Views, effects, pure UI-state reduction, UI mapping, dispatcher interaction | `MainWindowState`, `MainWindowAction`, reducer, registration module, and WPF application surface |
 | `Host.Wpf` | Executable, composition root, startup and shutdown | Process entry point |
+| `Host.Server` | Headless executable, event-sync composition root, health endpoint, configuration, startup and shutdown | Process entry point |
 | `Analyzers` | Compile-time enforcement that needs semantic source analysis | Roslyn diagnostics only; no runtime API |
 | `Verification` | Reserved home for traceability, dependency, migration-manifest, artifact, and release-evidence checks; currently a no-op CLI scaffold | Repository CLI only; never shipped |
 | `Iracing.ProtocolSimulator` | Independent out-of-process shared-memory/event simulator used by adapter integration tests | Test executable only; never shipped |
@@ -309,13 +363,16 @@ An arrow means “may reference.” Framework assemblies are omitted.
 ```text
 Domain          ──→ Results
 *.Contracts     ──→ Domain + Results
-Application     ──→ Application.Contracts + Store.Contracts
+EventSync.Http  ──→ EventSync.Contracts + Domain + Results
+EventSync.Sqlite ─→ EventSync.Contracts + Domain + Results
+Application     ──→ Application.Contracts + EventSync.Contracts + Store.Contracts
                    + Telemetry.Contracts + Replay.Contracts + Domain + Results
 Desktop.Wpf     ──→ Application.Contracts + Domain + Results
 Store.Sqlite    ──→ Store.Contracts + Domain + Results
 Iracing         ──→ Telemetry.Contracts + Replay.Contracts + Domain + Results
-Host.Wpf        ──→ Application + Desktop.Wpf + Store.Sqlite + Iracing
+Host.Wpf        ──→ Application + EventSync.Http + Desktop.Wpf + Store.Sqlite + Iracing
                    + Application.Contracts + Store.Contracts + Results
+Host.Server     ──→ EventSync.Http + EventSync.Sqlite + Results
 ```
 
 Detailed rules:
@@ -325,11 +382,15 @@ Detailed rules:
 - A contract assembly MAY reference `Domain`, `Results`, and another lower-level contract only when unavoidable and documented.
 - `Application` MAY reference the contract assemblies, `Domain`, and `Results`.
 - `Application` MUST NOT reference WPF, iRacing, SQLite, Dapper, DbUp, HTTP implementations, or Windows interop.
+- `EventSync.Contracts` MUST remain transport-neutral: `Uri` locators are permitted, while `HttpClient`, ASP.NET, JSON DTOs, routes, sockets, and listener types are not. An alternate transport implements the same publisher/host contracts.
+- `EventSync.Http` owns `HttpClient`, Kestrel, bounded JSON wire DTOs, routing, status mapping, and transport-error translation. It MUST NOT own outbox scheduling, persistence, duplicate business policy, simulator state, or UI decisions.
+- `EventSync.Sqlite` owns only the headless receiver's cross-platform inbox schema, connection/lifetime details, and atomic first-write-wins persistence. It MUST NOT reference the desktop store, application, WPF, telemetry, replay, or iRacing assemblies.
 - `Desktop.Wpf` MUST consume application-facing interfaces and MUST NOT call `IStore`, Dapper, SQLite, or the iRacing adapter directly.
 - `Store.Sqlite` MUST NOT reference application, UI, telemetry, replay, or iRacing assemblies.
 - `Iracing` MUST NOT reference application, storage, or UI assemblies.
-- Only `Host.Wpf` may reference all concrete production implementations.
+- Only executable composition roots may reference concrete production implementations. `Host.Wpf` may wire the desktop adapters; `Host.Server` may wire only `EventSync.Http` and `EventSync.Sqlite`.
 - `Host.Wpf` declares direct references to every contract it names in source; it does not rely on accidental transitive project references.
+- `Host.Server` likewise declares every contract it names and contains only hosting, configuration, endpoint mapping, and lifetime code.
 - Tests may reference the implementation they test plus its public contracts; that exception never applies to production assemblies.
 - A production assembly MUST NOT reference another assembly's `.Testing` namespace or any test/tool assembly. The owning adapter may reference its own public `.Testing` facade only in its explicitly named testing-registration bridge; normal runtime services depend on an internal probe contract instead.
 - The analyzer is attached as a compiler analyzer (`ReferenceOutputAssembly=false`), never as a runtime library reference.
@@ -425,6 +486,11 @@ public interface IReplayContextReader
     Result<ReplayContext> Read();
 }
 
+public interface ICurrentTelemetryReader
+{
+    Result<TelemetrySample> Read();
+}
+
 public sealed class ReplayContext
 {
     public string? DriverDisplayName { get; }
@@ -442,7 +508,7 @@ public sealed class ReplayPosition
 
 `ReplayPosition` has one authoritative definition in `IncidentReview.Domain`, because both telemetry and replay contracts consume it. `ReplayOffset` is a separately validated signed duration used for explicit relative navigation; applying it to `SessionTime` has a zero lower bound. The replay contract speaks in simulator-neutral intent and does not expose iRacing broadcast enums, Windows message packing, camera numbers, or raw session-information fields. A camera preference is an optional group name; resolving the incident's stored participant identity to the current car index/raw car number and resolving the group/camera numbers are the adapter's responsibility.
 
-`IReplayContextReader` is a read-only, synchronous snapshot boundary over context already copied from the latest stable simulator frame. It MUST NOT issue commands, block waiting for telemetry, expose mutable adapter state, or leak raw iRacing YAML/indices. Its immutable `ReplayContext` contains only a validated optional driver display name, an ordered case-insensitively unique camera-group catalog, and an optional current group that is a member of that catalog. Unavailability is a structured `Result` failure. The application may deliberately substitute empty transient context while preserving durable incident/session state; the presentation never reaches into `IncidentReview.Iracing`.
+`IReplayContextReader` and `ICurrentTelemetryReader` are read-only, synchronous snapshot boundaries over data already copied from the latest accepted stable simulator frame. They MUST NOT issue commands, block waiting for telemetry, expose mutable adapter state, or leak raw iRacing YAML/indices. The replay context contains only a validated optional driver display name, an ordered case-insensitively unique camera-group catalog, and an optional current group that is a member of that catalog. The current-telemetry snapshot preserves the exact latest replay position even when the meaningful-event stream coalesces position-only frames; custom-event capture therefore timestamps the button press from the freshest accepted frame. Unavailability is a structured `Result` failure. The application may deliberately substitute empty transient replay context while preserving durable incident/session state; the presentation never reaches into `IncidentReview.Iracing`.
 
 `ValidatePlayback` is a pure capability preflight. The application calls it before seeking so a persisted playback preference that cannot be represented by the pinned iRacing protocol cannot produce a half-completed “seek succeeded, playback failed validation” workflow.
 
@@ -478,7 +544,7 @@ public interface IStoreInitializer
 }
 ```
 
-Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetIncidents`, `GetIncidentCheckpoints`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `AnnotateIncident`, `MarkIncidentReviewed`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
+Queries and commands are immutable, capability-focused records declared in `Store.Contracts`. Examples include `ListSessions`, `GetSession`, `GetSessionBySimulatorKey`, `GetSessionDetails`, `GetIncident`, `GetIncidents`, `GetIncidentCheckpoints`, `GetCustomEvent`, `GetCustomEvents`, `GetPendingCustomEvents`, `GetPreferences`, `GetOperationOutcome`, `EnsureSession`, `PromoteSessionIdentity`, `EstablishIncidentCheckpoint`, `RecordDetectedIncident`, `RecordCustomEvent`, `RecordReceivedCustomEvent`, `MarkCustomEventSynchronized`, `AnnotateIncident`, `MarkIncidentReviewed`, and `UpdatePreferences`. They contain application/domain values only—never functions or provider objects.
 
 This RPC-shaped boundary is deliberate. One `ExecuteAsync` call is one coarse-grained atomic operation, whether it is handled locally by SQLite or sent to a future server. Arbitrary callbacks are forbidden because they cannot be transported honestly and would require a remote transaction to remain open while client code runs. A query executes against one consistent snapshot for its entire operation and returns a complete immutable result; callers do not assemble one logical read from a sequence of independently timed store calls.
 
@@ -537,6 +603,22 @@ public interface IIncidentReviewService
         IncidentAnnotation annotation,
         CancellationToken cancellationToken);
 
+    Task<Result> CreateCustomEventAsync(
+        CancellationToken cancellationToken);
+
+    Task<Result> ReviewCustomEventAsync(
+        CustomEventId customEventId,
+        ReplayOffset offset,
+        CancellationToken cancellationToken);
+
+    Task<Result<string>> StartCustomEventSessionAsync(
+        Uri listenUri,
+        Uri advertisedBaseUri,
+        CancellationToken cancellationToken);
+
+    Task<Result> StopCustomEventSessionAsync(
+        CancellationToken cancellationToken);
+
     Task<Result<UserPreferences>> GetPreferencesAsync(
         CancellationToken cancellationToken);
 
@@ -568,21 +650,65 @@ public interface IApplicationRuntime
 }
 ```
 
-`GetSnapshotAsync` is the primary presentation read. It captures a revisioned application anchor, reads the active event session and stored preferences, reads transient replay context through `IReplayContextReader`, and verifies that the anchor is still current before constructing one immutable `ReviewSnapshot`. If application state changes during those reads it retries instead of returning a torn mixture. The snapshot validates that `Unavailable` has exactly one structured status error and that the current camera belongs to the bounded camera catalog. The active event session—not an independently selected historical session—is the sole source for the primary incident log, and it may contain incidents whose replay positions name several heat numbers. Existing granular session/status/query methods remain application capabilities for non-primary consumers and compatibility; WPF MUST NOT assemble its visible root by calling them independently.
+`GetSnapshotAsync` is the primary presentation read. It captures a revisioned application anchor, reads the active event session with its incidents and custom events plus stored preferences, reads transient replay context through `IReplayContextReader`, and verifies that the anchor is still current before constructing one immutable `ReviewSnapshot`. If application state changes during those reads it retries instead of returning a torn mixture. The snapshot validates that `Unavailable` has exactly one structured status error and that the current camera belongs to the bounded camera catalog. The active event session—not an independently selected historical session—is the sole source for the primary review-event log, and it may contain rows whose replay positions name several heat numbers. Existing granular session/status/query methods remain application capabilities for non-primary consumers and compatibility; WPF MUST NOT assemble its visible root by calling them independently.
 
-Every in-memory application-anchor change advances a monotonically increasing snapshot revision. A presentation MUST ignore a snapshot older than the revision it has already rendered. Equal revisions MAY be reapplied for manual-refresh messaging, a separately persisted preference update, or refreshed transient context, but cannot regress application-owned state. Transient driver/camera context is not written to SQLite. Stored lead-in, playback speed, and pause remain durable compatibility inputs even though the current primary WPF surface exposes only the camera preference and explicit row offsets. The stored `ThemePreference` also travels through this same preference value and coherent snapshot; it is not loaded through an independent UI configuration source.
+Every in-memory application-anchor change advances a monotonically increasing snapshot revision. A presentation MUST ignore a snapshot older than the revision it has already rendered. Equal revisions MAY be reapplied for manual-refresh messaging, a separately persisted preference update, or refreshed transient context, but cannot regress application-owned state. Transient driver/camera context is not written to SQLite. Stored lead-in, playback speed, and pause remain durable compatibility inputs even though the current primary WPF surface exposes only the camera preference and explicit row offsets. Theme, submitter name, custom-event key gesture, and optional event-session join code travel through the same complete `UserPreferences` value and coherent snapshot; none is loaded through an independent UI configuration source.
 
 `ReviewUpdate` is an application-owned notification that tells the UI to obtain a fresh coherent snapshot; it does not expose telemetry frames, store commands, threads, dispatchers, or infrastructure events. `IApplicationRuntime` gives the composition root an explicit lifecycle for the telemetry/processing loop without exposing its implementation. `Completion` remains incomplete while the runtime is healthy, completes normally only after requested stop, and faults on an unexpected worker defect; an unrequested normal completion is also treated as a runtime failure. `StopAsync` is idempotent, cancels and awaits all owned workers, always observes their completion, and rethrows a worker fault that occurred before expected stop rather than converting it into successful shutdown. View models do not coordinate stores, replay-context readers, or replay controllers themselves. They invoke application use cases and marshal returned data/actions through a presentation-owned dispatcher abstraction.
+
+### 7.5 Custom-event synchronization
+
+Custom-event synchronization is deliberately narrower than a remote store:
+
+```csharp
+public interface ICustomEventPublisher
+{
+    Task<Result<CustomEventPublishOutcome>> PublishAsync(
+        JoinCode joinCode,
+        CustomEventSubmission submission,
+        CancellationToken cancellationToken);
+}
+
+public interface ICustomEventSessionHost : IAsyncDisposable
+{
+    Task Completion { get; }
+    Task<Result<JoinCode>> StartAsync(
+        CustomEventSessionHostRequest request,
+        ICustomEventReceiver receiver,
+        CancellationToken cancellationToken);
+    Task<Result> StopAsync(CancellationToken cancellationToken);
+}
+
+public interface ICustomEventReceiver
+{
+    Task<Result<CustomEventPublishOutcome>> ReceiveAsync(
+        CustomEventSubmission submission,
+        CancellationToken cancellationToken);
+}
+```
+
+`EventSync.Contracts` owns only immutable simulator-neutral submission values, a closed `Accepted`/`Duplicate` outcome, lifecycle contracts, and validated URI locators. `JoinCode` format `grv1_` is canonical versioned Base64Url over the normalized advertised HTTP(S) base URI and big-endian UUIDv5 session identity. It rejects provisional UUIDv7 sessions, credentials, query strings, fragments, unsupported schemes, overlong values, noncanonical encodings, and unknown versions. The host request deliberately separates the root listen URI from the advertised URI so local binding, NAT/reverse-proxy routing, and a future container deployment do not leak into application policy.
+
+`CustomEventSubmission` contains event ID, deterministic session identity, replay position, submitter name, and occurrence instant. Its factory recomputes the ID from session and replay position at every boundary. `ICustomEventReceiver` owns first-write-wins semantics: the first committed payload for an ID returns `Accepted`; an existing ID returns `Duplicate` without comparing, merging, or replacing submitter/time payload. The event primary key supplies the durable defense, while the application serializes receiver decisions for the current single-process host.
+
+`EventSync.Http` implements these contracts with `HttpClient` and Kestrel. Its reusable endpoint mapper and the in-process desktop host share one version-1 request handler at `POST /event-sync/v1/sessions/{sessionIdentity}/events`; bounded JSON wire DTOs, content-type checks, schema/version validation, response status mapping, timeouts, and network error translation remain private to the adapter. `201 Created` means accepted and `200 OK` means duplicate. The publisher performs one attempt and never retries itself: application outbox policy decides if and when another attempt is safe. No network call runs inside an `IStore` transaction.
+
+`EventSync.Sqlite` is an independent cross-platform `ICustomEventReceiver` for the headless service. Its hosted initializer owns a small inbox schema and opens the receiver gate only after initialization; one atomic insert makes the event ID the first-write-wins boundary, and a primary-key conflict returns `Duplicate` without replacing the stored submitter or timestamp. It deliberately does not implement `IStore`, use the desktop outbox schema, or reference `Application`/`Store.Sqlite`.
+
+The current protocol has no authentication or authorization, and a plain-HTTP deployment has no encryption. A join code provides reachability and session selection only; it is not confidential and possession conveys no verified identity. The headless service can be deployed on a public address for explicitly disclosed alpha use, but anyone who learns the endpoint/session can submit a claimed identity or race to establish the first payload. Production public/container use still requires TLS, authentication, authorization, rate limiting, abuse handling, retention, and discovery without changing the transport-neutral application contracts.
 
 ## 8. Domain model
 
 Initial concepts:
 
-- `SessionIdentity`: application-owned stable identifier, generated before the session-creation command.
+- `SessionIdentity`: application-owned UUIDv5 for durable simulator evidence, or UUIDv7 for a connection-scoped provisional/legacy identity.
 - `SimulatorSessionDescriptor`: validated simulator-owned identity evidence, session number/mode, and whether that evidence is durable or connection-scoped.
 - `ParticipantIdentity`: bounded opaque identity scoped to one simulator session; only the owning adapter interprets how it was formed.
 - `IncidentParticipant`: a participant identity plus optional bounded driver, team, and car-number context captured with an observation/incident.
-- `IncidentId`: client-generated stable identity, preferably UUIDv7.
+- `IncidentId`: namespaced UUIDv5 for a detected counter transition; existing UUIDv7 values remain readable.
+- `CustomEventId`: namespaced UUIDv5 for one session-relative replay position.
+- `SubmitterName`: required normalized, bounded, single-line Unicode display name attached to a custom event.
+- `CustomEventSynchronization`: closed pending/synchronized state for the local durable outbox.
 - `Incident`: immutable core record plus controlled annotation/status transitions.
 - `ReplayPosition`: session number and session-relative time.
 - `ReplayOffset`: validated signed relative seek duration, with application to session time clamped at zero.
@@ -590,7 +716,7 @@ Initial concepts:
 - `IncidentClassification`: optional user classification.
 - `IncidentReviewStatus`: pending, reviewed, or dismissed.
 - `IncidentAnnotation`: user notes and classification changes.
-- `UserPreferences`: validated durable review behavior such as lead-in, playback, optional camera preference, and the configured `ThemePreference` policy.
+- `UserPreferences`: validated durable review behavior including lead-in, playback, optional camera, configured `ThemePreference`, optional submitter name, custom-event key gesture, and optional versioned join code.
 
 Domain values validate themselves at creation through private constructors and `TryCreate`/factory methods returning `Result<T>`. This applies at every untrusted boundary: SDK decoding, database mapping, command-line/configuration input, and future wire decoding. Invalid session times, negative counters, NaN/out-of-range percentages, non-UTC instants, invalid lap numbers, empty participant identities, and oversized/malformed display text do not circulate through the system. Optional SDK data is represented explicitly—such as `LapNumber?`, `LapDistance?`, and participant display context—rather than by magic sentinel values.
 
@@ -602,13 +728,13 @@ The iRacing adapter cannot manufacture an application `SessionIdentity` because 
 
 The acquisition, provenance, licensing, and evidence gate for that pinned artifact is maintained in [`docs/iracing-sdk-baseline.md`](docs/iracing-sdk-baseline.md). ABI constants and replay ordinals do not enter production from unofficial mirrors.
 
-The application resolves the descriptor before incident detection: query `GetSessionBySimulatorKey`; if found, reuse its `SessionIdentity`; otherwise generate one UUIDv7 and execute `EnsureSession` with the proposed identity and descriptor. A concurrent unique-key conflict is resolved by querying the winner, never by creating a second logical session. SQLite enforces a partial unique key over `(simulator, simulator_session_key)` when the durable key is non-null.
+The application resolves the descriptor before incident detection: query `GetSessionBySimulatorKey`; if a durable row already has the derived UUIDv5, reuse it. A durable UUIDv7 row written by an earlier release is upgraded through `PromoteSessionIdentity`: one idempotent store transaction verifies the exact persisted descriptor, re-keys the session and participant checkpoints, and re-derives incident IDs from session plus participant identity/epoch/total and custom-event IDs from session plus replay position so every domain invariant remains true. Otherwise, durable evidence produces `SessionIdentity.CreateDurable(simulator, sessionKey)`, a namespaced UUIDv5, while connection-scoped evidence produces a new UUIDv7. The application executes `EnsureSession` with that proposed identity and descriptor. A concurrent ensure or promotion conflict is resolved by querying and validating the winner, never by creating a second logical session. SQLite enforces a partial unique key over `(simulator, simulator_session_key)` when the durable key is non-null.
 
 | Observation | Session identity action | Detector action |
 |---|---|---|
 | Repeated sample with the same validated simulator event key and heat number | Reuse current identity | Continue from current/persisted participant checkpoints |
 | Disconnect/reconnect in the same app run with the same durable key | Reuse identity | Reload/confirm participant checkpoints; do not synthesize an incident |
-| App restart while iRacing reports the same durable key | Resolve existing identity from SQLite | Resume from persisted participant checkpoints |
+| App restart or another client while iRacing reports the same durable key | Resolve/derive the same UUIDv5, atomically promoting an exact-match legacy durable UUIDv7 row when present | Resume from persisted participant checkpoints and agree on the join identity |
 | SDK session/heat number changes under the same event key | Retain the event identity and earlier incident list | Advance each returning participant's epoch and establish a heat baseline without an incident |
 | Durable `SubSessionID` event evidence changes | Resolve/create a new identity | Establish a new baseline |
 | Required identity evidence is missing, malformed, or contradictory | Create a clearly marked connection-scoped provisional identity; never guess a cross-restart match | Establish a baseline and surface degraded identity state |
@@ -618,7 +744,23 @@ The application resolves the descriptor before incident detection: query `GetSes
 | Replay mode matches an existing durable key | Reuse identity for review only | Pause incident detection; replay seeking remains available |
 | Standalone/unmatched replay playback | Use an ephemeral replay context | Do not persist inferred incidents or create a durable session automatically |
 
-Changing heat number, track/car display metadata, or mode does not change event identity. Once a provisional session later gains trustworthy durable evidence, merging or re-keying records is not automatic; that workflow requires a separately tested command so uniqueness and user history cannot be corrupted silently. Likewise, historical `v1` keys remain valid per-heat records. The first `v2` observation creates or resumes a separate event-wide record; old rows are neither rewritten nor guessed into it, so upgrading during an event can cause one visible list break.
+Changing heat number, track/car display metadata, or mode does not change event identity. Promotion applies only to a persisted row already marked durable and whose exact simulator evidence still matches; a connection-scoped provisional session that later gains evidence is not merged automatically. Likewise, historical `v1` keys remain valid per-heat records. The first `v2` observation creates or resumes a separate event-wide record; old rows are neither rewritten nor guessed into it, so upgrading during an event can cause one visible list break.
+
+### 8.2 Deterministic identity derivation
+
+Deterministic identities use RFC 4122/9562 UUID version 5 (SHA-1 name UUID) for stable naming, not cryptographic security. The standard DNS namespace UUID is used only as a fixed root. Every repository namespace is first derived from a versioned ASCII label, then each validated component is added through another UUIDv5 step. Text is UTF-8; UUIDs use canonical lowercase `D` form; numeric values use invariant base-10 text with no padding.
+
+| Identity | Versioned namespace label | Ordered name components |
+|---|---|---|
+| Durable `SessionIdentity` | `IncidentReview.Domain.SessionIdentity.Durable.v1` | canonical `SimulatorCode`, then exact validated opaque `SimulatorSessionKey` |
+| Detected `IncidentId` | `IncidentReview.Domain.IncidentId.Detected.v1` | canonical session UUID, exact `ParticipantIdentity`, `CounterEpoch`, resulting `IncidentPoints.Total` |
+| `CustomEventId` | `IncidentReview.Domain.CustomEventId.custom.v1` | canonical session UUID, replay session number, session-time milliseconds |
+
+The hierarchy prevents ambiguous concatenation and allows each component to independently change the result. Namespace labels, hierarchy, component order, number encoding, and source-field semantics are durable database/protocol contracts protected by golden vectors. A future change adds an explicitly versioned derivation and migration/compatibility plan; it MUST NOT modify `v1` or silently re-key released rows.
+
+Submitter name and `OccurredAt` deliberately do not participate in `CustomEventId`. All clients therefore agree that two button presses identifying the same session/replay millisecond are the same logical event, even if their submitter payload differs or local clocks disagree. That equality is the complete duplicate definition: the first committed payload is retained unchanged.
+
+Session and incident parsers accept canonical UUIDv5 and UUIDv7 values so released databases and provisional identities remain readable. New durable sessions and detected incidents use UUIDv5. `CustomEventId` accepts UUIDv5 only because no legacy representation exists and its stable identity is required at every store/wire boundary. A join code additionally requires a UUIDv5 session; provisional UUIDv7 sessions cannot become a cross-client rendezvous key.
 
 ## 9. Incident detection
 
@@ -680,6 +822,7 @@ Responsibilities:
 - Copy telemetry frames promptly before processing to avoid holding SDK-owned buffers.
 - Parse only the session metadata needed for eligible participant counters, identity/display context, and replay focus.
 - Translate raw telemetry into immutable `TelemetrySample` values.
+- Retain the latest accepted stable telemetry sample behind `ICurrentTelemetryReader`, including position-only frames coalesced from the meaningful-event stream.
 - Detect connection, disconnection, moving or paused replay, and on-track state.
 - Resolve the local player's transient header context, every focusable recorded participant, and named camera groups from current session information, then expose only validated simulator-neutral display context through public contracts.
 - Encode replay commands for session-time search, recorded-participant/camera focus, pause, and playback speed.
@@ -730,7 +873,7 @@ Replay review behavior:
 
 `ReviewIncidentAsync` does not automatically mutate `review_status`; handing a replay command to Windows and committing SQLite cannot form one atomic transaction. Marking reviewed/dismissed or changing notes/classification must be a separate explicit operation, so the user is never told a cross-system action was atomic when it was not. The current WPF UI does not initiate those status/annotation operations.
 
-Replay context reads are independent of replay commands. After each accepted stable frame, the adapter retains an immutable, bounded projection of the active driver's display name, ordered camera-group names, and the current group. `IReplayContextReader.Read` returns that latest projection immediately or a typed unavailability result. The application includes it in `ReviewSnapshot`; a malformed or temporarily unavailable display context degrades to empty transient context and MUST NOT corrupt or hide durable incidents. Camera choices shown by WPF therefore come from the live iRacing session, while the explicit “current iRacing camera” choice represents a null stored preference. A previously stored camera that is absent from the live catalog remains visible as unavailable so an automatic refresh cannot silently rewrite the user's durable choice.
+Snapshot reads are independent of replay commands. After each accepted stable frame, the adapter retains both the complete simulator-neutral telemetry sample and an immutable, bounded projection of the active driver's display name, ordered camera-group names, and current group. `ICurrentTelemetryReader.Read` gives a hotkey-triggered custom event the freshest replay position even when position-only stream events are coalesced. `IReplayContextReader.Read` returns the latest display projection immediately or a typed unavailability result. The application includes that context in `ReviewSnapshot`; a malformed or temporarily unavailable display context degrades to empty transient context and MUST NOT corrupt or hide durable incidents. Camera choices shown by WPF therefore come from the live iRacing session, while the explicit “current iRacing camera” choice represents a null stored preference. A previously stored camera that is absent from the live catalog remains visible as unavailable so an automatic refresh cannot silently rewrite the user's durable choice.
 
 The current application prevents detection during its own replay-navigation command and keeps that suppression active until telemetry reports the car back on track. The adapter classifies a frame as replay when either `IsReplayPlaying` is true or the official `CamCameraState` bitfield includes `IsSessionScreen`. This keeps a paused session-screen replay in replay mode even though `IsReplayPlaying` becomes false. Compatibility of that official signal across every supported real-iRacing session type remains part of live acceptance rather than an unimplemented behavior.
 
@@ -829,6 +972,15 @@ IncidentCheckpoint
   updated_at_utc_ms          integer
   primary key (session_id, participant_identity)
 
+CustomEvent
+  custom_event_id            text primary key, UUIDv5 only
+  session_id                 text foreign key
+  replay_session_number      integer
+  replay_session_time_ms     integer
+  submitter_name             text
+  occurred_at_utc_ms         integer
+  synchronized_at_utc_ms     integer/null
+
 StoreOperation
   operation_id               text primary key
   command_kind               text
@@ -843,12 +995,17 @@ ApplicationPreferences
   playback_speed             real
   preferred_camera           text/null
   theme_preference           integer, constrained FollowDesktop/Light/Dark
+  submitter_name             text/null
+  custom_event_key           text, default F9
+  event_join_code            text/null
   updated_at_utc_ms          integer
 ```
 
-Identifiers use canonical lowercase UUID text initially; participant identities are bounded opaque text; timestamps use UTC Unix milliseconds in `INTEGER` columns; booleans use constrained `0`/`1`; enums use explicitly assigned stable integer codes. Each command has a stable `command_kind` and positive schema version. The operation fingerprint is SHA-256 over that kind/version plus a handler-owned canonical, length-delimited binary encoding of the persisted fields—it does not introduce JSON into the store path. Encoding, field order, normalization, and version are release contracts protected by golden vectors. Existing command versions remain readable/reconcilable for every supported database upgrade; changing their encoding in place is forbidden, and a new shape receives a new version. `Incident` has a unique constraint on `(session_id, participant_identity, counter_epoch, incident_points_total)` in addition to its primary key. `IncidentCheckpoint` has one row per `(session_id, participant_identity)`. Check constraints enforce non-negative counters/times, positive deltas, bounded participant/display text, valid percentages, and known status/preference values. Foreign keys specify deliberate delete behavior rather than relying on provider defaults.
+Identifiers use canonical lowercase UUID text; participant identities are bounded opaque text. Session and incident columns accept UUIDv5 plus UUIDv7 for backward/provisional compatibility; `CustomEvent.custom_event_id` accepts deterministic UUIDv5 only. Timestamps use UTC Unix milliseconds in `INTEGER` columns; booleans use constrained `0`/`1`; enums use explicitly assigned stable integer codes. Each command has a stable `command_kind` and positive schema version. The operation fingerprint is SHA-256 over that kind/version plus a handler-owned canonical, length-delimited binary encoding of the persisted fields—it does not introduce JSON into the store path. Encoding, field order, normalization, and version are release contracts protected by golden vectors. Existing command versions remain readable/reconcilable for every supported database upgrade; changing their encoding in place is forbidden, and a new shape receives a new version. `Incident` has a unique constraint on `(session_id, participant_identity, counter_epoch, incident_points_total)` in addition to its primary key. `IncidentCheckpoint` has one row per `(session_id, participant_identity)`. `CustomEvent` uses the deterministic ID as its duplicate boundary and primary key; a session/time index supports chronological review, while a partial `(session_id, synchronized_at_utc_ms)` index supports the pending outbox. Check constraints enforce non-negative counters/times, positive deltas, bounded participant/display text and names/preferences, valid percentages, synchronization not preceding occurrence, and known status/preference values. Foreign keys specify deliberate delete behavior rather than relying on provider defaults.
 
-Client-generated identifiers, operation identifiers, and explicit timestamps preserve a credible path to remote synchronization. Application records remain separate from SQLite row models and future wire DTOs. Mutable user preferences—including theme policy—are durable application state and go through `IStore`; host/deployment settings such as database path, logging level, and diagnostic switches remain validated startup configuration and are not mixed with user preferences. A theme change rebuilds the complete validated `UserPreferences` value and executes one `UpdatePreferences` command, so replay lead-in, pause, speed, and camera cannot be lost by a partial preference write.
+Client-derived deterministic identities, client-generated operation identifiers, and explicit timestamps preserve a credible path to synchronization. Application records remain separate from SQLite row models and HTTP wire DTOs. Mutable user preferences—including theme, submitter, custom-event gesture, and optional join code—are durable application state and go through `IStore`; host/deployment settings such as database path, logging level, diagnostic switches, and a host's listen/advertised address remain validated runtime inputs and are not mixed with user preferences. Any preference change rebuilds the complete validated `UserPreferences` value and executes one `UpdatePreferences` command, so replay, theme, and custom-event settings cannot be lost by a partial write.
+
+`RecordCustomEvent` commits the marker as pending before publication. `GetPendingCustomEvents(session)` returns a session-scoped immutable outbox snapshot in deterministic replay order. After an `Accepted` or `Duplicate` response, `MarkCustomEventSynchronized` records the confirmation time in another short transaction. A process/network failure between remote acceptance and the local mark causes a safe later duplicate submission; the remote first-ID-wins response lets the client converge without overwriting the authoritative payload. Publication and HTTP retry never occur while either transaction is open.
 
 ### 11.4 Transaction guarantee
 
@@ -909,7 +1066,7 @@ DbUp runs before the store is available to application use cases. The store may 
 
 DbUp is the deliberate migration path outside normal `IStore.ExecuteAsync`; it runs before application writes and owns its own transaction semantics.
 
-The current manifest contains checksum-pinned `001_InitialSchema.sql`, `002_AddThemePreference.sql`, and `003_AddIncidentParticipants.sql`. Migration `002` adds the constrained, non-null `theme_preference` column with numeric default `0` (`FollowDesktop`) and advances `PRAGMA user_version` to 2. Migration `003` adds incident participant identity plus optional driver/team/car context, replaces the old session-only checkpoint with a composite `(session_id, participant_identity)` checkpoint, replaces incident uniqueness with the participant-scoped key, maps existing incidents/checkpoints to the compatibility identity `local-player`, and advances `PRAGMA user_version` to 3. Neither migration rewrites an earlier script; upgrades preserve existing incident, checkpoint, and replay-preference data. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
+The current manifest contains five checksum-pinned scripts. `001_InitialSchema.sql` creates the original store and `002_AddThemePreference.sql` adds the constrained `FollowDesktop` default without rewriting `001`. `003_AddIncidentParticipants.sql` adds incident participant identity and optional driver/team/car context, creates the composite participant checkpoint and participant-scoped incident uniqueness, maps existing rows to the compatibility identity `local-player`, and advances `PRAGMA user_version` to 3. `004_DeterministicIdentitiesAndEventSettings.sql` rebuilds the participant-aware session/incident/checkpoint constraints to admit UUIDv5 alongside existing UUIDv7 values, preserves all rows and participant uniqueness rules, adds optional submitter/join-code plus the non-null default-`F9` gesture preference, and advances the version to 4. `005_AddCustomEventOutbox.sql` adds the UUIDv5-only custom-event table, chronological and pending indexes, synchronization-time invariant, and advances the version to 5. Applying the schema upgrades preserves every existing incident, participant checkpoint, replay preference, and theme preference without rewriting identity; the application then promotes a matching legacy durable UUIDv7 row through the separately journaled atomic command when that event is next resolved live. DbUp is configured with `WithVariablesDisabled()`, `WithTransaction()`, and the same finite execution timeout as the SQLite busy timeout. Cancellation is checked before and after migration and throughout schema validation; the native synchronous DbUp/provider call itself is not preemptible. A timeout or cancellation therefore prevents the execution gate from opening, but the host must not claim a hard wall-clock interruption inside an in-progress native call.
 
 ### 11.7 Export
 
@@ -1011,7 +1168,7 @@ The WPF executable uses Microsoft's Generic Host with `Host.CreateEmptyApplicati
 - application lifetime and graceful shutdown;
 - options validation.
 
-`Host.Wpf` is the sole composition root:
+`Host.Wpf` is the desktop composition root:
 
 ```csharp
 builder.Services
@@ -1021,7 +1178,18 @@ builder.Services
     .AddIncidentReviewDesktop();
 ```
 
-Concrete implementations are `internal sealed`. Each implementation assembly exposes a small registration extension and any validated options type needed by the host. Adapter assemblies may additionally expose one clearly named `.Testing` registration API as specified in Section 15.6; that is the only approved public testing surface.
+`Host.Server` is a separate headless composition root. It does not reference the desktop application or desktop store:
+
+```csharp
+builder.Services.AddSqliteEventSyncReceiver(inboxOptions);
+var app = builder.Build();
+app.MapGet("/healthz", ...);
+app.MapHttpEventSyncReceiver(httpOptions);
+```
+
+It uses `WebApplication.CreateSlimBuilder`, validates one root HTTP(S) listen URL and one absolute SQLite path, starts the cross-platform inbox through its owned hosted service, and maps the same versioned endpoint consumed by desktop publishers. It contains no session/capture/outbox decision. The service is published self-contained for Linux x64 and may run under the reviewed systemd unit.
+
+Concrete implementations are `internal sealed`. Each implementation assembly exposes a small registration extension, endpoint-mapping extension when routing is its responsibility, and any validated options type needed by a host. Adapter assemblies may additionally expose one clearly named `.Testing` registration API as specified in Section 15.6; that is the only approved public testing surface.
 
 The host explicitly adds code defaults, the `INCIDENTREVIEW_`-prefixed environment provider, and command-line configuration, then binds and validates typed options. It registers those options before calling implementation modules; adapter assemblies do not accept a general-purpose `IConfiguration` object or select configuration sections themselves.
 
@@ -1040,7 +1208,7 @@ WPF requires an STA entry thread. The host executable owns that constraint. Cont
 - SQLite connections and transactions are per-operation resources owned internally by the store, not singleton DI services.
 - Singleton services containing mutable state must own and test their synchronization.
 
-### 13.3 Startup sequence
+### 13.3 Desktop startup sequence
 
 Startup uses a host-owned internal `BootstrapCoordinator` plus the `IApplicationRuntime` contract with named phases; it does not depend accidentally on registration order or unexplained integer priorities. `BootstrapCoordinator` orchestrates public lifecycle contracts such as `IStoreInitializer` and never reaches into an adapter implementation. The application telemetry loop is intentionally not registered as `IHostedService`, because `Host.StartAsync` must be able to validate the container and options without beginning external work before the database is ready.
 
@@ -1123,18 +1291,21 @@ disable/close UI
     → dispose host
 ```
 
-JSON configuration is not used in the current application. Deployment settings use code defaults, the compatibility-stable `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default database remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. The product-facing host assembly metadata is `GravelReview`, while its assembly/namespace identity remains `IncidentReview.Host.Wpf`. The existing database location, environment prefix, `Local\IncidentReview.Host.Wpf` mutex, and `IncidentReview.*` Automation IDs MUST remain unchanged during this rebrand. `--verify-startup` is a headless smoke-test switch that initializes the real host/store/runtime and then shuts down. Durable user preferences—including theme policy—belong to SQLite and are read through application use cases. Adding a JSON configuration provider later requires an explicit use case and dependency/configuration review; `System.Text.Json` remains reserved initially for the deferred export feature.
+JSON configuration is not used by either executable. Desktop deployment settings use code defaults, the compatibility-stable `INCIDENTREVIEW_`-prefixed environment variables, and command-line arguments. The default desktop database remains `%LOCALAPPDATA%\IncidentReview\incident-review.db`; `--database-path <absolute-path>` and `--startup-timeout-seconds <1..120>` override the two startup values. The product-facing host assembly metadata is `GravelReview`, while its assembly/namespace identity remains `IncidentReview.Host.Wpf`. The existing database location, environment prefix, `Local\IncidentReview.Host.Wpf` mutex, and `IncidentReview.*` Automation IDs MUST remain unchanged during this rebrand. `--verify-startup` is a headless smoke-test switch that initializes the real desktop host/store/runtime and then shuts down. Durable user preferences—including theme and custom-event policy—belong to SQLite and are read through application use cases. A local joinable session's listen and advertised addresses are explicit start-use-case inputs; a shared-server URI is likewise an explicit input used to create a join code for the active deterministic event.
+
+The headless host defaults to `http://0.0.0.0:5088` and `/var/lib/gravelreview/custom-events.db`. `--listen-url`/`INCIDENTREVIEW_SERVER_LISTEN_URL` and `--database-path`/`INCIDENTREVIEW_SERVER_DATABASE_PATH` override those values, with command-line values taking precedence. `System.Text.Json` is confined to the event-sync HTTP adapter's versioned wire DTOs; adding a JSON configuration provider still requires an explicit use case and dependency/configuration review.
 
 ## 14. UI design boundary
 
 The implemented GravelReview UI contains:
 
 - the `assets/branding/logo-simplified.png` GravelReview mark, product name, and transient active-driver display name in a compact raised header/toolbar; the host executable/window uses `assets/branding/favicon-simplified.ico`;
-- one primary chronological incident log derived only from `ReviewSnapshot.ActiveSession`, with its own horizontal and vertical scrolling and no historical-session selector;
-- full local recorded time through milliseconds with its UTC offset, a compact `…xxxxxxxx` suffix for the UUIDv7 incident identity, replay time, lap, point delta/total, and captured driver context for each incident; the display falls back from driver to team, car number, then `Unknown driver`, while the full stable incident ID remains the command identity and is available as a tooltip;
-- `-2 sec`, `0 sec`, and `+2 sec` actions on each incident row; double-click dispatches the `0 sec` action;
+- one primary chronological review-event surface derived only from `ReviewSnapshot.ActiveSession`, showing its incidents and custom events with its own horizontal and vertical scrolling and no historical-session selector;
+- full local recorded time through milliseconds with its UTC offset, a compact `…xxxxxxxx` suffix for each stable UUID, replay time, incident lap/point details and captured driver context with team/car/`Unknown driver` fallback, plus custom-event submitter/synchronization state; the full UUID remains the command identity and is available as a tooltip;
+- `-2 sec`, `0 sec`, and `+2 sec` actions on each incident or custom-event row; double-click dispatches the `0 sec` action;
+- custom-event settings for normalized submitter name, a validated key gesture defaulting to `F9`, and an optional versioned join code, plus explicit controls to start/stop a local joinable reviewer session or create a code for the shared server;
 - no Notes column and no annotation/classification controls in the primary UI, while those durable domain/store capabilities remain intact for future workflows;
-- a collapsed-by-default **Advanced** panel containing a timestamped bounded event stream with horizontal/vertical scrolling and tail-follow behavior, plus a live iRacing camera-group dropdown and Save action;
+- a collapsed-by-default **Advanced** panel containing a timestamped bounded event stream with horizontal/vertical scrolling and tail-follow behavior, plus live camera and custom-event configuration owned by root state;
 - no visible lead-in, playback-speed, or pause fields; those stored values remain compatibility behavior for playback and the legacy review overload rather than being silently deleted;
 - a quiet bottom status bar containing iRacing connection state, current event/work state, live-update state, and a far-right icon-only theme control;
 - explicit unavailable state when replay control cannot be used.
@@ -1151,9 +1322,9 @@ ReviewSnapshot + local UiAction (implemented as MainWindowAction)
     → XAML binds State.* from the window root
 ```
 
-`MainWindowState` is the sole owner of UI-visible data: snapshot revision/status/error, active session, incidents, selected incident identity, saved preferences, configured theme preference, resolved palette, transient driver/current-camera context, camera choices and dirty draft, busy/monitoring state, event log, and current status event. The view model MUST NOT maintain independent visible fields or mutable observable collections that can disagree with this root. It may own effect machinery—commands, cancellation sources, gates, worker tasks, and the dispatcher—but effects occur outside the reducer. Service calls and update observation produce data-only actions; time needed by an action is captured before reduction. `MainWindowReducer.Reduce` performs no I/O, reads no clock/service/control, mutates no prior value, and returns either the unchanged instance for an ignored action or a complete replacement state.
+`MainWindowState` is the sole owner of UI-visible data: snapshot revision/status/error, active session, incidents and custom events, selected incident identity, saved preferences, configured theme preference, resolved palette, transient driver/current-camera context, camera choices and valid dirty drafts for camera/custom-event settings, hosted join-code state, busy/monitoring state, event log, and current status event. The view model MUST NOT maintain independent visible fields or mutable observable collections that can disagree with this root. It may own effect machinery—commands, cancellation sources, gates, worker tasks, the global-shortcut capability, and the dispatcher—but effects occur outside the reducer. Service calls and update observation produce data-only actions; time needed by an action is captured before reduction. `MainWindowReducer.Reduce` performs no I/O, reads no clock/service/control, mutates no prior value, and returns either the unchanged instance for an ignored action or a complete replacement state.
 
-Applying a snapshot is atomic. The reducer derives the incident list from the active session, retains selection only while its full ID remains present, builds camera choices, and then replaces the root. A snapshot with a revision lower than the rendered revision is stale and MUST return the existing state instance. During an automatic refresh, an unsaved camera draft MUST survive application preference/context updates; a manual refresh may deliberately accept the stored preference. Busy and monitoring transitions also flow through actions instead of separate bindable properties.
+Applying a snapshot is atomic. The reducer derives incident and custom-event lists from the active session, retains selection only while its full ID remains present, builds camera choices, and then replaces the root. A snapshot with a revision lower than the rendered revision is stale and MUST return the existing state instance. During an automatic refresh, valid unsaved camera and custom-event drafts MUST survive application preference/context updates; a manual refresh may deliberately accept the stored preference. Busy, hosting, shortcut-registration, and monitoring transitions also flow through actions instead of separate bindable properties.
 
 WPF selector bindings can synchronously write `SelectedItem` back when an `ItemsSource` is rebound during root-state publication. That framework write-back is a render consequence, not a second user action. The view model therefore suppresses selector setters while it publishes state, equivalent selector actions are reducer identity transitions, and the state copier reuses incident, camera, and event collection objects when a transition carries them forward unchanged. This prevents presentation feedback loops and needless item-container regeneration while preserving real user selection as an explicit action.
 
@@ -1161,7 +1332,7 @@ Every actionable notice is constructed once as an immutable `EventLogItem`. Appe
 
 View models depend only on `Application.Contracts`, domain values intended for presentation, `Results`, and presentation-owned abstractions such as a dispatcher or dialog service. They do not query the store, read telemetry/replay context, or encode replay commands. UI event handlers contain presentation mechanics only. Use-case decisions live in `Application`, pure business rules live in `Domain`, and pure presentation transitions live in the reducer.
 
-The presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, read-only snapshots, resource dictionaries, and accessibility automation peers directly. No MVVM framework, theme framework, mediator, event-bus, immutable-collection package, or reactive package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; replacement state is published only on the dispatcher through the presentation abstraction.
+The presentation layer uses WPF/BCL `INotifyPropertyChanged`, `ICommand`, data binding, read-only snapshots, resource dictionaries, accessibility automation peers, and a narrowly scoped Windows `RegisterHotKey` adapter directly. `IGlobalShortcut` owns one registration and emits an activation effect; it does not create a domain event itself. A rebind registers the replacement before releasing the prior gesture, uses no-repeat semantics, and translates invalid/conflicting/unavailable registration into `Result` errors. Steering-wheel support is intentionally indirect: wheel software maps a button to the stored WPF gesture, avoiding a device-SDK dependency. No MVVM framework, theme framework, mediator, event-bus, immutable-collection package, reactive package, or wheel-vendor package is added before a concrete requirement justifies it. Long-running actions expose busy/cancellation state, disable duplicate commands, and never block the dispatcher; replacement state is published only on the dispatcher through the presentation abstraction.
 
 User-visible state and interactive elements have stable, documented Windows UI Automation names/`AutomationId` values. Keyboard navigation, focus order, screen-reader names, scaling, high contrast, scrolling/tail-follow, all three row offsets, and selection/review behavior MUST be acceptance-tested; automation identifiers remain the compatibility-stable `IncidentReview.*` contracts and do not depend on product branding or localized display text.
 
@@ -1244,7 +1415,7 @@ Packaged-deliverable smoke tests
 Real-iRacing acceptance checklist
 ```
 
-The repository currently implements the source/contract/integration layers for selected behaviors, plus a Release-compiled host-startup smoke test. Specifically, it has value/transition tests, public contract-shape tests, coherent `ReviewSnapshot` construction and retry tests, explicit replay-offset workflow tests, real temporary-SQLite tests and deterministic commit/migration seams, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, replay-context-reader tests, confirmed replay-controller/golden-vector tests, a focused hidden-native-window broadcast test, pure `MainWindowReducer`/immutable-state tests, and WPF effect/view-model tests. The final package/UI-automation and real-iRacing layers remain release gates, not completed evidence.
+The repository currently implements the source/contract/integration layers for selected behaviors, plus a Release-compiled desktop-host startup smoke test. Specifically, it has value/transition tests, deterministic UUID golden vectors, public contract-shape tests, coherent `ReviewSnapshot` construction and retry tests, custom-event/outbox use-case tests, explicit replay-offset workflow tests, real temporary-SQLite tests and deterministic commit/migration seams, event-sync contract and loopback-HTTP tests, headless-inbox integration tests, compiled-assembly architecture tests, analyzer tests, out-of-process shared-memory protocol tests, replay-context-reader tests, confirmed replay-controller/golden-vector tests, focused hidden-native-window broadcast/global-shortcut tests, pure `MainWindowReducer`/immutable-state tests, and WPF effect/view-model tests. The final package/UI-automation, real wheel-mapping, authenticated/TLS server hardening, and real-iRacing layers remain release gates. A public alpha service may be deployed, but reachability is not production security or acceptance evidence.
 
 ### 15.3 Requirements traceability
 
@@ -1262,17 +1433,19 @@ Traceability does not replace assertions. A test must fail for a meaningful viol
 Production behavior is tested through the same contracts used by consumers where the current suite provides that coverage.
 
 - `Store.ContractTests` validates the closed immutable contract surface; the SQLite implementation has real-database behavioral tests. A reusable backend-independent behavioral harness is still required before a second `IStore` implementation can claim conformance.
-- The SQLite suite validates observable on-disk behavior against real temporary databases, including event sessions containing incidents/checkpoints from several heat numbers, independent participant epochs and uniqueness, historical migrations, preferences, command fingerprints, and replay coordinates.
-- The iRacing suite exercises connection/recovery boundaries, replay classification, eligible participant filtering, current-driver and legacy team counter shapes, source-matched local scalar substitution, opponent increases, driver swaps, roster omission/reorder, event-wide durable keys across heat numbers, provisional keys, and bounded-buffer behavior against an independent process.
-- Replay tests exercise intent validation, availability, canonical participant resolution, driver-scoped team-car normalization, opponent and cross-heat focus, explicit identity-change refusal, stable live/replay metadata, delivery outcomes, later-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Independently authored packed-message vectors cover seek, focus, and playback.
-- Application identity/workflow tests cover durable and provisional event identity, one incident list across heats, heat baselines, independent participant checkpoints, counter transitions/reset/omission, simultaneous/batched increases, replay suppression, reconciliation, recorded-participant review, explicit offsets, coherent snapshots, revisions, and lifecycle. The full real-store and real-simulator matrix remains an acceptance goal.
-- Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, selection retention, selector idempotence, unchanged collection identity, dirty camera-draft preservation across automatic refresh, bounded eviction, reference identity between `CurrentStatusEvent` and the event-log tail, all theme mappings/cycle transitions, live desktop changes in Follow desktop, and ignored desktop changes in forced modes. Theme-controller/source tests independently cover registry interpretation, safe fallback, subscription disposal, resolution, and single-palette resource replacement. View-model/desktop-startup tests verify that stored policy seeds state before display, render-time selector write-back cannot feed back into state, an isolated shown window survives populated incident/camera refresh with Advanced expanded, successful persistence preserves replay preferences, and persistence failure restores the prior state before emitting its exact error, without constructing a second visible state. Shown-window crash probes run in a child process with a hard timeout because fatal runtime failures such as stack overflow cannot be caught by the test host.
+- The desktop SQLite suite validates observable on-disk behavior against real temporary databases, including event sessions containing incidents/checkpoints from several heat numbers, independent participant epochs and uniqueness, fresh schema version 5 and version-1-through-version-5 migration, preservation and atomic deterministic promotion of legacy UUIDv7 durable rows and participant-aware dependents, new UUIDv5 constraints, default `FollowDesktop`/`F9` values, custom-event pending/synchronized round trips and duplicate identity behavior, invalid persisted-value rejection, command fingerprints, replay coordinates, and preservation of every replay/theme preference.
+- Event-sync contract tests cover canonical/versioned join-code round trips, URI/session rejection dimensions, deterministic-submission integrity, immutable capability shape, and separate listen/advertised addresses. The HTTP adapter suite uses a real loopback publisher/host pair to verify the exact route/schema, accepted and duplicate outcomes, wrong-session/malformed/over-limit rejection, timeout/transport translation, and host lifecycle without leaking wire DTOs to consumers.
+- The headless SQLite inbox suite validates initialization/lifecycle gating, deterministic first-write-wins concurrency and payload preservation, safe persistence failures, unavailable data directories, and unexpected hosted-worker failure against real temporary databases.
+- The iRacing suite exercises connection/recovery boundaries, replay classification, eligible participant filtering, current-driver and legacy team counter shapes, source-matched local scalar substitution, opponent increases, driver swaps, roster omission/reorder, event-wide durable keys across heat numbers, provisional keys, malformed-input recovery, and bounded-buffer behavior against an independent process.
+- Replay and telemetry-snapshot tests exercise intent validation, representability, availability, canonical participant resolution, driver-scoped team-car normalization, opponent and cross-heat focus, explicit identity-change refusal, bounded/validated transient driver and camera context, latest accepted position-only frames, metadata/camera resolution, delivery outcomes, later-frame confirmation, coalesced-frame confirmation, cancellation, and distinct seek/camera/playback timeouts. Contract-shape tests require both snapshot readers to remain command-free simulator-neutral read boundaries. Independently authored packed-message vectors cover seek, camera focus, and playback.
+- Application identity/workflow tests cover durable UUIDv5 and provisional/legacy UUIDv7 event identity, one incident list across heats, heat baselines, independent participant checkpoints, counter transitions/reset/omission, simultaneous/batched increases, local-first custom-event capture, out-of-car-only publication, accepted/duplicate outbox convergence, receiver first-write-wins behavior, reconciliation, recorded-participant incident review, explicit negative/zero/positive offsets for both event kinds, coherent snapshot anchor retry, transient-context degradation, monotonically increasing revisions, and runtime/host lifecycle. The full real-store/multi-client/real-simulator matrix remains an acceptance goal.
+- Presentation tests call the pure reducer directly to verify full replacement state, ignored stale revisions, equal-revision handling, incident selection retention, selector idempotence, unchanged collection identity, valid dirty preference-draft preservation across automatic refresh, bounded eviction, reference identity between `CurrentStatusEvent` and the event-log tail, all theme mappings/cycle transitions, live desktop changes in Follow desktop, and ignored desktop changes in forced modes. Theme-controller/source tests independently cover registry interpretation, safe fallback, subscription disposal, resolution, and single-palette resource replacement. Global-shortcut tests independently cover gesture parsing, no-repeat native flags, conflicts, atomic rebinding, activation filtering, and cleanup. View-model/desktop-startup tests verify that stored policy seeds state before display, render-time selector write-back cannot feed back into state, an isolated shown window survives populated event/camera refresh with Advanced expanded, successful persistence preserves unrelated preferences, and persistence failure restores the prior state before emitting its exact error, without constructing a second visible state. Shown-window crash probes run in a child process with a hard timeout because fatal runtime failures such as stack overflow cannot be caught by the test host.
 - Tests do not use reflection to invoke private business logic; reflection is reserved for architecture inspection.
 - Implementation-specific tests may reference their implementation project but must not teach production consumers to bypass its contract.
 
 ### 15.5 Deterministic test implementations
 
-The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `IReplayController`, `IReplayContextReader`, `IDesktopThemeSource`, dispatcher, and service fakes. Reducer tests need no fake, dispatcher, window, or clock because every input—including occurrence time and a resolved palette—is action data. Adapter tests use production-owned explicit `.Testing` facades; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
+The current application and presentation suites use narrow suite-local `IStore`, `ITelemetrySource`, `ICurrentTelemetryReader`, `IReplayController`, `IReplayContextReader`, `ICustomEventPublisher`, `ICustomEventSessionHost`, `IDesktopThemeSource`, `IGlobalShortcut`, dispatcher, and service fakes. Reducer tests need no fake, dispatcher, window, or clock because every input—including occurrence time and a resolved palette—is action data. Adapter tests use production-owned explicit `.Testing` facades where needed; SQLite tests use real temporary databases, deterministic commit/cleanup outcomes, an operation checkpoint, and a migration gate; HTTP tests use isolated loopback ports and contract receivers; iRacing tests use unique kernel-object names, an independent subprocess, a manual `TimeProvider`, controlled stable-frame observations, a recording replay sender, and one hidden top-level native window that receives the real registered Windows broadcast.
 
 `IncidentReview.TestKit` currently establishes only the permitted public-contract dependency direction; it does not yet contain shared implementations. Reusable `ScriptedTelemetrySource`, `RecordingReplayController`, `InMemoryStore`, manual time/identity helpers, scheduler controls, and a general occurrence-based fault injector remain planned. When duplication or a second adapter/store makes them useful, they move into `TestKit` without privileged implementation access.
 
@@ -1432,22 +1605,24 @@ Assertions are executable statements of programmer invariants, not substitutes f
 | Testing | `MSTest.Sdk` 4.4.0, Microsoft Testing Platform, explicit Microsoft coverage extension | Microsoft-supported test stack with no implicit extension profile |
 | SQL mapping | Dapper 2.1.79 | Explicit parameterized SQL and lightweight mapping |
 | Migrations | `dbup-core` 6.1.1 and `dbup-sqlite` 6.0.4 | Ordered, journaled, embedded schema migrations |
-| Database | SQLite | Embedded durable store with transactions; no server process |
-| SQLite ADO.NET provider | `Microsoft.Data.Sqlite.Core` 10.0.11 | Microsoft-published provider and Dapper compatibility |
-| SQLite native binding | `SQLitePCLRaw.bundle_winsqlite3` 2.1.11 | Uses the SQLite engine serviced with Windows |
-| Serialization | `System.Text.Json` only for the deferred approved export use case | Included Microsoft implementation; not an internal messaging/storage/configuration dependency |
+| Desktop database | SQLite | Embedded durable application store with transactions; no server process |
+| Desktop SQLite ADO.NET provider | `Microsoft.Data.Sqlite.Core` 10.0.11 | Microsoft-published provider and Dapper compatibility |
+| Desktop SQLite native binding | `SQLitePCLRaw.bundle_winsqlite3` 2.1.11 | Uses the SQLite engine serviced with Windows |
+| Headless inbox provider | `Microsoft.Data.Sqlite` 10.0.11 | Cross-platform provider package including its reviewed native SQLite dependency for self-contained Linux publication |
+| Event transport | BCL `HttpClient` plus ASP.NET Core shared-framework Kestrel | Replaceable bounded HTTP adapter without a third-party server/client package |
+| Serialization | `System.Text.Json` for the versioned event-sync wire and deferred independent export use case | Included Microsoft implementation; never a storage, configuration, or in-process contract dependency |
 | Logging | `Microsoft.Extensions.Logging` | Standard structured logging abstraction |
 | Repository analysis | Repository Roslyn analyzers matching compiler 5.9.0 | Semantic architecture/SQL enforcement without a runtime dependency |
 
 ### 16.2 Approved exceptions and review
 
-The default is Microsoft platform/framework dependencies plus the official iRacing protocol. Theme dictionaries, WPF resource lookup, Windows registry access, and user-preference notifications use framework-provided WPF/BCL/Microsoft desktop APIs; the adaptive theme feature adds no package. Dapper and DbUp are explicitly approved third-party exceptions. SQLite itself and SQLitePCLRaw are also third-party code and must be acknowledged, pinned, licensed, and audited rather than described as Microsoft-only. This stack therefore cannot truthfully be called “Microsoft-only.” The control objective is a minimal, explicit, locked, reviewed graph—not reliance on publisher identity alone.
+The default is Microsoft platform/framework dependencies plus the official iRacing protocol. Theme dictionaries, WPF resource lookup, Windows registry access, user-preference notifications, global hot-key registration, HTTP client, Kestrel host, and JSON wire serialization use framework-provided WPF/BCL/Microsoft APIs. Dapper and DbUp are explicitly approved third-party exceptions. SQLite itself and SQLitePCLRaw—including the cross-platform native engine brought transitively by the headless inbox's `Microsoft.Data.Sqlite` package—are third-party code and must be acknowledged, pinned, licensed, and audited rather than described as Microsoft-only. This stack therefore cannot truthfully be called “Microsoft-only.” The control objective is a minimal, explicit, locked, reviewed graph—not reliance on publisher identity alone.
 
 The Roslyn analysis packages and code-coverage extension are Microsoft-published and prefix-reserved. The coverage extension is closed-source under Microsoft's free-to-use .NET library license; it satisfies an official-Microsoft-publisher policy but not an all-source-auditable policy. That distinction is recorded in the dependency inventory rather than hidden.
 
-The implemented provider stack is `Microsoft.Data.Sqlite.Core` plus `SQLitePCLRaw.bundle_winsqlite3`. It uses Windows' `winsqlite3.dll` instead of shipping the convenience `Microsoft.Data.Sqlite` package's bundled `e_sqlite3` engine. SQLitePCLRaw remains a reviewed third-party shim. This reduces shipped native code but ties available SQLite features to the supported Windows version, so startup validates the engine version and required features and Release acceptance must cover the minimum supported Windows build.
+The desktop store provider stack is `Microsoft.Data.Sqlite.Core` plus `SQLitePCLRaw.bundle_winsqlite3`. It uses Windows' `winsqlite3.dll` instead of shipping the convenience package's bundled `e_sqlite3` engine. SQLitePCLRaw remains a reviewed third-party shim. This reduces shipped desktop native code but ties available SQLite features to the supported Windows version, so startup validates the engine version and required features and Release acceptance must cover the minimum supported Windows build. The independent headless inbox uses `Microsoft.Data.Sqlite` so a self-contained Linux artifact carries a compatible native engine; that dependency is confined to `EventSync.Sqlite` and does not change the desktop store provider decision.
 
-The resolved NuGet graph is locked per package-consuming project, and the pinned Dapper/DbUp/provider combination is exercised by real SQLite integration tests and the Release-host startup smoke. A formal release dependency/license inventory and minimum-Windows compatibility record are still required. `dbup-sqlite` trails `dbup-core` in versioning; its pinned combination remains protected by those tests. Any provider change requires an ADR and must not leak beyond `Store.Sqlite`.
+The resolved NuGet graph is locked per package-consuming project. The pinned Dapper/DbUp/desktop-provider combination is exercised by real SQLite integration tests and the Release desktop-host startup smoke; the cross-platform inbox provider is exercised separately by real SQLite receiver tests and the self-contained server publish/deployment check. A formal release dependency/license inventory and minimum-Windows compatibility record are still required. `dbup-sqlite` trails `dbup-core` in versioning; its pinned combination remains protected by those tests. Any provider change requires an ADR and must remain inside its owning SQLite adapter.
 
 No additional runtime or build package is added merely for convenience. A dependency proposal states:
 
@@ -1468,6 +1643,8 @@ These are the direct versions currently pinned in repository-root policy. Versio
 | Package | Version | Classification |
 |---|---:|---|
 | `Microsoft.Extensions.Hosting` | 10.0.11 | Microsoft |
+| `Microsoft.Extensions.Hosting.Abstractions` | 10.0.11 | Microsoft |
+| `Microsoft.Extensions.DependencyInjection` | 10.0.11 | Microsoft |
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | 10.0.11 | Microsoft |
 | `Microsoft.Extensions.Configuration.Binder` | 10.0.11 | Microsoft |
 | `Microsoft.Extensions.Configuration.CommandLine` | 10.0.11 | Microsoft |
@@ -1475,6 +1652,7 @@ These are the direct versions currently pinned in repository-root policy. Versio
 | `Microsoft.Extensions.Options.ConfigurationExtensions` | 10.0.11 | Microsoft |
 | `Microsoft.Extensions.Logging.Abstractions` | 10.0.11 | Microsoft |
 | `Microsoft.Data.Sqlite.Core` | 10.0.11 | Microsoft-published provider |
+| `Microsoft.Data.Sqlite` | 10.0.11 | Microsoft-published cross-platform provider package; includes reviewed third-party native dependencies |
 | `Dapper` | 2.1.79 | Approved third-party exception |
 | `dbup-core` | 6.1.1 | Approved third-party exception |
 | `dbup-sqlite` | 6.0.4 | Approved third-party exception |
@@ -1493,7 +1671,7 @@ The following command-line tools were installed and verified on the initial Wind
 | Tool | Verified version/use |
 |---|---|
 | .NET SDK | `10.0.400` |
-| .NET runtime / Windows Desktop runtime | `10.0.11` |
+| .NET / Windows Desktop / ASP.NET Core runtimes | `10.0.11` |
 | MSBuild | `18.9.6` |
 | Git | `2.53.0` |
 | WinGet | `1.29.290` |
@@ -1704,6 +1882,8 @@ Create and smoke-test the Windows x64 release artifacts:
 
 The script cleans only its validated `artifacts\release\win-x64` directory, performs a locked restore, and applies the host-local `win-x64-single-file` publish profile. That profile is self-contained, bundles native libraries for extraction, enables single-file compression, disables trimming, and suppresses loose PDBs. The direct executable is `artifacts\release\win-x64\GravelReview-win-x64.exe`; it does not require a separately installed .NET Desktop Runtime. The GitHub-ready `artifacts\release\win-x64\GravelReview-win-x64.zip` contains exactly that executable and `THIRD-PARTY-NOTICES\iracing-sdk-1.20.md`. The script validates that inventory and product metadata, smoke-tests the exact renamed executable with `--verify-startup` and an isolated database, and reports byte counts and SHA-256 hashes. Native runtime components may extract to the user's temporary directory when the application starts. The external release filename is product-facing only: the internal assembly, namespace, mutex, environment-variable, database-path, and UI Automation identities remain compatibility-stable `IncidentReview.*` values.
 
+The headless service is published separately as an untrimmed self-contained `linux-x64` directory, so the target host does not need a system-wide .NET runtime. [`deploy/server/README.md`](deploy/server/README.md) is the reviewed publish/install guide; it includes the systemd unit, environment-file convention, database/listen options, and `/healthz` check. The service artifact and operational acceptance remain independent from the Windows desktop ZIP.
+
 Startup overrides follow the executable after `--` when using `dotnet run`, for example:
 
 ```powershell
@@ -1719,15 +1899,15 @@ The database path must be an absolute local file path. The default remains `%LOC
 
 ### 18.1 Logging
 
-Logs use structured templates and event IDs. Expected categories include startup, migration, store, iRacing connection, telemetry processing, incident detection, replay control, and shutdown.
+Logs use structured templates and event IDs. Expected categories include startup, migration, store, iRacing connection, telemetry processing, incident detection, custom-event capture/synchronization, HTTP host/publisher, replay control, and shutdown.
 
-Logs MUST NOT contain raw database connection details, arbitrary session-info documents, secrets, or user notes by default. Error results contain safe summaries; detailed exceptions remain in diagnostic logs at the owning boundary.
+Logs MUST NOT contain raw database connection details, arbitrary session-info documents, join-code contents, submitted display names, secrets, or user notes by default. Deterministic event IDs and duplicate outcomes may be logged for correlation. Error results contain safe summaries; detailed exceptions remain in diagnostic logs at the owning boundary.
 
 The Release sink is intentionally an open packaging decision, not an implicit Serilog/NLog dependency. Before the first distributable build, its ADR must define persistence, bounded size/rotation, concurrent writes, crash tolerance, user access, redaction, and failure behavior. Logging failure must not recurse through `IStore` or corrupt application state.
 
 ### 18.2 Local data and privacy
 
-The initial release is local-only. It must not transmit telemetry, identifiers, notes, or usage data. Any future server/export flow is explicit and user-initiated or governed by a separately accepted synchronization design.
+The application remains local-first. Incident telemetry, automatic incidents, annotations, preferences, and usage data are not uploaded. When the user explicitly saves a join code, only pending custom-event submissions for that deterministic session may be sent to its embedded server URI, and only while authoritative telemetry says the driver is out of the car. Each submission contains deterministic event/session IDs, replay position, submitter display name, and occurrence time; UI copy must make that disclosure clear.
 
 The database resides in an application-specific per-user data directory. Diagnostics may expose its location without offering unsafe direct mutation. A future export feature chooses a separate user destination. Deletion/retention behavior requires a later product decision.
 
@@ -1738,8 +1918,18 @@ The database resides in an application-specific per-user data directory. Diagnos
 - Export escapes/serializes data using the selected serializer, never hand-built JSON.
 - File destinations are validated and normal file-picker safety is preserved.
 - Dynamic SQL identifiers are closed mappings, never user text.
+- Join codes, advertised/listen URIs, route identities, content types, JSON bodies, schema versions, names, replay values, and recomputed deterministic IDs are validated at their owning boundary.
+- HTTP request/response bodies, serializer depth, and request duration are bounded. The adapter rejects unmapped JSON members and never returns raw infrastructure exception text.
 
-### 18.4 Supply chain
+### 18.4 Event-sync trust model
+
+The current join code is deliberately not authentication, authorization, or encryption. It embeds a server locator and stable session ID in reversible canonical encoding. Anyone who receives it can learn those values and can attempt to submit data; the submitter name is a claimed display string, not a verified identity. The host's deterministic validation and first-ID-wins rule provide idempotency, not protection against impersonation or malicious first submission.
+
+Trusted local league-night use is the safest current scope. The hosting capability separates its listen address from the advertised address placed in the code so a reverse proxy, remote host, or future container can map them independently; the desktop can either start a local listener or create a code for a separately deployed server. HTTPS may be advertised when external termination supplies it, but neither executable provisions certificates.
+
+The current public alpha endpoint is deliberately unauthenticated and, when advertised with `http://`, unencrypted. Anyone with its address and deterministic session ID can claim any submitter name, observe transport contents on the network, or win an event-ID race with a malicious first payload. Documentation and UI MUST state those facts and MUST NOT describe the endpoint as secure. Production public/container deployment remains blocked on a further security/operations ADR covering authentication, authorization, TLS termination, origin/network policy, rate limiting, abuse resistance, observability/redaction, retention/deletion, and secret management.
+
+### 18.5 Supply chain
 
 - Restore only from approved sources.
 - Pin direct and transitive versions through central management and lock files.
@@ -1758,7 +1948,9 @@ The server executes one command atomically and honors its `OperationId`; it neve
 
 ### 19.2 Offline synchronization
 
-A future `Store.Sync` may compose local SQLite and remote stores. This requires a dedicated design for outbox records, revisions, idempotency, conflict handling, deletion, privacy, and authentication. It must not be approximated by writing to two stores sequentially inside one local transaction.
+Custom events now implement one intentionally narrow local-first outbox: local SQLite is authoritative for capture, the application publishes pending immutable submissions after `NotOnTrack`, and an accepted/duplicate response advances local synchronization state. The HTTP adapter can be replaced—or hosted later in a container—through `EventSync.Contracts` without changing the domain, store contract, or WPF use-case policy.
+
+This does not implement a general `Store.Sync`. A future synchronized store for sessions, automatic incidents, annotations, preferences, edits, or deletion still requires a dedicated design for revisions, conflict resolution, tombstones, retention, privacy, authentication, and indeterminate reconciliation. It must not be approximated by writing to two stores sequentially inside one local transaction or by expanding custom-event wire DTOs into database-shaped messages.
 
 ### 19.3 Additional simulators or frontends
 
@@ -1766,7 +1958,7 @@ Simulator-neutral telemetry/replay contracts permit another adapter only if its 
 
 ## 20. Delivery plan
 
-Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices, including coherent revisioned presentation snapshots and explicit replay offsets, with remaining reliability-matrix work; Milestone 3 has the official SDK adapter, transient replay-context reader, and independent-process tests but not real-simulator acceptance for this revision; Milestone 4 has the runnable GravelReview WPF workflow, immutable reducer-driven state, semantic light/dark visual system, persisted three-mode theme policy, and pre-show/live Windows theme integration, but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending. The checklists below describe the remaining definition of done as well as completed scope.
+Current status: Milestone 0 is implemented except for substantive verification/CI/evidence tooling; Milestones 1 and 2 have working vertical slices, including deterministic UUIDv5 identities, a durable custom-event outbox, replaceable event-sync contracts/HTTP adapter, coherent revisioned presentation snapshots, and explicit replay offsets, with remaining reliability-matrix work; Milestone 3 has the official SDK adapter, transient replay-context reader, and independent-process tests but not real-simulator acceptance for this revision; Milestone 4 has the runnable GravelReview WPF workflow, immutable reducer-driven state, configurable global custom-event gesture, custom-event review/host/join controls, semantic light/dark visual system, persisted three-mode theme policy, and pre-show/live Windows theme integration, but not annotation/state editing or package-level UI Automation; Milestone 5 remains largely pending, including public/container event-sync hardening. The checklists below describe the remaining definition of done as well as completed scope.
 
 ### Milestone 0 — Repository foundation
 
@@ -1783,15 +1975,16 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 - Finalize provider dependency ADR.
 - Define immutable `IStore` queries/commands, idempotency, and snapshot semantics.
 - Implement SQLite transaction executor with Dapper.
-- Add DbUp migrations for sessions, incidents, detector checkpoints, operations, and preferences.
+- Add DbUp migrations for sessions, incidents, detector checkpoints, operations, complete preferences, deterministic identity compatibility, and custom-event outbox state.
 - Build shared store contract tests and SQLite fault/recovery tests.
 
 ### Milestone 2 — Simulator-neutral application slice
 
-- Implement domain identities, incident detector, and application use cases.
+- Implement namespaced deterministic domain identities, the participant-aware incident detector, custom-event/submission values, and application use cases.
 - Use scripted multi-participant telemetry, recording replay, deterministic IDs/clocks, and in-memory store.
-- Verify the complete participant-scoped detect → store → list → review workflow without iRacing.
+- Verify the complete participant-scoped detect plus local-first custom capture → store → list → synchronize/review workflow without iRacing.
 - Supply presentation consumers with one revisioned `ReviewSnapshot`; retry reads when their application anchor changes and support explicit signed `ReplayOffset` navigation.
+- Define transport-neutral publisher/host/receiver contracts, implement the bounded HTTP adapter, and keep out-of-car retry/first-ID-wins policy in the application.
 
 ### Milestone 3 — iRacing adapter
 
@@ -1805,9 +1998,10 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 ### Milestone 4 — GravelReview WPF experience
 
 - Render only `MainWindowState` from the root; route data-only actions through a pure reducer and replace the complete immutable state on the dispatcher.
-- Show the active-session incident log, per-row captured driver context, full-precision local recorded time, transient local-driver header, compact/full incident identity pair, and per-row `-2 sec`, `0 sec`, and `+2 sec` actions.
+- Show active-event incidents and custom events, per-incident captured driver/team/car fallback, full-precision local recorded time, transient local-driver header, compact/full identity pairs, synchronization state, and per-row `-2 sec`, `0 sec`, and `+2 sec` actions.
 - Provide the collapsed Advanced panel with bounded tail-follow events and the live iRacing camera selector; derive current status from the exact event-log-tail object.
-- Preserve dirty camera drafts across automatic snapshots, reject stale revisions, and retain hidden playback/pause/lead-in compatibility values.
+- Preserve valid dirty camera/custom-event drafts across automatic snapshots, reject stale revisions, and retain hidden playback/pause/lead-in compatibility values.
+- Register the saved no-repeat Windows key gesture application-wide, allow wheel software to emit it, and expose explicit local/shared-server host/join controls with honest alpha-security copy and no device- or transport-specific logic in application contracts.
 - Keep session history and Notes out of the primary UI while retaining their lower-layer contracts and durable records.
 - Use native `Base`/`Light`/`Dark` semantic resource dictionaries and GravelReview branding; keep configured `ThemePreference` and concrete `ResolvedTheme` separate in `MainWindowState`.
 - Provide the status-bar `FollowDesktop → Light → Dark` cycle, live Windows changes only while following, pre-show stored-theme application, and transactional save with exact presentation rollback on failure.
@@ -1817,6 +2011,7 @@ Current status: Milestone 0 is implemented except for substantive verification/C
 ### Milestone 5 — Reliability hardening
 
 - Complete fault-injection sweep and child-process termination harness.
+- Define and validate the authentication, TLS, abuse-control, retention, and operations model before treating the deployed public-alpha endpoint as production-ready or publishing a supported container image.
 - Add stress/randomized runs with reproducible seeds.
 - Review decision tables and surviving curated mutations.
 - Produce release checklist, SBOM, dependency inventory, and acceptance evidence.
@@ -1840,6 +2035,8 @@ A feature is not done until:
 13. The work is recorded in one or more small green Conventional Commits and their hashes are reported.
 14. A UI feature has one immutable visible-state owner, pure reducer coverage, stale-update behavior, and proof that each displayed status/event derives from its documented source object.
 15. A palette-aware UI change uses semantic resources in both Light and Dark, preserves the configured/resolved theme distinction, and is checked for keyboard, automation, scaling, and high-contrast behavior.
+16. A deterministic-identity change has an explicit derivation version, independent-component and golden-vector tests, persisted/wire compatibility evidence, and no silent re-keying.
+17. A synchronization change proves local-first persistence, out-of-car scheduling, no network call inside a store transaction, exact-ID duplicate behavior, bounded boundary validation, and honest trust/security messaging.
 
 ### 21.1 Database-change checklist
 
@@ -1875,6 +2072,7 @@ A feature is not done until:
 - Locked restore, vulnerability audit, licenses, and SBOM.
 - Hashes proving the tested and shipped artifacts are the same bytes.
 - Real-iRacing acceptance checklist with Windows, iRacing, SDK, and app versions; `Max Cars = 63`; solo/team/hosted/admin visibility; both counter shapes and source stability; matching local driver/team scalars; multi-heat event continuity and replay; identity loss/change; omission/reappearance; counter reset; driver swap/return; batched and simultaneous deltas; `0x` non-detection; and canonical recorded-car focus/refusal evidence.
+- Multi-client custom-event acceptance with key/wheel activation, disconnect/restart outbox recovery, duplicate races, host lifecycle, network boundaries, and documented trust assumptions.
 
 ## 22. Initial architecture decisions
 
@@ -1886,10 +2084,10 @@ A feature is not done until:
 | ADR-0004 | Accepted | DbUp performs ordered, journaled, embedded migrations before application startup. |
 | ADR-0005 | Accepted | Every application mutation is one typed command with at-most-once committed effects, executed atomically through transaction-owning `IStore.ExecuteAsync`. |
 | ADR-0006 | Accepted | `Result` and `Result<T>` are shared dependency-free failure primitives. |
-| ADR-0007 | Accepted | Microsoft Generic Host is the composition/lifetime mechanism; `Host.Wpf` is the sole composition root. |
+| ADR-0007 | Accepted | Microsoft hosting and built-in DI are the composition/lifetime mechanism; `Host.Wpf` and `Host.Server` are the only production composition roots and each wires only its owned adapters. |
 | ADR-0008 | Accepted | Assemblies, root policy, analyzers, and architecture tests enforce contracts; runtime implementation classes remain internal, with only approved `.Testing` registration seams public. |
 | ADR-0009 | Accepted | Testing follows Hipp's reliability philosophy, including designed-in fault injection and deliverable testing. |
-| ADR-0010 | Deferred | JSON is an optional export format, not an internal storage or communication requirement. |
+| ADR-0010 | Partially accepted | JSON remains absent from storage, configuration, and in-process contracts; bounded `System.Text.Json` DTOs are private to the versioned HTTP event-sync adapter, while user export remains deferred behind its own contract. |
 | ADR-0011 | Accepted | Codex creates small, green Conventional Commits for completed work; push/merge/tag/history rewriting remain separately authorized actions. |
 | ADR-0012 | Accepted; live acceptance pending | Transcribe only the used protocol surface from the pinned official iRacing SDK 1.20 artifact; do not depend on an unofficial wrapper or redistribute the upstream archive. |
 | ADR-0013 | Accepted | `GravelReview` is the product-facing name and assembly metadata; `IncidentReview.*` code/assembly identity plus the legacy database path, environment prefix, mutex, and Automation IDs remain compatibility-stable. |
@@ -1898,6 +2096,9 @@ A feature is not done until:
 | ADR-0016 | Accepted | WPF theming uses native semantic `Base`/`Light`/`Dark` resource dictionaries. Durable `ThemePreference` remains distinct from `ResolvedTheme`; Windows observation is isolated behind `IDesktopThemeSource`, and theme changes persist through the existing transactional preference command with reducer compensation on failure. |
 | ADR-0017 | Accepted; installer/updater deferred | Windows x64 releases use the host-local, untrimmed, self-contained single-file profile. The product-facing executable is `GravelReview-win-x64.exe`, while internal `IncidentReview.Host.Wpf` identity is preserved. The GitHub release asset is a ZIP containing that executable and the external reviewed iRacing notice. |
 | ADR-0018 | Accepted; live acceptance pending | An application session is an iRacing event container keyed durably by positive `SubSessionID` alone, or provisionally by one logical connection. SDK `SessionNum` remains the per-incident heat/replay coordinate. Heat changes retain the list and establish new participant epochs without incidents; historical v1 per-heat rows are not heuristically merged. |
+| ADR-0019 | Accepted | New durable session and participant-aware detected-incident identities use versioned namespaced RFC UUIDv5 derivation from validated simulator/domain evidence; custom events use UUIDv5 exclusively. Exact-match legacy durable UUIDv7 sessions are atomically promoted with incident/custom-event IDs and dependents re-derived, while connection-scoped provisional sessions are never heuristically re-keyed. |
+| ADR-0020 | Accepted | Custom-event capture is a configurable no-repeat Windows key gesture (wheel software may map to it), persists a named marker locally first, and drains the SQLite outbox only after authoritative out-of-car telemetry; network I/O never enters the store transaction. |
+| ADR-0021 | Accepted for explicitly disclosed alpha use; production hardening pending | `EventSync.Contracts` separates publisher/host/receiver policy from the bounded JSON/HTTP adapter; `EventSync.Sqlite` and `Host.Server` provide a replaceable headless deployment. A versioned join code carries advertised server URI plus deterministic session, the first exact event ID wins, and the current public alpha endpoint deliberately has no authentication or encryption. |
 
 ## 23. Open questions requiring evidence or product decisions
 
@@ -1915,6 +2116,8 @@ A feature is not done until:
 12. Does `SubSessionID` alone span all intended heats while separating unrelated events, and can one league night legitimately cross several subsessions?
 13. Does the official `CamCameraState.IsSessionScreen` bit unambiguously identify paused replay across every supported live, offline, team, and hosted session state?
 14. Which persistent Release diagnostic sink and rotation policy meet support needs without adding an unjustified logging package?
+15. Which authentication, authorization, TLS termination, rate limiting, retention, and deployment model is required before the joinable server may be exposed outside a trusted league network or hosted publicly in a container?
+16. Which wheel-driver key-mapping combinations and Windows shortcut conflicts form the packaged custom-event acceptance matrix?
 
 Open questions are resolved with experiments, fixtures, or ADRs—not assumptions embedded silently in implementation code.
 

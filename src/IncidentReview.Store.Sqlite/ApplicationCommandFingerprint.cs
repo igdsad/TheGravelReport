@@ -16,10 +16,14 @@ internal static class ApplicationCommandFingerprint
         var kind = command switch
         {
             EnsureSession => "session.ensure",
+            PromoteSessionIdentity => "session.promote-identity",
             EstablishIncidentCheckpoint => "incident-checkpoint.establish",
             RecordDetectedIncident => "incident.record-detected",
             AnnotateIncident => "incident.annotate",
             MarkIncidentReviewed => "incident.mark-reviewed",
+            RecordCustomEvent => "custom-event.record",
+            RecordReceivedCustomEvent => "custom-event.record-received",
+            MarkCustomEventSynchronized => "custom-event.mark-synchronized",
             _ => throw new InvalidOperationException("The command has no application-store descriptor."),
         };
         var version = command is EstablishIncidentCheckpoint or RecordDetectedIncident ? 2 : 1;
@@ -32,6 +36,12 @@ internal static class ApplicationCommandFingerprint
                 WriteString(writer, ensure.ProposedIdentity.ToString());
                 WriteDescriptor(writer, ensure.Descriptor);
                 WriteInt64(writer, ensure.StartedAt.UnixMilliseconds);
+                break;
+            case PromoteSessionIdentity promote:
+                WriteString(writer, promote.ExistingIdentity.ToString());
+                WriteString(writer, promote.DeterministicIdentity.ToString());
+                WriteDescriptor(writer, promote.Descriptor);
+                WriteInt64(writer, promote.PromotedAt.UnixMilliseconds);
                 break;
             case EstablishIncidentCheckpoint establish:
                 WriteOptionalCheckpoint(writer, establish.ExpectedCheckpoint);
@@ -51,6 +61,20 @@ internal static class ApplicationCommandFingerprint
             case MarkIncidentReviewed reviewed:
                 WriteString(writer, reviewed.Incident.ToString());
                 WriteInt64(writer, reviewed.ReviewedAt.UnixMilliseconds);
+                break;
+            case RecordCustomEvent customEvent:
+                WriteCustomEvent(writer, customEvent.CustomEvent);
+                break;
+            case RecordReceivedCustomEvent received:
+                WriteCustomEvent(writer, received.CustomEvent);
+                WriteInt64(
+                    writer,
+                    ((CustomEventSynchronization.Synchronized)received.CustomEvent.Synchronization)
+                    .SynchronizedAt.UnixMilliseconds);
+                break;
+            case MarkCustomEventSynchronized synchronized:
+                WriteString(writer, synchronized.CustomEvent.ToString());
+                WriteInt64(writer, synchronized.SynchronizedAt.UnixMilliseconds);
                 break;
         }
 
@@ -89,6 +113,16 @@ internal static class ApplicationCommandFingerprint
         WriteOptionalString(writer, value.Annotation.Notes);
         WriteInt64(writer, value.CreatedAt.UnixMilliseconds);
         WriteInt64(writer, value.UpdatedAt.UnixMilliseconds);
+    }
+
+    private static void WriteCustomEvent(ArrayBufferWriter<byte> writer, StoredCustomEvent value)
+    {
+        WriteString(writer, value.Id.ToString());
+        WriteString(writer, value.Session.ToString());
+        WriteInt32(writer, value.Position.SessionNumber.Value);
+        WriteInt64(writer, value.Position.SessionTime.Milliseconds);
+        WriteString(writer, value.Submitter.Value);
+        WriteInt64(writer, value.OccurredAt.UnixMilliseconds);
     }
 
     private static void WriteOptionalCheckpoint(

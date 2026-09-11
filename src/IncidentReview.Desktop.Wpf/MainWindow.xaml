@@ -96,6 +96,12 @@
                             Command="{Binding ToggleMonitoringCommand}"
                             Content="{Binding State.MonitorActionText}"
                             Style="{StaticResource AppToolbarButtonStyle}" />
+                    <Button Margin="0,0,7,0"
+                            AutomationProperties.AutomationId="IncidentReview.CreateCustomEvent"
+                            AutomationProperties.Name="Create a custom review event at the current race position"
+                            Command="{Binding CreateCustomEventCommand}"
+                            Content="Mark event"
+                            Style="{StaticResource AppAccentButtonStyle}" />
                     <Button AutomationProperties.AutomationId="IncidentReview.Cancel"
                             AutomationProperties.Name="Cancel current operation"
                             Command="{Binding CancelCommand}"
@@ -110,6 +116,13 @@
                 ClipToBounds="True"
                 Style="{StaticResource AppCardStyle}">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <TabControl Grid.RowSpan="2">
+                    <TabItem Header="Incidents">
+                        <Grid>
                 <DataGrid x:Name="IncidentGrid"
                           AlternationCount="2"
                           AutomationProperties.AutomationId="IncidentReview.Incidents"
@@ -202,6 +215,92 @@
                                TextAlignment="Center"
                                TextWrapping="Wrap" />
                 </StackPanel>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Custom events">
+                        <Grid>
+                            <DataGrid AutomationProperties.AutomationId="IncidentReview.CustomEvents"
+                                      AutomationProperties.Name="Custom review events"
+                                      AutoGenerateColumns="False"
+                                      CanUserAddRows="False"
+                                      GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column"
+                                      IsReadOnly="True"
+                                      ItemsSource="{Binding State.CustomEvents}"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Recorded"
+                                                        Binding="{Binding OccurredAtText}"
+                                                        Width="142" />
+                                    <DataGridTemplateColumn Header="Event ID" Width="100">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding CustomEventIdText}"
+                                                           ToolTip="{Binding FullCustomEventIdText}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Replay time"
+                                                        Binding="{Binding ReplayTime}"
+                                                        Width="102" />
+                                    <DataGridTextColumn Header="Submitted by"
+                                                        Binding="{Binding Submitter}"
+                                                        Width="160" />
+                                    <DataGridTextColumn Header="Status"
+                                                        Binding="{Binding SynchronizationStatus}"
+                                                        Width="120" />
+                                    <DataGridTemplateColumn Header="Review" Width="*" MinWidth="225">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                                    <Button Margin="3,2"
+                                                            AutomationProperties.Name="Review two seconds before this custom event"
+                                                            Command="{Binding DataContext.ReviewCustomEventBeforeCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="-2 sec"
+                                                            Style="{StaticResource AppCompactButtonStyle}" />
+                                                    <Button Margin="3,2"
+                                                            AutomationProperties.Name="Review at this custom event"
+                                                            Command="{Binding DataContext.ReviewCustomEventAtCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="0 sec"
+                                                            Style="{StaticResource AppCompactAccentButtonStyle}" />
+                                                    <Button Margin="3,2"
+                                                            AutomationProperties.Name="Review two seconds after this custom event"
+                                                            Command="{Binding DataContext.ReviewCustomEventAfterCommand, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="+2 sec"
+                                                            Style="{StaticResource AppCompactButtonStyle}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <TextBlock MaxWidth="480"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       Text="{Binding State.CustomEventEmptyMessage}"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                    <Style TargetType="{x:Type TextBlock}" BasedOn="{StaticResource AppSecondaryTextStyle}">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding State.HasCustomEvents}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
             </Grid>
         </Border>
 
@@ -217,6 +316,9 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="150" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -280,6 +382,123 @@
                                 Content="Save"
                                 Style="{StaticResource AppToolbarButtonStyle}" />
                     </WrapPanel>
+
+                    <Separator Grid.Row="4" Margin="0,10" />
+
+                    <Grid Grid.Row="5">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Margin="1,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource AppSectionTitleTextStyle}"
+                                   Text="Event marker" />
+                        <TextBox Grid.Column="1"
+                                 Margin="0,0,12,0"
+                                 VerticalContentAlignment="Center"
+                                 AutomationProperties.AutomationId="IncidentReview.CustomEventSubmitter"
+                                 AutomationProperties.Name="Name attached to custom events"
+                                 MaxLength="128"
+                                 Text="{Binding CustomEventSubmitter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Your name as it will appear to the reviewer" />
+                        <TextBlock Grid.Column="2"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Text="Shortcut" />
+                        <TextBox Grid.Column="3"
+                                 Margin="0,0,8,0"
+                                 VerticalContentAlignment="Center"
+                                 AutomationProperties.AutomationId="IncidentReview.CustomEventKey"
+                                 AutomationProperties.Name="Keyboard shortcut for custom events"
+                                 MaxLength="64"
+                                 Text="{Binding CustomEventKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Map a steering-wheel button to this key or key combination" />
+                        <Button Grid.Column="4"
+                                AutomationProperties.AutomationId="IncidentReview.SaveCustomEventSettings"
+                                AutomationProperties.Name="Save custom event settings"
+                                Command="{Binding SaveCustomEventSettingsCommand}"
+                                Content="Save event settings"
+                                Style="{StaticResource AppToolbarButtonStyle}" />
+                    </Grid>
+
+                    <Grid Grid.Row="6" Margin="0,10,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Margin="1,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource AppSectionTitleTextStyle}"
+                                   Text="Join code" />
+                        <TextBox Grid.Row="0"
+                                 Grid.Column="1"
+                                 Margin="0,0,8,0"
+                                 VerticalContentAlignment="Center"
+                                 AutomationProperties.AutomationId="IncidentReview.EventJoinCode"
+                                 AutomationProperties.Name="Custom event session join code"
+                                 MaxLength="4096"
+                                 Text="{Binding EventJoinCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Paste a host's code, then save event settings; clear it for local-only events" />
+                        <Button Grid.Row="0"
+                                Grid.Column="2"
+                                AutomationProperties.AutomationId="IncidentReview.CopyJoinCode"
+                                AutomationProperties.Name="Copy the custom event join code"
+                                Click="OnCopyJoinCode"
+                                Content="Copy"
+                                Style="{StaticResource AppToolbarButtonStyle}" />
+
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Margin="1,8,8,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource AppSectionTitleTextStyle}"
+                                   Text="Host address" />
+                        <TextBox Grid.Row="1"
+                                 Grid.Column="1"
+                                 Margin="0,8,8,0"
+                                 VerticalContentAlignment="Center"
+                                 AutomationProperties.AutomationId="IncidentReview.EventHostAddress"
+                                 AutomationProperties.Name="Address for hosting a custom event session"
+                                 Text="{Binding EventHostAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="The HTTP address included in the join code" />
+                        <Button Grid.Row="1"
+                                Grid.Column="2"
+                                Margin="0,8,0,0"
+                                AutomationProperties.AutomationId="IncidentReview.UseSharedEventServer"
+                                AutomationProperties.Name="Create a join code for an always-on shared server"
+                                Command="{Binding UseSharedEventServerCommand}"
+                                Content="Use shared server"
+                                Style="{StaticResource AppToolbarButtonStyle}" />
+                        <Button Grid.Row="1"
+                                Grid.Column="3"
+                                Margin="8,8,0,0"
+                                AutomationProperties.AutomationId="IncidentReview.ToggleCustomEventSession"
+                                AutomationProperties.Name="Start or stop a joinable custom event session"
+                                Command="{Binding ToggleCustomEventSessionCommand}"
+                                Content="{Binding State.CustomEventSessionActionText, StringFormat={}{0} locally}"
+                                Style="{StaticResource AppToolbarButtonStyle}" />
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="1"
+                                   Grid.ColumnSpan="3"
+                                   Margin="0,7,0,0"
+                                   Style="{StaticResource AppMutedTextStyle}"
+                                   Text="Trusted local network only. Join codes do not provide authentication."
+                                   TextWrapping="Wrap" />
+                    </Grid>
                 </Grid>
             </Border>
         </Expander>

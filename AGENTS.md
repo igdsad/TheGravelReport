@@ -15,7 +15,7 @@ This file defines how work is done throughout this repository. It applies to hum
 - Contract projects contain abstractions and simulator/provider-neutral values. Implementation projects contain technology-specific code.
 - `IncidentReview.Application` orchestrates use cases through contracts. It must not reference WPF, SQLite, Dapper, DbUp, Windows messages, or the iRacing SDK representation.
 - `IncidentReview.Desktop.Wpf` depends on application contracts and presentation-safe domain/results values only. It must not query the store, read telemetry, or issue replay protocol commands.
-- `IncidentReview.Host.Wpf` is the sole composition root. Concrete adapters are selected only there through Microsoft Generic Host dependency injection.
+- `IncidentReview.Host.Wpf` is the desktop composition root. `IncidentReview.Host.Server` is the headless event-receiver composition root. Concrete adapters are selected only in the host that owns their process through Microsoft Generic Host dependency injection.
 - A future remote store or alternate simulator adapter must be addable without changing domain or UI use-case policy.
 - Update `eng/ArchitecturePolicy.props` and architecture tests deliberately when adding a project or permitted dependency edge. Never bypass them.
 
@@ -34,7 +34,18 @@ This file defines how work is done throughout this repository. It applies to hum
 - Application and UI code never receive a connection or transaction.
 - Dapper runtime values are always parameters. SQL text is adapter-private and compile-time constant; never construct SQL by concatenating runtime input.
 - DbUp migrations are ordered, embedded, checksum-pinned, and append-only once released. Schema changes require migration, upgrade, and rollback/failure tests.
-- JSON is not a database, configuration requirement, or internal message format. A future JSON export belongs behind a separate export contract.
+- JSON is not a database, configuration requirement, or in-process message format. Bounded JSON wire DTOs stay private to `EventSync.Http`; a future JSON export belongs behind a separate export contract.
+
+## Deterministic identities and custom-event synchronization
+
+- Durable simulator sessions use RFC UUIDv5 derived only from the canonical simulator code and exact validated opaque simulator-session key. Connection-scoped provisional sessions remain UUIDv7 and MUST NOT be advertised in a join code.
+- Detected incident UUIDv5 identity is derived from session identity, participant identity, counter epoch, and resulting incident-points total. Custom-event UUIDv5 identity is derived from session identity and exact replay position (replay session number plus session time in integer milliseconds).
+- Namespaces, component order, canonical formatting, and version labels used for deterministic identities are persisted/protocol contracts. Changing any of them requires a new version, migration/compatibility design, and golden-vector tests; never silently re-key existing rows.
+- Submitter name and wall-clock occurrence time are payload, not custom-event identity. Two submissions with the same custom-event ID are duplicates even when those payload values differ; the first committed payload is authoritative and later duplicates are ignored with a safe warning.
+- Custom-event capture is local-first. Record one typed store command before attempting network I/O, retain unsynchronized events as a durable SQLite outbox, and never perform HTTP inside a store transaction.
+- The application, not the HTTP adapter, owns outbox timing and retry. It may publish only after authoritative telemetry says the driver is out of the car; an accepted or duplicate server response may then mark the local event synchronized.
+- Join codes are versioned locators containing the advertised HTTP(S) base URI and deterministic session identity. They are not secrets or credentials. The current local/league-night protocol has no authentication; do not imply confidentiality, authorization, or safe public-Internet exposure.
+- Cross-boundary synchronization uses `IncidentReview.EventSync.Contracts`. Wire encoding, HTTP routing, listener mechanics, and transport failures stay in `IncidentReview.EventSync.Http`, selected by `Host.Wpf` for local hosting and by `Host.Server` for the always-on receiver. The server-only SQLite inbox stays in `IncidentReview.EventSync.Sqlite`; UI, domain, application, and general store contracts never depend on either adapter.
 
 ## One-way UI state
 

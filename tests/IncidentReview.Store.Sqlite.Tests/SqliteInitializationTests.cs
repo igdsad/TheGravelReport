@@ -18,6 +18,7 @@ public sealed class SqliteInitializationTests
     private static readonly string[] ExpectedTables =
     [
         "ApplicationPreferences",
+        "CustomEvent",
         "Incident",
         "IncidentCheckpoint",
         "SchemaVersions",
@@ -36,7 +37,15 @@ public sealed class SqliteInitializationTests
     private static readonly string[] ExpectedPreferencesColumns =
     [
         "preferences_id", "replay_lead_in_ms", "auto_pause", "playback_speed",
-        "preferred_camera", "updated_at_utc_ms", "theme_preference",
+        "preferred_camera", "updated_at_utc_ms", "theme_preference", "submitter_name",
+        "custom_event_key", "event_join_code",
+    ];
+
+    private static readonly string[] ExpectedCustomEventColumns =
+    [
+        "custom_event_id", "session_id", "replay_session_number",
+        "replay_session_time_ms", "submitter_name", "occurred_at_utc_ms",
+        "synchronized_at_utc_ms",
     ];
 
     private static readonly string[] ExpectedIncidentColumns =
@@ -59,6 +68,8 @@ public sealed class SqliteInitializationTests
         "001_InitialSchema.sql",
         "002_AddThemePreference.sql",
         "003_AddIncidentParticipants.sql",
+        "004_DeterministicIdentitiesAndEventSettings.sql",
+        "005_AddCustomEventOutbox.sql",
     ];
 
     [TestMethod]
@@ -74,7 +85,7 @@ public sealed class SqliteInitializationTests
         Assert.IsTrue(result.IsSuccess);
         using var connection = database.OpenConnection();
         CollectionAssert.AreEqual(ExpectedTables, ReadTableNames(connection));
-        Assert.AreEqual(3L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
+        Assert.AreEqual(5L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
         Assert.AreEqual(1L, ExecuteScalarInt64(connection, "PRAGMA foreign_keys;"));
         Assert.AreEqual("delete", ExecuteScalarString(connection, "PRAGMA journal_mode;"));
         CollectionAssert.AreEqual(ExpectedMigrationScripts, ReadMigrationScriptNames(connection));
@@ -86,9 +97,15 @@ public sealed class SqliteInitializationTests
         CollectionAssert.AreEqual(
             ExpectedPreferencesColumns,
             ReadColumnNames(connection, "ApplicationPreferences"));
+        CollectionAssert.AreEqual(
+            ExpectedCustomEventColumns,
+            ReadColumnNames(connection, "CustomEvent"));
         Assert.AreEqual(0L, ExecuteScalarInt64(
             connection,
             "SELECT theme_preference FROM ApplicationPreferences WHERE preferences_id = 1;"));
+        Assert.AreEqual("F9", ExecuteScalarString(
+            connection,
+            "SELECT custom_event_key FROM ApplicationPreferences WHERE preferences_id = 1;"));
     }
 
     [TestMethod]
@@ -114,6 +131,12 @@ public sealed class SqliteInitializationTests
         Assert.AreEqual(1L, ExecuteScalarInt64(
             connection,
             "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '003_AddIncidentParticipants.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            connection,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '004_DeterministicIdentitiesAndEventSettings.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            connection,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '005_AddCustomEventOutbox.sql';"));
         Assert.AreEqual(1L, ExecuteScalarInt64(
             connection,
             "SELECT COUNT(*) FROM ApplicationPreferences;"));
@@ -159,8 +182,11 @@ public sealed class SqliteInitializationTests
         Assert.AreEqual(0.5, preferences.Value.PlaybackSpeed);
         Assert.AreEqual("TV 2", preferences.Value.PreferredCamera);
         Assert.AreEqual(ThemePreference.FollowDesktop, preferences.Value.Theme);
+        Assert.IsNull(preferences.Value.SubmitterName);
+        Assert.AreEqual("F9", preferences.Value.CustomEventKey);
+        Assert.IsNull(preferences.Value.EventJoinCode);
         using var verification = database.OpenConnection();
-        Assert.AreEqual(3L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
+        Assert.AreEqual(5L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
         Assert.AreEqual(1_234_567L, ExecuteScalarInt64(
             verification,
             "SELECT updated_at_utc_ms FROM ApplicationPreferences WHERE preferences_id = 1;"));
@@ -170,6 +196,12 @@ public sealed class SqliteInitializationTests
         Assert.AreEqual(1L, ExecuteScalarInt64(
             verification,
             "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '003_AddIncidentParticipants.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '004_DeterministicIdentitiesAndEventSettings.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '005_AddCustomEventOutbox.sql';"));
     }
 
     [TestMethod]
@@ -221,10 +253,93 @@ public sealed class SqliteInitializationTests
         Assert.AreEqual(4, checkpoints.Value[0].LastCounter.Value);
 
         using var verification = database.OpenConnection();
-        Assert.AreEqual(3L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
+        Assert.AreEqual(5L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
         Assert.AreEqual(1L, ExecuteScalarInt64(
             verification,
             "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '003_AddIncidentParticipants.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '004_DeterministicIdentitiesAndEventSettings.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '005_AddCustomEventOutbox.sql';"));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-INC-005")]
+    [TestProperty("Requirement", "IR-STR-004")]
+    public async Task VersionThreeDatabaseUpgradesWithoutLosingMultipleParticipants()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await InitializeSuccessfully(database);
+        var session = SessionIdentity.Generate();
+        var firstIncident = IncidentId.Generate();
+        var secondIncident = IncidentId.Generate();
+        using (var connection = database.OpenConnection())
+        {
+            InsertSession(connection, session.ToString(), "multi-participant-upgrade");
+            InsertParticipantIncident(
+                connection,
+                firstIncident.ToString(),
+                session.ToString(),
+                "cust:101",
+                "Alice Driver",
+                "Alpha Team",
+                "12");
+            InsertParticipantIncident(
+                connection,
+                secondIncident.ToString(),
+                session.ToString(),
+                "cust:202",
+                "Bob Driver",
+                "Beta Team",
+                "34");
+            ExecuteParameterized(
+                connection,
+                """
+                INSERT INTO IncidentCheckpoint (
+                    session_id, participant_identity, counter_epoch, last_incident_points_total,
+                    last_replay_session_number, last_replay_session_time_ms, updated_at_utc_ms)
+                VALUES
+                    (@sessionId, 'cust:101', 1, 4, 0, 1000, 1000),
+                    (@sessionId, 'cust:202', 2, 4, 0, 2000, 2000);
+                """,
+                ("@sessionId", session.ToString()));
+            DowngradeToVersionThree(connection);
+        }
+
+        var initialization = await SqliteTestingRegistration.CreateInitializer(database.Options)
+            .InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(initialization.IsSuccess, initialization.Error?.ToString());
+        using var verification = database.OpenConnection();
+        Assert.AreEqual(5L, ExecuteScalarInt64(verification, "PRAGMA user_version;"));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM Incident;"));
+        Assert.AreEqual("Alice Driver|Alpha Team|12", ExecuteScalarString(
+            verification,
+            """
+            SELECT driver_name || '|' || team_name || '|' || car_number
+            FROM Incident
+            WHERE participant_identity = 'cust:101';
+            """));
+        Assert.AreEqual("Bob Driver|Beta Team|34", ExecuteScalarString(
+            verification,
+            """
+            SELECT driver_name || '|' || team_name || '|' || car_number
+            FROM Incident
+            WHERE participant_identity = 'cust:202';
+            """));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM IncidentCheckpoint;"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '004_DeterministicIdentitiesAndEventSettings.sql';"));
+        Assert.AreEqual(1L, ExecuteScalarInt64(
+            verification,
+            "SELECT COUNT(*) FROM SchemaVersions WHERE ScriptName = '005_AddCustomEventOutbox.sql';"));
     }
 
     [TestMethod]
@@ -288,7 +403,7 @@ public sealed class SqliteInitializationTests
         Assert.IsTrue((await first.InitializeAsync(CancellationToken.None)).IsSuccess);
         using (var connection = database.OpenConnection())
         {
-            ExecuteNonQuery(connection, "PRAGMA user_version = 4;");
+            ExecuteNonQuery(connection, "PRAGMA user_version = 6;");
         }
 
         var second = SqliteTestingRegistration.CreateInitializer(database.Options);
@@ -299,7 +414,7 @@ public sealed class SqliteInitializationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-STR-004")]
-    [DataRow(4)]
+    [DataRow(6)]
     [DataRow(-1)]
     public async Task UnsupportedUnjournaledSchemaVersionIsRejectedWithoutMutation(int schemaVersion)
     {
@@ -522,8 +637,8 @@ public sealed class SqliteInitializationTests
 
         Assert.IsTrue(enteredMigration, "The migration did not reach its deterministic test gate.");
         using var connection = database.OpenConnection();
-        Assert.AreEqual(3L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
-        Assert.AreEqual(4L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
+        Assert.AreEqual(5L, ExecuteScalarInt64(connection, "PRAGMA user_version;"));
+        Assert.AreEqual(6L, ExecuteScalarInt64(connection, "SELECT COUNT(*) FROM SchemaVersions;"));
 
         var whileCanceled = await context.Store.QueryAsync(
             GetPreferences.Instance,
@@ -543,7 +658,7 @@ public sealed class SqliteInitializationTests
     [TestProperty("Requirement", "IR-STR-004")]
     [DataRow(VersionFourUuid)]
     [DataRow(VersionSevenUuidWithInvalidVariant)]
-    public async Task SchemaRejectsNonVersionSevenOrInvalidVariantIdentifiers(string invalidIdentifier)
+    public async Task SchemaRejectsUnsupportedUuidVersionOrInvalidVariantIdentifiers(string invalidIdentifier)
     {
         using var database = new TemporarySqliteDatabase();
         await InitializeSuccessfully(database);
@@ -876,15 +991,81 @@ public sealed class SqliteInitializationTests
 
     private static void DowngradeToVersionTwo(SqliteConnection connection)
     {
+        DowngradeToVersionThree(connection);
         ExecuteNonQuery(connection, "DROP INDEX ux_incident_session_participant_epoch_total;");
-        ExecuteNonQuery(connection, "ALTER TABLE Incident DROP COLUMN car_number;");
-        ExecuteNonQuery(connection, "ALTER TABLE Incident DROP COLUMN team_name;");
-        ExecuteNonQuery(connection, "ALTER TABLE Incident DROP COLUMN driver_name;");
-        ExecuteNonQuery(connection, "ALTER TABLE Incident DROP COLUMN participant_identity;");
         ExecuteNonQuery(
             connection,
-            "CREATE UNIQUE INDEX ux_incident_session_epoch_total " +
-            "ON Incident (session_id, counter_epoch, incident_points_total);");
+            """
+            CREATE TABLE IncidentV2 (
+                incident_id TEXT NOT NULL CONSTRAINT pk_incident PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                replay_session_number INTEGER NOT NULL,
+                replay_session_time_ms INTEGER NOT NULL,
+                observed_at_utc_ms INTEGER NOT NULL,
+                incident_points_delta INTEGER NOT NULL,
+                incident_points_total INTEGER NOT NULL,
+                counter_epoch INTEGER NOT NULL,
+                lap INTEGER NULL,
+                lap_distance_percent REAL NULL,
+                review_status INTEGER NOT NULL,
+                classification INTEGER NULL,
+                notes TEXT NULL,
+                created_at_utc_ms INTEGER NOT NULL,
+                updated_at_utc_ms INTEGER NOT NULL,
+                CONSTRAINT fk_incident_session FOREIGN KEY (session_id)
+                    REFERENCES "Session" (session_id) ON UPDATE RESTRICT ON DELETE CASCADE,
+                CONSTRAINT ck_incident_id_uuid CHECK (
+                    length(incident_id) = 36
+                    AND substr(incident_id, 9, 1) = '-'
+                    AND substr(incident_id, 14, 1) = '-'
+                    AND substr(incident_id, 19, 1) = '-'
+                    AND substr(incident_id, 24, 1) = '-'
+                    AND substr(incident_id, 15, 1) = '7'
+                    AND substr(incident_id, 20, 1) IN ('8', '9', 'a', 'b')
+                    AND incident_id = lower(incident_id)
+                    AND length(replace(incident_id, '-', '')) = 32
+                    AND replace(incident_id, '-', '') NOT GLOB '*[^0-9a-f]*'),
+                CONSTRAINT ck_incident_replay_position CHECK (
+                    replay_session_number BETWEEN 0 AND 2147483647
+                    AND replay_session_time_ms BETWEEN 0 AND 922337203685477),
+                CONSTRAINT ck_incident_observed_time CHECK (
+                    observed_at_utc_ms BETWEEN -62135596800000 AND 253402300799999),
+                CONSTRAINT ck_incident_points CHECK (
+                    incident_points_delta BETWEEN 1 AND 2147483647
+                    AND incident_points_total BETWEEN incident_points_delta AND 2147483647
+                    AND counter_epoch BETWEEN 0 AND 2147483647),
+                CONSTRAINT ck_incident_lap CHECK (
+                    lap IS NULL OR lap BETWEEN 0 AND 2147483647),
+                CONSTRAINT ck_incident_lap_distance CHECK (
+                    lap_distance_percent IS NULL
+                    OR (lap_distance_percent >= 0.0 AND lap_distance_percent <= 1.0)),
+                CONSTRAINT ck_incident_review_status CHECK (review_status IN (1, 2, 3)),
+                CONSTRAINT ck_incident_classification CHECK (
+                    classification IS NULL OR classification IN (1, 2, 3, 4, 5)),
+                CONSTRAINT ck_incident_notes CHECK (notes IS NULL OR length(notes) <= 2000),
+                CONSTRAINT ck_incident_audit_times CHECK (
+                    created_at_utc_ms BETWEEN -62135596800000 AND 253402300799999
+                    AND updated_at_utc_ms BETWEEN created_at_utc_ms AND 253402300799999)
+            );
+
+            INSERT INTO IncidentV2 (
+                incident_id, session_id, replay_session_number, replay_session_time_ms,
+                observed_at_utc_ms, incident_points_delta, incident_points_total,
+                counter_epoch, lap, lap_distance_percent, review_status, classification,
+                notes, created_at_utc_ms, updated_at_utc_ms)
+            SELECT
+                incident_id, session_id, replay_session_number, replay_session_time_ms,
+                observed_at_utc_ms, incident_points_delta, incident_points_total,
+                counter_epoch, lap, lap_distance_percent, review_status, classification,
+                notes, created_at_utc_ms, updated_at_utc_ms
+            FROM Incident;
+
+            DROP TABLE Incident;
+            ALTER TABLE IncidentV2 RENAME TO Incident;
+
+            CREATE UNIQUE INDEX ux_incident_session_epoch_total
+                ON Incident (session_id, counter_epoch, incident_points_total);
+            """);
         ExecuteNonQuery(
             connection,
             """
@@ -922,6 +1103,21 @@ public sealed class SqliteInitializationTests
         ExecuteNonQuery(connection, "PRAGMA user_version = 2;");
     }
 
+    private static void DowngradeToVersionThree(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, "DROP TABLE CustomEvent;");
+        ExecuteNonQuery(connection, "ALTER TABLE ApplicationPreferences DROP COLUMN submitter_name;");
+        ExecuteNonQuery(connection, "ALTER TABLE ApplicationPreferences DROP COLUMN custom_event_key;");
+        ExecuteNonQuery(connection, "ALTER TABLE ApplicationPreferences DROP COLUMN event_join_code;");
+        ExecuteNonQuery(
+            connection,
+            "DELETE FROM SchemaVersions WHERE ScriptName = '004_DeterministicIdentitiesAndEventSettings.sql';");
+        ExecuteNonQuery(
+            connection,
+            "DELETE FROM SchemaVersions WHERE ScriptName = '005_AddCustomEventOutbox.sql';");
+        ExecuteNonQuery(connection, "PRAGMA user_version = 3;");
+    }
+
     private static async Task InitializeSuccessfully(TemporarySqliteDatabase database)
     {
         var initializer = SqliteTestingRegistration.CreateInitializer(database.Options);
@@ -957,6 +1153,7 @@ public sealed class SqliteInitializationTests
             "Incident" => "PRAGMA table_info('Incident');",
             "IncidentCheckpoint" => "PRAGMA table_info('IncidentCheckpoint');",
             "ApplicationPreferences" => "PRAGMA table_info('ApplicationPreferences');",
+            "CustomEvent" => "PRAGMA table_info('CustomEvent');",
             _ => throw new ArgumentOutOfRangeException(nameof(table)),
         };
         using var reader = command.ExecuteReader();
@@ -1032,6 +1229,39 @@ public sealed class SqliteInitializationTests
             ("@lapDistance", lapDistance));
     }
 
+    private static void InsertParticipantIncident(
+        SqliteConnection connection,
+        string incidentId,
+        string sessionId,
+        string participantIdentity,
+        string driverName,
+        string teamName,
+        string carNumber)
+    {
+        ExecuteParameterized(
+            connection,
+            """
+            INSERT INTO Incident (
+                incident_id, session_id, replay_session_number, replay_session_time_ms,
+                observed_at_utc_ms, incident_points_delta, incident_points_total,
+                counter_epoch, lap, lap_distance_percent, review_status,
+                created_at_utc_ms, updated_at_utc_ms,
+                participant_identity, driver_name, team_name, car_number)
+            VALUES (
+                @incidentId, @sessionId, 0, 1000,
+                1000, 4, 4,
+                0, 1, 0.5, 1,
+                1000, 1000,
+                @participantIdentity, @driverName, @teamName, @carNumber);
+            """,
+            ("@incidentId", incidentId),
+            ("@sessionId", sessionId),
+            ("@participantIdentity", participantIdentity),
+            ("@driverName", driverName),
+            ("@teamName", teamName),
+            ("@carNumber", carNumber));
+    }
+
     private static void InsertStoreOperation(SqliteConnection connection, string operationId)
     {
         ExecuteParameterized(
@@ -1051,7 +1281,7 @@ public sealed class SqliteInitializationTests
         var sql = schemaVersion switch
         {
             -1 => "PRAGMA user_version = -1;",
-            4 => "PRAGMA user_version = 4;",
+            6 => "PRAGMA user_version = 6;",
             _ => throw new ArgumentOutOfRangeException(nameof(schemaVersion)),
         };
         ExecuteNonQuery(connection, sql);

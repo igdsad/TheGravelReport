@@ -50,3 +50,14 @@ internal sealed class IncidentCheckpointRow
     public long LastReplaySessionTimeMilliseconds { get; init; }
     public long UpdatedAtUnixMilliseconds { get; init; }
 }
+
+internal sealed class CustomEventRow
+{
+    public required string CustomEventId { get; init; }
+    public required string SessionId { get; init; }
+    public int ReplaySessionNumber { get; init; }
+    public long ReplaySessionTimeMilliseconds { get; init; }
+    public required string SubmitterName { get; init; }
+    public long OccurredAtUnixMilliseconds { get; init; }
+    public long? SynchronizedAtUnixMilliseconds { get; init; }
+}

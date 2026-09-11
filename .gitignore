@@ -48,6 +48,32 @@ src/IncidentReview.Store.Sqlite/**/*.sqlite-wal
 src/IncidentReview.Store.Sqlite/**/*.sqlite3
 src/IncidentReview.Store.Sqlite/**/*.log
 
+# Keep the server inbox adapter and its tests for the same case-insensitive match.
+!src/IncidentReview.EventSync.Sqlite/
+!src/IncidentReview.EventSync.Sqlite/**
+src/IncidentReview.EventSync.Sqlite/**/bin/
+src/IncidentReview.EventSync.Sqlite/**/obj/
+src/IncidentReview.EventSync.Sqlite/**/*.db
+src/IncidentReview.EventSync.Sqlite/**/*.db-shm
+src/IncidentReview.EventSync.Sqlite/**/*.db-wal
+src/IncidentReview.EventSync.Sqlite/**/*.sqlite
+src/IncidentReview.EventSync.Sqlite/**/*.sqlite-shm
+src/IncidentReview.EventSync.Sqlite/**/*.sqlite-wal
+src/IncidentReview.EventSync.Sqlite/**/*.sqlite3
+src/IncidentReview.EventSync.Sqlite/**/*.log
+!tests/IncidentReview.EventSync.Sqlite.Tests/
+!tests/IncidentReview.EventSync.Sqlite.Tests/**
+tests/IncidentReview.EventSync.Sqlite.Tests/**/bin/
+tests/IncidentReview.EventSync.Sqlite.Tests/**/obj/
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.db
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.db-shm
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.db-wal
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.sqlite
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.sqlite-shm
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.sqlite-wal
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.sqlite3
+tests/IncidentReview.EventSync.Sqlite.Tests/**/*.log
+
 # Reviewed binary database fixtures are source-controlled test inputs.
 !test-assets/databases/
 !test-assets/databases/**

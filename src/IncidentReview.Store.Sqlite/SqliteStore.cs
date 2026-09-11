@@ -43,7 +43,10 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
                auto_pause AS AutoPause,
                playback_speed AS PlaybackSpeed,
                preferred_camera AS PreferredCamera,
-               theme_preference AS ThemePreference
+               theme_preference AS ThemePreference,
+               submitter_name AS SubmitterName,
+               custom_event_key AS CustomEventKey,
+               event_join_code AS EventJoinCode
         FROM ApplicationPreferences
         WHERE preferences_id = 1;
         """;
@@ -73,6 +76,9 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
             playback_speed = @PlaybackSpeed,
             preferred_camera = @PreferredCamera,
             theme_preference = @ThemePreference,
+            submitter_name = @SubmitterName,
+            custom_event_key = @CustomEventKey,
+            event_join_code = @EventJoinCode,
             updated_at_utc_ms = @UpdatedAtUnixMilliseconds
         WHERE preferences_id = 1;
         """;
@@ -265,6 +271,11 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
             return ReadApplicationQuery(query, cancellationToken);
         }
 
+        if (query is GetCustomEvent or GetCustomEvents or GetPendingCustomEvents)
+        {
+            return ReadCustomEventQuery(query, cancellationToken);
+        }
+
         return Result<T>.Failure(StoreErrors.UnsupportedRequest);
     }
 
@@ -275,10 +286,14 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
         {
             UpdatePreferences update => WritePreferences(update, cancellationToken),
             EnsureSession or
+            PromoteSessionIdentity or
             EstablishIncidentCheckpoint or
             RecordDetectedIncident or
             AnnotateIncident or
             MarkIncidentReviewed => WriteApplicationCommand(command, cancellationToken),
+            RecordCustomEvent or
+            RecordReceivedCustomEvent or
+            MarkCustomEventSynchronized => WriteApplicationCommand(command, cancellationToken),
             _ => Result.Failure(StoreErrors.UnsupportedRequest),
         };
     }
@@ -307,7 +322,10 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
                     row.PlaybackSpeed,
                     row.AutoPause == 1,
                     row.PreferredCamera,
-                    (ThemePreference)row.ThemePreference);
+                    (ThemePreference)row.ThemePreference,
+                    row.SubmitterName,
+                    row.CustomEventKey,
+                    row.EventJoinCode);
                 if (!preferences.IsSuccess)
                 {
                     return Result<UserPreferences>.Failure(StoreErrors.PersistenceFailure);
@@ -404,6 +422,9 @@ internal sealed partial class SqliteStore : IStore, IAsyncDisposable
                         command.Preferences.PlaybackSpeed,
                         command.Preferences.PreferredCamera,
                         ThemePreference = (int)command.Preferences.Theme,
+                        command.Preferences.SubmitterName,
+                        command.Preferences.CustomEventKey,
+                        command.Preferences.EventJoinCode,
                         UpdatedAtUnixMilliseconds = command.UpdatedAt.UnixMilliseconds,
                     },
                     transaction: transaction);

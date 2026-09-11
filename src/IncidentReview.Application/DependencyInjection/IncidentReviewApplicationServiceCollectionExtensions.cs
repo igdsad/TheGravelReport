@@ -1,4 +1,5 @@
 using IncidentReview.Application.Contracts;
+using IncidentReview.EventSync.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -12,6 +13,8 @@ public static class IncidentReviewApplicationServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<ICustomEventPublisher, DisabledCustomEventPublisher>();
+        services.TryAddSingleton<ICustomEventSessionHost, DisabledCustomEventSessionHost>();
         _ = services.AddSingleton<IncidentReviewApplication>();
         _ = services.AddSingleton<IIncidentReviewService>(static provider =>
             provider.GetRequiredService<IncidentReviewApplication>());

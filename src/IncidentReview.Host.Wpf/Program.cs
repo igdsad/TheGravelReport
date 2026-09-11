@@ -5,6 +5,7 @@ using IncidentReview.Application.Contracts;
 using IncidentReview.Application.DependencyInjection;
 using IncidentReview.Desktop.Wpf;
 using IncidentReview.Desktop.Wpf.DependencyInjection;
+using IncidentReview.EventSync.Http.DependencyInjection;
 using IncidentReview.Iracing.DependencyInjection;
 using IncidentReview.Results;
 using IncidentReview.Store.Sqlite.DependencyInjection;
@@ -176,6 +177,7 @@ internal static class Program
                 .Value
                 .CreateStoreOptions());
         _ = builder.Services.AddSingleton<BootstrapCoordinator>();
+        _ = builder.Services.AddHttpEventSync();
         _ = builder.Services.AddIncidentReviewApplication();
         _ = builder.Services.AddSqliteStore();
         _ = builder.Services.AddIracingIntegration();

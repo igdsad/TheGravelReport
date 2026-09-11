@@ -38,6 +38,9 @@ public static class IracingServiceCollectionExtensions
         services.TryAddSingleton<IReplayContextReader>(static provider =>
             new IracingReplayContextReader(
                 provider.GetRequiredService<IracingConnectionState>()));
+        services.TryAddSingleton<ICurrentTelemetryReader>(static provider =>
+            new IracingCurrentTelemetryReader(
+                provider.GetRequiredService<IracingConnectionState>()));
         return services;
     }
 }

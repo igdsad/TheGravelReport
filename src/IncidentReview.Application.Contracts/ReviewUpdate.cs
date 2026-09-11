@@ -57,6 +57,31 @@ public abstract class ReviewUpdate
         public IncidentId Incident { get; }
     }
 
+    public sealed class CustomEventChanged : ReviewUpdate
+    {
+        public CustomEventChanged(SessionIdentity session, CustomEventId customEvent)
+        {
+            ArgumentNullException.ThrowIfNull(session);
+            ArgumentNullException.ThrowIfNull(customEvent);
+            Session = session;
+            CustomEvent = customEvent;
+        }
+
+        public SessionIdentity Session { get; }
+        public CustomEventId CustomEvent { get; }
+    }
+
+    public sealed class SynchronizationWarning : ReviewUpdate
+    {
+        public SynchronizationWarning(Error error)
+        {
+            ArgumentNullException.ThrowIfNull(error);
+            Error = error;
+        }
+
+        public Error Error { get; }
+    }
+
     /// <summary>Indicates that durable user preferences changed.</summary>
     public sealed class PreferencesChanged : ReviewUpdate
     {

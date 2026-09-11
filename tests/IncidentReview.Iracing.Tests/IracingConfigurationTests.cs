@@ -25,6 +25,9 @@ public sealed class IracingConfigurationTests
         var telemetry = services
             .Where(static item => item.ServiceType == typeof(ITelemetrySource))
             .ToArray();
+        var currentTelemetry = services
+            .Where(static item => item.ServiceType == typeof(ICurrentTelemetryReader))
+            .ToArray();
         var replay = services
             .Where(static item => item.ServiceType == typeof(IReplayController))
             .ToArray();
@@ -32,9 +35,11 @@ public sealed class IracingConfigurationTests
             .Where(static item => item.ServiceType == typeof(IReplayContextReader))
             .ToArray();
         Assert.HasCount(1, telemetry);
+        Assert.HasCount(1, currentTelemetry);
         Assert.HasCount(1, replay);
         Assert.HasCount(1, replayContext);
         Assert.AreEqual(ServiceLifetime.Singleton, telemetry[0].Lifetime);
+        Assert.AreEqual(ServiceLifetime.Singleton, currentTelemetry[0].Lifetime);
         Assert.AreEqual(ServiceLifetime.Singleton, replay[0].Lifetime);
         Assert.AreEqual(ServiceLifetime.Singleton, replayContext[0].Lifetime);
     }

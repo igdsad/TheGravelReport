@@ -1,0 +1,19 @@
+<Project Sdk="MSTest.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.EventSync.Sqlite.Tests</AssemblyName>
+    <RootNamespace>IncidentReview.EventSync.Sqlite.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
+    <ProjectReference Include="../../src/IncidentReview.EventSync.Sqlite/IncidentReview.EventSync.Sqlite.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.EventSync.Contracts/IncidentReview.EventSync.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

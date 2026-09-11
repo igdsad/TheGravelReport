@@ -21,6 +21,8 @@ public sealed class DesktopRegistrationTests
             static item => item.ServiceType == typeof(IDesktopThemeSource)));
         Assert.HasCount(1, services.Where(
             static item => item.ServiceType == typeof(IThemeController)));
+        Assert.HasCount(1, services.Where(
+            static item => item.ServiceType == typeof(IGlobalShortcut)));
         Assert.HasCount(1, services.Where(static item => item.ServiceType == typeof(MainWindowViewModel)));
         Assert.HasCount(1, services.Where(static item => item.ServiceType == typeof(MainWindow)));
         Assert.HasCount(1, services.Where(

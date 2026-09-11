@@ -17,6 +17,15 @@ public sealed record UserPreferences
     /// <summary>Gets the maximum normalized camera-name length in UTF-16 code units.</summary>
     public const int MaximumPreferredCameraLength = 128;
 
+    /// <summary>Gets the maximum submitter-name length.</summary>
+    public const int MaximumSubmitterNameLength = 128;
+
+    /// <summary>Gets the maximum normalized key-gesture length.</summary>
+    public const int MaximumCustomEventKeyLength = 64;
+
+    /// <summary>Gets the maximum encoded join-code length.</summary>
+    public const int MaximumEventJoinCodeLength = 4096;
+
     private static readonly Error InvalidLeadInError = DomainValidationError.Create(
         "domain.user-preferences.invalid-replay-lead-in",
         "Replay lead-in must be a whole number of milliseconds from zero through sixty seconds.");
@@ -33,18 +42,36 @@ public sealed record UserPreferences
         "domain.user-preferences.invalid-theme",
         "The selected theme is not supported.");
 
+    private static readonly Error InvalidSubmitterNameError = DomainValidationError.Create(
+        "domain.user-preferences.invalid-submitter-name",
+        "The custom-event submitter name contains invalid text or is too long.");
+
+    private static readonly Error InvalidCustomEventKeyError = DomainValidationError.Create(
+        "domain.user-preferences.invalid-custom-event-key",
+        "The custom-event key binding is required and contains invalid text or is too long.");
+
+    private static readonly Error InvalidEventJoinCodeError = DomainValidationError.Create(
+        "domain.user-preferences.invalid-event-join-code",
+        "The event-session join code contains invalid text or is too long.");
+
     private UserPreferences(
         long replayLeadInMilliseconds,
         double playbackSpeed,
         bool autoPause,
         string? preferredCamera,
-        ThemePreference theme)
+        ThemePreference theme,
+        string? submitterName,
+        string customEventKey,
+        string? eventJoinCode)
     {
         ReplayLeadInMilliseconds = replayLeadInMilliseconds;
         PlaybackSpeed = playbackSpeed;
         AutoPause = autoPause;
         PreferredCamera = preferredCamera;
         Theme = theme;
+        SubmitterName = submitterName;
+        CustomEventKey = customEventKey;
+        EventJoinCode = eventJoinCode;
     }
 
     /// <summary>Gets the configured lead-in as lossless integer milliseconds.</summary>
@@ -65,13 +92,25 @@ public sealed record UserPreferences
     /// <summary>Gets how the application chooses its visual theme.</summary>
     public ThemePreference Theme { get; }
 
+    /// <summary>Gets the name attached to custom-event submissions.</summary>
+    public string? SubmitterName { get; }
+
+    /// <summary>Gets the portable WPF key-gesture text used to create a custom event.</summary>
+    public string CustomEventKey { get; }
+
+    /// <summary>Gets the optional versioned event-session join code.</summary>
+    public string? EventJoinCode { get; }
+
     /// <summary>Validates preferences supplied as a duration.</summary>
     public static Result<UserPreferences> TryCreate(
         TimeSpan replayLeadIn,
         double playbackSpeed,
         bool autoPause,
         string? preferredCamera,
-        ThemePreference theme = ThemePreference.FollowDesktop)
+        ThemePreference theme = ThemePreference.FollowDesktop,
+        string? submitterName = null,
+        string customEventKey = "F9",
+        string? eventJoinCode = null)
     {
         if (replayLeadIn.Ticks < 0 ||
             replayLeadIn.Ticks % TimeSpan.TicksPerMillisecond != 0)
@@ -84,7 +123,10 @@ public sealed record UserPreferences
             playbackSpeed,
             autoPause,
             preferredCamera,
-            theme);
+            theme,
+            submitterName,
+            customEventKey,
+            eventJoinCode);
     }
 
     /// <summary>Validates preferences supplied in persistence units.</summary>
@@ -93,7 +135,10 @@ public sealed record UserPreferences
         double playbackSpeed,
         bool autoPause,
         string? preferredCamera,
-        ThemePreference theme = ThemePreference.FollowDesktop)
+        ThemePreference theme = ThemePreference.FollowDesktop,
+        string? submitterName = null,
+        string customEventKey = "F9",
+        string? eventJoinCode = null)
     {
         if (replayLeadInMilliseconds is < 0 or > MaximumReplayLeadInMilliseconds)
         {
@@ -121,12 +166,42 @@ public sealed record UserPreferences
             return Result<UserPreferences>.Failure(InvalidThemeError);
         }
 
+        if (!DomainText.TryNormalizeOptional(
+                submitterName,
+                MaximumSubmitterNameLength,
+                allowMultiline: false,
+                out var normalizedSubmitterName))
+        {
+            return Result<UserPreferences>.Failure(InvalidSubmitterNameError);
+        }
+
+        if (!DomainText.TryNormalizeRequired(
+                customEventKey,
+                MaximumCustomEventKeyLength,
+                allowMultiline: false,
+                out var normalizedCustomEventKey))
+        {
+            return Result<UserPreferences>.Failure(InvalidCustomEventKeyError);
+        }
+
+        if (!DomainText.TryNormalizeOptional(
+                eventJoinCode,
+                MaximumEventJoinCodeLength,
+                allowMultiline: false,
+                out var normalizedEventJoinCode))
+        {
+            return Result<UserPreferences>.Failure(InvalidEventJoinCodeError);
+        }
+
         return Result<UserPreferences>.Success(
             new UserPreferences(
                 replayLeadInMilliseconds,
                 playbackSpeed,
                 autoPause,
                 normalizedCamera,
-                theme));
+                theme,
+                normalizedSubmitterName,
+                normalizedCustomEventKey,
+                normalizedEventJoinCode));
     }
 }

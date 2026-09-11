@@ -29,8 +29,19 @@ internal static class TestModelFactory
         double speed = 0.5,
         bool autoPause = true,
         string? camera = "Cockpit",
-        ThemePreference theme = ThemePreference.FollowDesktop) =>
-        UserPreferences.TryCreateMilliseconds(leadIn, speed, autoPause, camera, theme).Value;
+        ThemePreference theme = ThemePreference.FollowDesktop,
+        string? submitterName = null,
+        string customEventKey = "F9",
+        string? eventJoinCode = null) =>
+        UserPreferences.TryCreateMilliseconds(
+            leadIn,
+            speed,
+            autoPause,
+            camera,
+            theme,
+            submitterName,
+            customEventKey,
+            eventJoinCode).Value;
 
     public static ReviewSession Session(
         SessionIdentity? id = null,
@@ -42,6 +53,36 @@ internal static class TestModelFactory
             Descriptor(),
             UtcInstant.TryCreateUnixMilliseconds(1_000).Value,
             incidents);
+    }
+
+    public static ReviewSession SessionWithCustomEvents(
+        SessionIdentity id,
+        IEnumerable<ReviewCustomEvent> customEvents,
+        params ReviewIncident[] incidents) => ReviewSession.Create(
+            id,
+            Descriptor(),
+            UtcInstant.TryCreateUnixMilliseconds(1_000).Value,
+            incidents,
+            customEvents);
+
+    public static ReviewCustomEvent CustomEvent(
+        SessionIdentity session,
+        long occurredAt,
+        long replayTime,
+        string submitter,
+        bool isSynchronized = false,
+        int sessionNumber = 1)
+    {
+        var position = ReplayPosition.TryCreate(
+            SessionNumber.TryCreate(sessionNumber).Value,
+            SessionTime.TryCreateMilliseconds(replayTime).Value).Value;
+        return ReviewCustomEvent.Create(
+            CustomEventId.CreateDeterministic(session, position),
+            session,
+            position,
+            SubmitterName.TryCreate(submitter).Value,
+            UtcInstant.TryCreateUnixMilliseconds(occurredAt).Value,
+            isSynchronized);
     }
 
     public static SessionSummary Summary(ReviewSession session) => SessionSummary.Create(

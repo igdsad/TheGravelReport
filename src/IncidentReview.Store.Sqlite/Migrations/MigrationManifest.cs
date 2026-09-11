@@ -23,6 +23,14 @@ internal static class MigrationManifest
             "003_AddIncidentParticipants.sql",
             ResourcePrefix + "003_AddIncidentParticipants.sql",
             "12d4c31e5298ba91be20cf2c5251f802e072221d5a034c2aed616c03069b2181"),
+        new(
+            "004_DeterministicIdentitiesAndEventSettings.sql",
+            ResourcePrefix + "004_DeterministicIdentitiesAndEventSettings.sql",
+            "3832525cb0a5e855c0f8830c112055b9fef2c2e8caa8e60963a8f72ba2070872"),
+        new(
+            "005_AddCustomEventOutbox.sql",
+            ResourcePrefix + "005_AddCustomEventOutbox.sql",
+            "9ef7078a5181501e83ca9cf0ce730802d8a517655c6bfd518702850f3a2b85fa"),
     ];
 
     public static IReadOnlyList<SqlScript> LoadProductionScripts()

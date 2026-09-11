@@ -15,6 +15,53 @@ public sealed class TelemetryIntegrationTests
 
     [TestMethod]
     [TestProperty("Requirement", "IR-CON-001")]
+    [TestProperty("Requirement", "IR-EVT-001")]
+    [TestProperty("Requirement", "QR-TST-001")]
+    public async Task CurrentTelemetryTracksAcceptedPositionOnlyFramesAndClearsOnDisconnect()
+    {
+        using var simulator = await SimulatorProcess.StartAsync();
+        using var copiedFrames = new SemaphoreSlim(initialCount: 0);
+        var integration = IracingTestingRegistration.CreateIntegrationContext(
+            simulator.MemoryMapName,
+            simulator.EventName,
+            FastOptions(),
+            confirmationTimeout: null,
+            new FixedTimeProvider(ObservedAt),
+            () => copiedFrames.Release());
+        var source = integration.Telemetry;
+        using var cancellationSource = new CancellationTokenSource(EventTimeout);
+        await using var observer = source.ObserveAsync(cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        Assert.IsFalse(integration.CurrentTelemetry.Read().IsSuccess);
+        Assert.IsInstanceOfType<TelemetryConnected>(await NextAsync(observer));
+        var initial = Assert.IsInstanceOfType<TelemetrySampleObserved>(
+            await NextAsync(observer)).Sample;
+        Assert.AreEqual(12_345, initial.Position.SessionTime.Milliseconds);
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+
+        await simulator.SendAsync("publish 4 19.875");
+        Assert.IsTrue(await copiedFrames.WaitAsync(EventTimeout));
+
+        var current = integration.CurrentTelemetry.Read();
+        Assert.IsTrue(current.IsSuccess);
+        Assert.AreEqual(19_875, current.Value.Position.SessionTime.Milliseconds);
+        CollectionAssert.AreEqual(
+            initial.IncidentCounters.ToArray(),
+            current.Value.IncidentCounters.ToArray(),
+            "An unchanged transition projection makes this an intentionally coalesced frame.");
+
+        await simulator.SendAsync("disconnect");
+        Assert.IsInstanceOfType<TelemetryDisconnected>(await NextAsync(observer));
+        var unavailable = integration.CurrentTelemetry.Read();
+        Assert.IsFalse(unavailable.IsSuccess);
+        Assert.AreEqual(IracingErrorCodes.TelemetryUnavailable, unavailable.Error?.Code);
+
+        await ((IAsyncDisposable)source).DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-CON-001")]
     [TestProperty("Requirement", "IR-SES-001")]
     [TestProperty("Requirement", "IR-SES-002")]
     [TestProperty("Requirement", "IR-INC-006")]

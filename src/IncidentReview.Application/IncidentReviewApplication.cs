@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using IncidentReview.Application.Contracts;
 using IncidentReview.Domain;
+using IncidentReview.EventSync.Contracts;
 using IncidentReview.Replay.Contracts;
 using IncidentReview.Results;
 using IncidentReview.Store.Contracts;
@@ -9,7 +10,11 @@ using IncidentReview.Telemetry.Contracts;
 
 namespace IncidentReview.Application;
 
-internal sealed class IncidentReviewApplication : IIncidentReviewService, IApplicationRuntime
+internal sealed class IncidentReviewApplication :
+    IIncidentReviewService,
+    IApplicationRuntime,
+    ICustomEventReceiver,
+    IDisposable
 {
     private static readonly TimeSpan InitialPersistenceRetryDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaximumPersistenceRetryDelay = TimeSpan.FromSeconds(2);
@@ -20,6 +25,9 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private readonly IReplayController _replayController;
     private readonly IReplayContextReader _replayContextReader;
     private readonly IStore _store;
+    private readonly ICustomEventPublisher _customEventPublisher;
+    private readonly ICustomEventSessionHost _customEventSessionHost;
+    private readonly ICurrentTelemetryReader? _currentTelemetryReader;
     private readonly TimeProvider _timeProvider;
     private readonly object _stateLock = new();
     private readonly Channel<ReviewUpdate> _updates = Channel.CreateUnbounded<ReviewUpdate>(
@@ -29,10 +37,19 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             SingleWriter = false,
             AllowSynchronousContinuations = false,
         });
+    private readonly Channel<byte> _outboxFlushRequests = Channel.CreateBounded<byte>(
+        new BoundedChannelOptions(1)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
     private readonly TaskCompletionSource _completion = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private Action? _cancelWorker;
     private Task? _worker;
+    private Task _customEventHostObservation = Task.CompletedTask;
     private Exception? _terminalException;
     private bool _stopRequested;
     private bool _reviewCommandInProgress;
@@ -46,19 +63,30 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     private SimulatorSessionDescriptor? _replayDescriptor;
     private readonly Dictionary<ParticipantIdentity, IncidentCheckpoint> _checkpoints = [];
     private PendingStoreTransition? _pendingTransition;
+    private TelemetrySample? _latestLiveSample;
+    private readonly SemaphoreSlim _receivedEventGate = new(1, 1);
+    private CancellationTokenSource? _activeOutboxFlushCancellation;
+    private bool _outboxFlushSafetyConfirmed;
+    private bool _outboxFlushAttemptedForOffTrackPeriod;
 
     public IncidentReviewApplication(
         ITelemetrySource telemetrySource,
         IReplayController replayController,
         IReplayContextReader replayContextReader,
         IStore store,
-        TimeProvider timeProvider)
+        ICustomEventPublisher customEventPublisher,
+        ICustomEventSessionHost customEventSessionHost,
+        TimeProvider timeProvider,
+        ICurrentTelemetryReader? currentTelemetryReader = null)
     {
         _telemetrySource = telemetrySource;
         _replayController = replayController;
         _replayContextReader = replayContextReader;
         _store = store;
+        _customEventPublisher = customEventPublisher;
+        _customEventSessionHost = customEventSessionHost;
         _timeProvider = timeProvider;
+        _currentTelemetryReader = currentTelemetryReader;
     }
 
     public Task Completion => _completion.Task;
@@ -114,6 +142,15 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         {
             await worker.ConfigureAwait(false);
         }
+
+        _ = await _customEventSessionHost.StopAsync(cancellationToken).ConfigureAwait(false);
+        Task hostObservation;
+        lock (_stateLock)
+        {
+            hostObservation = _customEventHostObservation;
+        }
+
+        await hostObservation.ConfigureAwait(false);
 
         if (_terminalException is not null)
         {
@@ -284,8 +321,6 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var reviewArmed = false;
-        var seekAccepted = false;
         lock (_stateLock)
         {
             var preconditionError = GetReplayPreconditionError();
@@ -316,6 +351,90 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 return Result.Failure(ApplicationErrors.IncidentNotFound);
             }
 
+            var stored = incident.Value.Value!;
+            return await ExecuteReplayReviewAsync(
+                stored.Session,
+                stored.Position,
+                stored.Participant,
+                offset,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_stateLock)
+            {
+                _reviewCommandInProgress = false;
+            }
+        }
+    }
+
+    public async Task<Result> ReviewCustomEventAsync(
+        CustomEventId customEventId,
+        ReplayOffset offset,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(customEventId);
+        ArgumentNullException.ThrowIfNull(offset);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_stateLock)
+        {
+            var preconditionError = GetReplayPreconditionError();
+            if (preconditionError is not null)
+            {
+                return Result.Failure(preconditionError);
+            }
+
+            if (_reviewCommandInProgress)
+            {
+                return Result.Failure(ApplicationErrors.ReplayCommandInProgress);
+            }
+
+            _reviewCommandInProgress = true;
+        }
+
+        try
+        {
+            var customEvent = await _store.QueryAsync(
+                new GetCustomEvent(customEventId),
+                cancellationToken).ConfigureAwait(false);
+            if (!customEvent.IsSuccess)
+            {
+                return Result.Failure(customEvent.Error!);
+            }
+
+            if (!customEvent.Value.IsFound)
+            {
+                return Result.Failure(ApplicationErrors.CustomEventNotFound);
+            }
+
+            var stored = customEvent.Value.Value!;
+            return await ExecuteReplayReviewAsync(
+                stored.Session,
+                stored.Position,
+                null,
+                offset,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_stateLock)
+            {
+                _reviewCommandInProgress = false;
+            }
+        }
+    }
+
+    private async Task<Result> ExecuteReplayReviewAsync(
+        SessionIdentity session,
+        ReplayPosition position,
+        IncidentParticipant? participant,
+        ReplayOffset? offset,
+        CancellationToken cancellationToken)
+    {
+        var reviewArmed = false;
+        var seekAccepted = false;
+        try
+        {
             var preferences = await _store.QueryAsync(GetPreferences.Instance, cancellationToken)
                 .ConfigureAwait(false);
             if (!preferences.IsSuccess)
@@ -323,18 +442,15 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 return Result.Failure(preferences.Error!);
             }
 
-            var stored = incident.Value.Value!;
             var effectiveOffset = offset ?? ReplayOffset.TryCreateMilliseconds(
                 -preferences.Value.ReplayLeadInMilliseconds).Value;
-            var targetTime = effectiveOffset.ApplyTo(stored.Position.SessionTime);
+            var targetTime = effectiveOffset.ApplyTo(position.SessionTime);
             if (!targetTime.IsSuccess)
             {
                 return Result.Failure(targetTime.Error!);
             }
 
-            var target = ReplayPosition.TryCreate(
-                stored.Position.SessionNumber,
-                targetTime.Value).Value;
+            var target = ReplayPosition.TryCreate(position.SessionNumber, targetTime.Value).Value;
             var playback = preferences.Value.AutoPause
                 ? ReplayPlayback.Paused
                 : ReplayPlayback.TryCreatePlaying(preferences.Value.PlaybackSpeed).Value;
@@ -347,8 +463,8 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             lock (_stateLock)
             {
                 var preconditionError = GetReplayPreconditionError(
-                    stored.Session,
-                    stored.Position.SessionNumber);
+                    session,
+                    position.SessionNumber);
                 if (preconditionError is not null)
                 {
                     return Result.Failure(preconditionError);
@@ -366,14 +482,17 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             }
 
             seekAccepted = true;
-            var focus = await _replayController.FocusParticipantAsync(
-                    stored.Participant,
-                    preferences.Value.PreferredCamera,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (!focus.IsSuccess)
+            if (participant is not null)
             {
-                return focus;
+                var focus = await _replayController.FocusParticipantAsync(
+                        participant,
+                        preferences.Value.PreferredCamera,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (!focus.IsSuccess)
+                {
+                    return focus;
+                }
             }
 
             return await _replayController.SetPlaybackAsync(playback, cancellationToken)
@@ -381,10 +500,9 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         }
         finally
         {
-            lock (_stateLock)
+            if (reviewArmed && !seekAccepted)
             {
-                _reviewCommandInProgress = false;
-                if (reviewArmed && !seekAccepted)
+                lock (_stateLock)
                 {
                     _ownedReviewActive = false;
                 }
@@ -462,6 +580,233 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         return result;
     }
 
+    public async Task<Result> CreateCustomEventAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StoredSession? session;
+        TelemetrySample? sample;
+        lock (_stateLock)
+        {
+            session = _activeSession;
+            sample = _latestLiveSample;
+        }
+
+        if (_currentTelemetryReader is not null)
+        {
+            var current = _currentTelemetryReader.Read();
+            if (!current.IsSuccess)
+            {
+                return Result.Failure(ApplicationErrors.CustomEventUnavailable);
+            }
+
+            sample = current.Value;
+        }
+
+        if (session is null || sample is null || sample.Session.Mode != SessionMode.Live ||
+            sample.Session != session.Descriptor)
+        {
+            return Result.Failure(ApplicationErrors.CustomEventUnavailable);
+        }
+
+        var preferences = await _store.QueryAsync(GetPreferences.Instance, cancellationToken)
+            .ConfigureAwait(false);
+        if (!preferences.IsSuccess)
+        {
+            return Result.Failure(preferences.Error!);
+        }
+
+        var submitter = SubmitterName.TryCreate(preferences.Value.SubmitterName);
+        if (!submitter.IsSuccess)
+        {
+            return Result.Failure(ApplicationErrors.CustomEventNameRequired);
+        }
+
+        var customEvent = StoredCustomEvent.CreatePending(
+            session.Id,
+            sample.Position,
+            submitter.Value,
+            Now());
+        var command = RecordCustomEvent.TryCreate(customEvent);
+        if (!command.IsSuccess)
+        {
+            return Result.Failure(command.Error!);
+        }
+
+        var result = await ExecuteWithReconciliationAsync(command.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (result.IsSuccess)
+        {
+            Publish(new ReviewUpdate.CustomEventChanged(session.Id, customEvent.Id));
+            if (sample.OnTrackState == OnTrackState.NotOnTrack)
+            {
+                RequestOutboxFlush();
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<Result<string>> StartCustomEventSessionAsync(
+        Uri listenUri,
+        Uri advertisedBaseUri,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(listenUri);
+        ArgumentNullException.ThrowIfNull(advertisedBaseUri);
+        SessionIdentity? session;
+        lock (_stateLock)
+        {
+            session = _currentSession;
+        }
+
+        if (session is null)
+        {
+            return Result<string>.Failure(ApplicationErrors.NoCurrentSession);
+        }
+
+        var request = CustomEventSessionHostRequest.TryCreate(
+            session,
+            listenUri,
+            advertisedBaseUri);
+        if (!request.IsSuccess)
+        {
+            return Result<string>.Failure(request.Error!);
+        }
+
+        var started = await _customEventSessionHost.StartAsync(
+            request.Value,
+            this,
+            cancellationToken).ConfigureAwait(false);
+        if (!started.IsSuccess)
+        {
+            return Result<string>.Failure(started.Error!);
+        }
+
+        var hostObservation = ObserveCustomEventHostAsync(
+            _customEventSessionHost.Completion);
+        lock (_stateLock)
+        {
+            _customEventHostObservation = hostObservation;
+        }
+
+        return Result<string>.Success(started.Value.Value);
+    }
+
+    public Task<Result<string>> CreateCustomEventJoinCodeAsync(
+        Uri serverBaseUri,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(serverBaseUri);
+        cancellationToken.ThrowIfCancellationRequested();
+        SessionIdentity? session;
+        lock (_stateLock)
+        {
+            session = _currentSession;
+        }
+
+        if (session is null)
+        {
+            return Task.FromResult(Result<string>.Failure(ApplicationErrors.NoCurrentSession));
+        }
+
+        var joinCode = JoinCode.TryCreate(serverBaseUri, session);
+        return Task.FromResult(joinCode.IsSuccess
+            ? Result<string>.Success(joinCode.Value.Value)
+            : Result<string>.Failure(joinCode.Error!));
+    }
+
+    public async Task<Result> StopCustomEventSessionAsync(CancellationToken cancellationToken)
+    {
+        var stopped = await _customEventSessionHost.StopAsync(cancellationToken)
+            .ConfigureAwait(false);
+        Task observation;
+        lock (_stateLock)
+        {
+            observation = _customEventHostObservation;
+        }
+
+        await observation.ConfigureAwait(false);
+        return stopped;
+    }
+
+    public async Task<Result<CustomEventPublishOutcome>> ReceiveAsync(
+        CustomEventSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        await _receivedEventGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var session = await _store.QueryAsync(
+                new GetSession(submission.SessionIdentity),
+                cancellationToken).ConfigureAwait(false);
+            if (!session.IsSuccess)
+            {
+                return Result<CustomEventPublishOutcome>.Failure(session.Error!);
+            }
+
+            if (!session.Value.IsFound)
+            {
+                return Result<CustomEventPublishOutcome>.Failure(ApplicationErrors.SessionNotFound);
+            }
+
+            var existing = await _store.QueryAsync(
+                new GetCustomEvent(submission.Id),
+                cancellationToken).ConfigureAwait(false);
+            if (!existing.IsSuccess)
+            {
+                return Result<CustomEventPublishOutcome>.Failure(existing.Error!);
+            }
+
+            if (existing.Value.IsFound)
+            {
+                Publish(new ReviewUpdate.SynchronizationWarning(
+                    ApplicationErrors.CustomEventDuplicate));
+                return Result<CustomEventPublishOutcome>.Success(
+                    CustomEventPublishOutcome.Duplicate);
+            }
+
+            var receivedAt = Now();
+            var synchronizedAt = receivedAt.UnixMilliseconds >= submission.OccurredAt.UnixMilliseconds
+                ? receivedAt
+                : submission.OccurredAt;
+            var stored = StoredCustomEvent.Create(
+                submission.Id,
+                submission.SessionIdentity,
+                submission.ReplayPosition,
+                submission.Submitter,
+                submission.OccurredAt,
+                CustomEventSynchronization.Synchronized.Create(synchronizedAt));
+            var record = RecordReceivedCustomEvent.TryCreate(stored);
+            if (!record.IsSuccess)
+            {
+                return Result<CustomEventPublishOutcome>.Failure(record.Error!);
+            }
+
+            var recorded = await ExecuteWithReconciliationAsync(record.Value, cancellationToken)
+                .ConfigureAwait(false);
+            if (!recorded.IsSuccess)
+            {
+                if (recorded.Error!.Code == StoreErrorCodes.CustomEventIdentityConflict)
+                {
+                    Publish(new ReviewUpdate.SynchronizationWarning(
+                        ApplicationErrors.CustomEventDuplicate));
+                    return Result<CustomEventPublishOutcome>.Success(
+                        CustomEventPublishOutcome.Duplicate);
+                }
+
+                return Result<CustomEventPublishOutcome>.Failure(recorded.Error!);
+            }
+
+            Publish(new ReviewUpdate.CustomEventChanged(stored.Session, stored.Id));
+            return Result<CustomEventPublishOutcome>.Success(CustomEventPublishOutcome.Accepted);
+        }
+        finally
+        {
+            _receivedEventGate.Release();
+        }
+    }
+
     public Task<Result<UserPreferences>> GetPreferencesAsync(CancellationToken cancellationToken) =>
         _store.QueryAsync(GetPreferences.Instance, cancellationToken);
 
@@ -471,6 +816,12 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     {
         ArgumentNullException.ThrowIfNull(preferences);
         cancellationToken.ThrowIfCancellationRequested();
+        if (preferences.EventJoinCode is not null &&
+            !JoinCode.TryParse(preferences.EventJoinCode).IsSuccess)
+        {
+            return Result.Failure(ApplicationErrors.InvalidEventJoinCode);
+        }
+
         if (!preferences.AutoPause)
         {
             var playback = ReplayPlayback.TryCreatePlaying(preferences.PlaybackSpeed).Value;
@@ -487,9 +838,92 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         if (result.IsSuccess)
         {
             Publish(new ReviewUpdate.PreferencesChanged());
+            lock (_stateLock)
+            {
+                if (_status == ReviewServiceStatus.Connected &&
+                    _outboxFlushSafetyConfirmed)
+                {
+                    RequestOutboxFlush();
+                }
+            }
         }
 
         return result;
+    }
+
+    private async Task FlushPendingCustomEventsAsync(CancellationToken cancellationToken)
+    {
+        var preferences = await _store.QueryAsync(GetPreferences.Instance, cancellationToken)
+            .ConfigureAwait(false);
+        if (!preferences.IsSuccess || preferences.Value.EventJoinCode is null)
+        {
+            return;
+        }
+
+        var joinCode = JoinCode.TryParse(preferences.Value.EventJoinCode);
+        if (!joinCode.IsSuccess)
+        {
+            Publish(new ReviewUpdate.SynchronizationWarning(
+                ApplicationErrors.InvalidEventJoinCode));
+            return;
+        }
+
+        var pending = await _store.QueryAsync(
+            new GetPendingCustomEvents(joinCode.Value.SessionIdentity),
+            cancellationToken).ConfigureAwait(false);
+        if (!pending.IsSuccess)
+        {
+            Publish(new ReviewUpdate.SynchronizationWarning(pending.Error!));
+            return;
+        }
+
+        foreach (var customEvent in pending.Value)
+        {
+            var submission = CustomEventSubmission.TryCreate(
+                customEvent.Id,
+                customEvent.Session,
+                customEvent.Position,
+                customEvent.Submitter,
+                customEvent.OccurredAt);
+            if (!submission.IsSuccess)
+            {
+                Publish(new ReviewUpdate.SynchronizationWarning(submission.Error!));
+                continue;
+            }
+
+            var published = await _customEventPublisher.PublishAsync(
+                joinCode.Value,
+                submission.Value,
+                cancellationToken).ConfigureAwait(false);
+            if (!published.IsSuccess)
+            {
+                Publish(new ReviewUpdate.SynchronizationWarning(published.Error!));
+                break;
+            }
+
+            var confirmedAt = Now();
+            if (confirmedAt.UnixMilliseconds < customEvent.OccurredAt.UnixMilliseconds)
+            {
+                confirmedAt = customEvent.OccurredAt;
+            }
+
+            var marked = await ExecuteWithReconciliationAsync(
+                MarkCustomEventSynchronized.Create(customEvent.Id, confirmedAt),
+                cancellationToken).ConfigureAwait(false);
+            if (!marked.IsSuccess)
+            {
+                Publish(new ReviewUpdate.SynchronizationWarning(marked.Error!));
+                break;
+            }
+
+            if (published.Value == CustomEventPublishOutcome.Duplicate)
+            {
+                Publish(new ReviewUpdate.SynchronizationWarning(
+                    ApplicationErrors.CustomEventDuplicate));
+            }
+
+            Publish(new ReviewUpdate.CustomEventChanged(customEvent.Session, customEvent.Id));
+        }
     }
 
     public IAsyncEnumerable<ReviewUpdate> ObserveUpdatesAsync(CancellationToken cancellationToken) =>
@@ -523,11 +957,14 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         }
         catch (Exception exception)
         {
+            Action? cancelWorker;
             lock (_stateLock)
             {
                 _terminalException = exception;
+                cancelWorker = _cancelWorker;
             }
 
+            cancelWorker?.Invoke();
             _updates.Writer.TryComplete(exception);
             _completion.TrySetException(exception);
         }
@@ -535,9 +972,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
 
     private async Task RunWithLifetimeAsync(CancellationTokenSource lifetime)
     {
+        var outboxWorker = RunOutboxWorkerAsync(lifetime.Token);
         try
         {
             await RunAsync(lifetime.Token).ConfigureAwait(false);
+            await outboxWorker.ConfigureAwait(false);
         }
         finally
         {
@@ -556,26 +995,45 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         switch (telemetryEvent)
         {
             case TelemetryConnected:
+                lock (_stateLock)
+                {
+                    _activeOutboxFlushCancellation?.Cancel();
+                    _outboxFlushSafetyConfirmed = false;
+                    _outboxFlushAttemptedForOffTrackPeriod = false;
+                }
+
                 SetStatus(ReviewServiceStatus.Connected);
                 break;
             case TelemetryDisconnected:
                 lock (_stateLock)
                 {
+                    _activeOutboxFlushCancellation?.Cancel();
                     _activeSession = null;
                     _checkpoints.Clear();
                     _currentSession = null;
                     _onTrackState = OnTrackState.Unknown;
                     _replayDescriptor = null;
                     _ownedReviewActive = false;
+                    _latestLiveSample = null;
+                    _outboxFlushSafetyConfirmed = false;
+                    _outboxFlushAttemptedForOffTrackPeriod = false;
                 }
 
                 SetStatus(ReviewServiceStatus.WaitingForSimulator);
                 break;
             case TelemetryUnavailable unavailable:
+                lock (_stateLock)
+                {
+                    _activeOutboxFlushCancellation?.Cancel();
+                    _outboxFlushSafetyConfirmed = false;
+                    _outboxFlushAttemptedForOffTrackPeriod = false;
+                }
+
                 SetUnavailable(unavailable.Error);
                 break;
             case TelemetrySampleObserved observed:
                 SessionIdentity? invalidatedSession = null;
+                var shouldFlushOutbox = false;
                 lock (_stateLock)
                 {
                     if (!SampleMatchesCurrentSession(observed.Sample.Session))
@@ -586,9 +1044,26 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                     }
 
                     _onTrackState = observed.Sample.OnTrackState;
+                    _outboxFlushSafetyConfirmed =
+                        _onTrackState == OnTrackState.NotOnTrack;
+                    if (_onTrackState != OnTrackState.NotOnTrack)
+                    {
+                        _activeOutboxFlushCancellation?.Cancel();
+                        _outboxFlushAttemptedForOffTrackPeriod = false;
+                    }
+                    else if (!_outboxFlushAttemptedForOffTrackPeriod)
+                    {
+                        shouldFlushOutbox = true;
+                    }
+
                     if (_onTrackState == OnTrackState.OnTrack)
                     {
                         _ownedReviewActive = false;
+                    }
+
+                    if (observed.Sample.Session.Mode == SessionMode.Live)
+                    {
+                        _latestLiveSample = observed.Sample;
                     }
                 }
 
@@ -600,10 +1075,110 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
                 if (await ProcessSampleAsync(observed.Sample, cancellationToken).ConfigureAwait(false))
                 {
                     SetStatus(ReviewServiceStatus.Connected);
+                    if (shouldFlushOutbox)
+                    {
+                        var requestFlush = false;
+                        lock (_stateLock)
+                        {
+                            if (_outboxFlushSafetyConfirmed &&
+                                !_outboxFlushAttemptedForOffTrackPeriod)
+                            {
+                                _outboxFlushAttemptedForOffTrackPeriod = true;
+                                requestFlush = true;
+                            }
+                        }
+
+                        if (requestFlush)
+                        {
+                            RequestOutboxFlush();
+                        }
+                    }
                 }
                 break;
             default:
                 throw new InvalidOperationException("The telemetry event type is unsupported.");
+        }
+    }
+
+    public void Dispose() => _receivedEventGate.Dispose();
+
+    private void RequestOutboxFlush() => _outboxFlushRequests.Writer.TryWrite(0);
+
+    private async Task ObserveCustomEventHostAsync(Task completion)
+    {
+        try
+        {
+            await completion.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            Publish(new ReviewUpdate.SynchronizationWarning(
+                ApplicationErrors.EventSyncUnavailable));
+        }
+    }
+
+    private async Task RunOutboxWorkerAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var _ in _outboxFlushRequests.Reader
+                .ReadAllAsync(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                CancellationTokenSource? flushCancellation = null;
+                lock (_stateLock)
+                {
+                    if (_status == ReviewServiceStatus.Connected &&
+                        _outboxFlushSafetyConfirmed)
+                    {
+                        flushCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken);
+                        _activeOutboxFlushCancellation = flushCancellation;
+                    }
+                }
+
+                if (flushCancellation is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await FlushPendingCustomEventsAsync(flushCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (flushCancellation.IsCancellationRequested)
+                {
+                }
+                finally
+                {
+                    lock (_stateLock)
+                    {
+                        if (ReferenceEquals(_activeOutboxFlushCancellation, flushCancellation))
+                        {
+                            _activeOutboxFlushCancellation = null;
+                        }
+                    }
+
+                    flushCancellation.Dispose();
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            Action? cancelWorker;
+            lock (_stateLock)
+            {
+                _terminalException = exception;
+                cancelWorker = _cancelWorker;
+            }
+
+            cancelWorker?.Invoke();
+            _updates.Writer.TryComplete(exception);
+            _completion.TrySetException(exception);
         }
     }
 
@@ -730,7 +1305,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     {
         var emptyAnnotation = IncidentAnnotation.TryCreate(null, null).Value;
         var incident = StoredIncident.Create(
-            IncidentId.Generate(),
+            IncidentId.CreateDetected(
+                session,
+                increase.Observation.Participant.Identity,
+                increase.NextCheckpoint.CounterEpoch,
+                increase.Points),
             session,
             increase.Observation.Participant,
             increase.Observation.Position,
@@ -807,9 +1386,68 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
             resolved = lookup.Value.Value;
         }
 
+        if (resolved is not null &&
+            sample.Session.IdentityScope == SimulatorIdentityScope.Durable)
+        {
+            var deterministicIdentity = SessionIdentity.CreateDurable(
+                sample.Session.Simulator,
+                sample.Session.SessionKey);
+            if (resolved.Id != deterministicIdentity)
+            {
+                var promotion = PromoteSessionIdentity.TryCreate(
+                    resolved.Id,
+                    resolved.Descriptor,
+                    sample.ObservedAt);
+                if (!promotion.IsSuccess)
+                {
+                    SetUnavailable(StoreErrors.SessionIdentityConflict);
+                    return null;
+                }
+
+                var promoted = await ExecuteWithReconciliationAsync(
+                    promotion.Value,
+                    cancellationToken).ConfigureAwait(false);
+                if (promoted.IsSuccess)
+                {
+                    resolved = StoredSession.Create(
+                        promotion.Value.DeterministicIdentity,
+                        resolved.Descriptor,
+                        resolved.StartedAt);
+                }
+                else if (promoted.Error!.Code == StoreErrorCodes.SessionIdentityConflict ||
+                    promoted.Error.Code == StoreErrorCodes.EntityNotFound)
+                {
+                    var winner = await _store.QueryAsync(
+                        new GetSessionBySimulatorKey(
+                            sample.Session.Simulator,
+                            sample.Session.SessionKey),
+                        cancellationToken).ConfigureAwait(false);
+                    if (!winner.IsSuccess ||
+                        !winner.Value.IsFound ||
+                        winner.Value.Value!.Id != deterministicIdentity)
+                    {
+                        SetUnavailable(winner.IsSuccess ? promoted.Error : winner.Error!);
+                        return null;
+                    }
+
+                    resolved = winner.Value.Value;
+                }
+                else
+                {
+                    SetUnavailable(promoted.Error);
+                    return null;
+                }
+            }
+        }
+
         if (resolved is null)
         {
-            var ensure = EnsureSession.Create(SessionIdentity.Generate(), sample.Session, sample.ObservedAt);
+            var proposedIdentity = sample.Session.IdentityScope == SimulatorIdentityScope.Durable
+                ? SessionIdentity.CreateDurable(
+                    sample.Session.Simulator,
+                    sample.Session.SessionKey)
+                : SessionIdentity.Generate();
+            var ensure = EnsureSession.Create(proposedIdentity, sample.Session, sample.ObservedAt);
             var result = await ExecuteWithReconciliationAsync(ensure, cancellationToken).ConfigureAwait(false);
             if (!result.IsSuccess && result.Error!.Code != StoreErrorCodes.SessionIdentityConflict)
             {
@@ -1117,7 +1755,8 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         details.Session.Id,
         details.Session.Descriptor,
         details.Session.StartedAt,
-        details.Incidents.Select(MapIncident));
+        details.Incidents.Select(MapIncident),
+        details.CustomEvents.Select(MapCustomEvent));
 
     private static ReviewIncident MapIncident(StoredIncident incident) => ReviewIncident.Create(
         incident.Id,
@@ -1131,6 +1770,15 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
         incident.LapDistance,
         incident.ReviewStatus,
         incident.Annotation);
+
+    private static ReviewCustomEvent MapCustomEvent(StoredCustomEvent customEvent) =>
+        ReviewCustomEvent.Create(
+            customEvent.Id,
+            customEvent.Session,
+            customEvent.Position,
+            customEvent.Submitter,
+            customEvent.OccurredAt,
+            customEvent.Synchronization is CustomEventSynchronization.Synchronized);
 
     private UtcInstant Now() => UtcInstant.TryCreateUnixMilliseconds(
         _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()).Value;
@@ -1219,6 +1867,11 @@ internal sealed class IncidentReviewApplication : IIncidentReviewService, IAppli
     {
         lock (_stateLock)
         {
+            if (_terminalException is not null)
+            {
+                return;
+            }
+
             _status = ReviewServiceStatus.Stopped;
             _lastUnavailableError = null;
             _ownedReviewActive = false;

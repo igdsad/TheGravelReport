@@ -11,6 +11,12 @@ internal sealed class PreferencesRow
     public string? PreferredCamera { get; init; }
 
     public int ThemePreference { get; init; }
+
+    public string? SubmitterName { get; init; }
+
+    public required string CustomEventKey { get; init; }
+
+    public string? EventJoinCode { get; init; }
 }
 
 internal sealed class StoreOperationRow

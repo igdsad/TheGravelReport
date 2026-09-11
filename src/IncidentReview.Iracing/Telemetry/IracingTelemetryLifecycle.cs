@@ -286,7 +286,9 @@ internal abstract record IracingTelemetryLifecycleEffect
         }
     }
 
-    internal sealed record PublishReplayFrame(IracingFrameSnapshot Frame) :
+    internal sealed record PublishReplayFrame(
+        IracingFrameSnapshot Frame,
+        TelemetrySample Sample) :
         IracingTelemetryLifecycleEffect;
 
     internal sealed record PublishTelemetry(TelemetryEvent Event) :
@@ -451,7 +453,9 @@ internal static class IracingTelemetryLifecycleReducer
                     },
                     projection),
                 IracingTelemetryLoopDirective.Continue,
-                new IracingTelemetryLifecycleEffect.PublishReplayFrame(input.Frame),
+                new IracingTelemetryLifecycleEffect.PublishReplayFrame(
+                    input.Frame,
+                    input.Sample),
                 new IracingTelemetryLifecycleEffect.PublishTelemetry(
                     TelemetrySampleObserved.Create(input.Sample))),
             _ => throw InvalidTransition(state, input),
@@ -590,7 +594,9 @@ internal static class IracingTelemetryLifecycleReducer
                 new IracingLogicalConnection(identity, input.Timestamp),
                 projection),
             IracingTelemetryLoopDirective.Continue,
-            new IracingTelemetryLifecycleEffect.PublishReplayFrame(input.Frame),
+            new IracingTelemetryLifecycleEffect.PublishReplayFrame(
+                input.Frame,
+                input.Sample),
             new IracingTelemetryLifecycleEffect.PublishTelemetry(
                 TelemetryConnected.Instance),
             new IracingTelemetryLifecycleEffect.PublishTelemetry(
@@ -612,11 +618,15 @@ internal static class IracingTelemetryLifecycleReducer
             ? Move(
                 next,
                 IracingTelemetryLoopDirective.Continue,
-                new IracingTelemetryLifecycleEffect.PublishReplayFrame(input.Frame))
+                new IracingTelemetryLifecycleEffect.PublishReplayFrame(
+                    input.Frame,
+                    input.Sample))
             : Move(
                 next,
                 IracingTelemetryLoopDirective.Continue,
-                new IracingTelemetryLifecycleEffect.PublishReplayFrame(input.Frame),
+                new IracingTelemetryLifecycleEffect.PublishReplayFrame(
+                    input.Frame,
+                    input.Sample),
                 new IracingTelemetryLifecycleEffect.PublishTelemetry(
                     TelemetrySampleObserved.Create(input.Sample)));
     }

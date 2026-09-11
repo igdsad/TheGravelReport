@@ -17,12 +17,19 @@ public sealed class MainWindowState
         ReviewSession? activeSession,
         UserPreferences savedPreferences,
         IEnumerable<IncidentListItem> incidents,
+        IEnumerable<CustomEventListItem> customEvents,
         IncidentId? selectedIncidentId,
         string? activeDriverName,
         string? currentCameraName,
         IEnumerable<CameraChoice> cameraChoices,
         CameraChoice selectedCameraChoice,
         bool isCameraSelectionDirty,
+        string customEventSubmitterDraft,
+        string customEventKeyDraft,
+        string eventJoinCodeDraft,
+        string eventHostAddressDraft,
+        bool isCustomEventSettingsDirty,
+        bool isHostingCustomEventSession,
         ResolvedTheme resolvedTheme,
         bool isBusy,
         bool isMonitoring,
@@ -31,8 +38,13 @@ public sealed class MainWindowState
     {
         ArgumentNullException.ThrowIfNull(savedPreferences);
         ArgumentNullException.ThrowIfNull(incidents);
+        ArgumentNullException.ThrowIfNull(customEvents);
         ArgumentNullException.ThrowIfNull(cameraChoices);
         ArgumentNullException.ThrowIfNull(selectedCameraChoice);
+        ArgumentNullException.ThrowIfNull(customEventSubmitterDraft);
+        ArgumentNullException.ThrowIfNull(customEventKeyDraft);
+        ArgumentNullException.ThrowIfNull(eventJoinCodeDraft);
+        ArgumentNullException.ThrowIfNull(eventHostAddressDraft);
         ArgumentNullException.ThrowIfNull(eventLog);
 
         IsInitialized = isInitialized;
@@ -42,12 +54,19 @@ public sealed class MainWindowState
         ActiveSession = activeSession;
         SavedPreferences = savedPreferences;
         Incidents = Copy(incidents);
+        CustomEvents = Copy(customEvents);
         SelectedIncidentId = selectedIncidentId;
         ActiveDriverName = activeDriverName;
         CurrentCameraName = currentCameraName;
         CameraChoices = Copy(cameraChoices);
         SelectedCameraChoice = selectedCameraChoice;
         IsCameraSelectionDirty = isCameraSelectionDirty;
+        CustomEventSubmitterDraft = customEventSubmitterDraft;
+        CustomEventKeyDraft = customEventKeyDraft;
+        EventJoinCodeDraft = eventJoinCodeDraft;
+        EventHostAddressDraft = eventHostAddressDraft;
+        IsCustomEventSettingsDirty = isCustomEventSettingsDirty;
+        IsHostingCustomEventSession = isHostingCustomEventSession;
         if (!Enum.IsDefined(resolvedTheme))
         {
             throw new ArgumentOutOfRangeException(nameof(resolvedTheme));
@@ -75,6 +94,8 @@ public sealed class MainWindowState
 
     public IReadOnlyList<IncidentListItem> Incidents { get; }
 
+    public IReadOnlyList<CustomEventListItem> CustomEvents { get; }
+
     public IncidentId? SelectedIncidentId { get; }
 
     public IncidentListItem? SelectedIncident => SelectedIncidentId is null
@@ -93,6 +114,33 @@ public sealed class MainWindowState
     public CameraChoice SelectedCameraChoice { get; }
 
     public bool IsCameraSelectionDirty { get; }
+
+    /// <summary>Gets the editable submitter-name draft.</summary>
+    public string CustomEventSubmitterDraft { get; }
+
+    /// <summary>Gets the editable global shortcut draft.</summary>
+    public string CustomEventKeyDraft { get; }
+
+    /// <summary>Gets the editable join-code draft; an empty value means local-only storage.</summary>
+    public string EventJoinCodeDraft { get; }
+
+    /// <summary>Gets the address used to start and advertise a local event server.</summary>
+    public string EventHostAddressDraft { get; }
+
+    public bool IsCustomEventSettingsDirty { get; }
+
+    public bool IsHostingCustomEventSession { get; }
+
+    public string CustomEventSessionActionText =>
+        IsHostingCustomEventSession ? "Stop session" : "Start joinable session";
+
+    public bool HasActiveSession => ActiveSession is not null;
+
+    public bool HasCustomEvents => CustomEvents.Count > 0;
+
+    public string CustomEventEmptyMessage => ActiveSession is null
+        ? "Connect to an iRacing session before creating review markers."
+        : "No custom review markers have been created for this session.";
 
     /// <summary>Gets the persisted theme policy currently represented by this state.</summary>
     public ThemePreference ConfiguredThemePreference => SavedPreferences.Theme;

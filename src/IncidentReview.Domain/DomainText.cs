@@ -4,6 +4,23 @@ namespace IncidentReview.Domain;
 
 internal static class DomainText
 {
+    public static bool TryNormalizeRequired(
+        string? input,
+        int maximumLength,
+        bool allowMultiline,
+        out string normalized)
+    {
+        if (TryNormalizeOptional(input, maximumLength, allowMultiline, out var candidate) &&
+            candidate is not null)
+        {
+            normalized = candidate;
+            return true;
+        }
+
+        normalized = string.Empty;
+        return false;
+    }
+
     public static bool TryNormalizeOptional(
         string? input,
         int maximumLength,

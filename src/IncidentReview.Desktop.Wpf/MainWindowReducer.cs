@@ -24,12 +24,19 @@ public static class MainWindowReducer
         activeSession: null,
         DefaultPreferences,
         incidents: [],
+        customEvents: [],
         selectedIncidentId: null,
         activeDriverName: null,
         currentCameraName: null,
         cameraChoices: [CameraChoice.Current],
         selectedCameraChoice: CameraChoice.Current,
         isCameraSelectionDirty: false,
+        customEventSubmitterDraft: string.Empty,
+        customEventKeyDraft: DefaultPreferences.CustomEventKey,
+        eventJoinCodeDraft: string.Empty,
+        eventHostAddressDraft: "http://localhost:5088/",
+        isCustomEventSettingsDirty: false,
+        isHostingCustomEventSession: false,
         resolvedTheme,
         isBusy: false,
         isMonitoring: false,
@@ -48,6 +55,10 @@ public static class MainWindowReducer
             MainWindowAction.ApplyPreferences preferences => Copy(
                 state,
                 savedPreferences: preferences.Preferences,
+                customEventSubmitterDraft: preferences.Preferences.SubmitterName ?? string.Empty,
+                customEventKeyDraft: preferences.Preferences.CustomEventKey,
+                eventJoinCodeDraft: preferences.Preferences.EventJoinCode ?? string.Empty,
+                isCustomEventSettingsDirty: false,
                 resolvedTheme: preferences.ResolvedTheme),
             MainWindowAction.DesktopThemeChanged desktopTheme =>
                 ApplyDesktopThemeChanged(state, desktopTheme),
@@ -55,6 +66,13 @@ public static class MainWindowReducer
             MainWindowAction.SetMonitoring monitoring => ApplyMonitoring(state, monitoring),
             MainWindowAction.SelectIncident selection => ApplyIncidentSelection(state, selection),
             MainWindowAction.SelectCamera selection => ApplyCameraSelection(state, selection),
+            MainWindowAction.EditCustomEventSettings edit => ApplyCustomEventSettings(state, edit),
+            MainWindowAction.EditEventHostAddress edit => Copy(
+                state,
+                eventHostAddressDraft: edit.Address),
+            MainWindowAction.SetCustomEventSessionHosting hosting => Copy(
+                state,
+                isHostingCustomEventSession: hosting.IsHosting),
             MainWindowAction.ShowNotice notice => AppendNotice(
                 state,
                 new EventLogItem(notice.OccurredAt, notice.Message, notice.IsError)),
@@ -81,6 +99,12 @@ public static class MainWindowReducer
             incidents.Any(incident => incident.Id == state.SelectedIncidentId)
                 ? state.SelectedIncidentId
                 : null;
+        var customEvents = snapshot.ActiveSession?.CustomEvents
+            .OrderBy(static customEvent => customEvent.Position.SessionNumber.Value)
+            .ThenBy(static customEvent => customEvent.Position.SessionTime.Milliseconds)
+            .ThenBy(static customEvent => customEvent.Id.Value)
+            .Select(static customEvent => new CustomEventListItem(customEvent))
+            .ToArray() ?? [];
 
         var selectedCameraName = snapshot.Preferences.PreferredCamera;
         var cameraSelectionDirty = false;
@@ -99,6 +123,20 @@ public static class MainWindowReducer
             snapshot.Preferences.PreferredCamera,
             selectedCameraName);
         var selectedCamera = FindCameraChoice(cameraChoices, selectedCameraName);
+        var submitterDraft = snapshot.Preferences.SubmitterName ?? string.Empty;
+        var customEventKeyDraft = snapshot.Preferences.CustomEventKey;
+        var joinCodeDraft = snapshot.Preferences.EventJoinCode ?? string.Empty;
+        var customEventSettingsDirty = false;
+        if (action.RefreshMode == SnapshotRefreshMode.Automatic &&
+            state.IsCustomEventSettingsDirty &&
+            !CustomEventSettingsEqual(state, snapshot.Preferences))
+        {
+            submitterDraft = state.CustomEventSubmitterDraft;
+            customEventKeyDraft = state.CustomEventKeyDraft;
+            joinCodeDraft = state.EventJoinCodeDraft;
+            customEventSettingsDirty = true;
+        }
+
         var statusChanged = state.IsInitialized && state.Status != snapshot.Status;
         var next = new MainWindowState(
             isInitialized: true,
@@ -108,12 +146,19 @@ public static class MainWindowReducer
             snapshot.ActiveSession,
             snapshot.Preferences,
             incidents,
+            customEvents,
             selectedIncident,
             snapshot.DriverDisplayName,
             snapshot.CurrentCameraGroup,
             cameraChoices,
             selectedCamera,
             cameraSelectionDirty,
+            submitterDraft,
+            customEventKeyDraft,
+            joinCodeDraft,
+            state.EventHostAddressDraft,
+            customEventSettingsDirty,
+            state.IsHostingCustomEventSession,
             action.ResolvedTheme,
             state.IsBusy,
             state.IsMonitoring,
@@ -237,6 +282,39 @@ public static class MainWindowReducer
             isCameraSelectionDirty: isDirty);
     }
 
+    private static MainWindowState ApplyCustomEventSettings(
+        MainWindowState state,
+        MainWindowAction.EditCustomEventSettings action)
+    {
+        var isDirty = !string.Equals(
+                action.SubmitterName.Trim(),
+                state.SavedPreferences.SubmitterName ?? string.Empty,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                action.Key.Trim(),
+                state.SavedPreferences.CustomEventKey,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                action.JoinCode.Trim(),
+                state.SavedPreferences.EventJoinCode ?? string.Empty,
+                StringComparison.Ordinal);
+
+        if (string.Equals(action.SubmitterName, state.CustomEventSubmitterDraft, StringComparison.Ordinal) &&
+            string.Equals(action.Key, state.CustomEventKeyDraft, StringComparison.Ordinal) &&
+            string.Equals(action.JoinCode, state.EventJoinCodeDraft, StringComparison.Ordinal) &&
+            state.IsCustomEventSettingsDirty == isDirty)
+        {
+            return state;
+        }
+
+        return Copy(
+            state,
+            customEventSubmitterDraft: action.SubmitterName,
+            customEventKeyDraft: action.Key,
+            eventJoinCodeDraft: action.JoinCode,
+            isCustomEventSettingsDirty: isDirty);
+    }
+
     private static MainWindowState AppendNotice(MainWindowState state, EventLogItem notice)
     {
         var retained = state.EventLog.Count >= EventLogCapacity
@@ -285,6 +363,22 @@ public static class MainWindowReducer
     private static bool CameraNamesEqual(string? first, string? second) =>
         string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
 
+    private static bool CustomEventSettingsEqual(
+        MainWindowState state,
+        UserPreferences preferences) =>
+        string.Equals(
+            state.CustomEventSubmitterDraft.Trim(),
+            preferences.SubmitterName ?? string.Empty,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            state.CustomEventKeyDraft.Trim(),
+            preferences.CustomEventKey,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            state.EventJoinCodeDraft.Trim(),
+            preferences.EventJoinCode ?? string.Empty,
+            StringComparison.Ordinal);
+
     private static MainWindowState Copy(
         MainWindowState state,
         bool? isBusy = null,
@@ -293,6 +387,12 @@ public static class MainWindowReducer
         bool replaceSelectedIncidentId = false,
         CameraChoice? selectedCameraChoice = null,
         bool? isCameraSelectionDirty = null,
+        string? customEventSubmitterDraft = null,
+        string? customEventKeyDraft = null,
+        string? eventJoinCodeDraft = null,
+        string? eventHostAddressDraft = null,
+        bool? isCustomEventSettingsDirty = null,
+        bool? isHostingCustomEventSession = null,
         UserPreferences? savedPreferences = null,
         ResolvedTheme? resolvedTheme = null,
         IEnumerable<EventLogItem>? eventLog = null,
@@ -304,12 +404,19 @@ public static class MainWindowReducer
             state.ActiveSession,
             savedPreferences ?? state.SavedPreferences,
             state.Incidents,
+            state.CustomEvents,
             replaceSelectedIncidentId ? selectedIncidentId : state.SelectedIncidentId,
             state.ActiveDriverName,
             state.CurrentCameraName,
             state.CameraChoices,
             selectedCameraChoice ?? state.SelectedCameraChoice,
             isCameraSelectionDirty ?? state.IsCameraSelectionDirty,
+            customEventSubmitterDraft ?? state.CustomEventSubmitterDraft,
+            customEventKeyDraft ?? state.CustomEventKeyDraft,
+            eventJoinCodeDraft ?? state.EventJoinCodeDraft,
+            eventHostAddressDraft ?? state.EventHostAddressDraft,
+            isCustomEventSettingsDirty ?? state.IsCustomEventSettingsDirty,
+            isHostingCustomEventSession ?? state.IsHostingCustomEventSession,
             resolvedTheme ?? state.ResolvedTheme,
             isBusy ?? state.IsBusy,
             isMonitoring ?? state.IsMonitoring,

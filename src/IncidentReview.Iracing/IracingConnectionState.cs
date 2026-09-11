@@ -1,4 +1,5 @@
 using IncidentReview.Iracing.Protocol;
+using IncidentReview.Telemetry.Contracts;
 
 namespace IncidentReview.Iracing;
 
@@ -7,6 +8,7 @@ internal sealed class IracingConnectionState
     private readonly Lock _lock = new();
     private TaskCompletionSource _changed = CreateSignal();
     private ReplayFrameObservation _observation = new ReplayFrameObservation.Unavailable(0);
+    private TelemetrySample? _currentTelemetry;
     private string? _metadataSource;
     private IracingReplayContextMetadata _metadata = IracingReplayContextMetadata.Empty;
 
@@ -18,9 +20,20 @@ internal sealed class IracingConnectionState
         }
     }
 
-    public void PublishAvailable(IracingFrameSnapshot snapshot)
+    public TelemetrySample? ReadCurrentTelemetry()
+    {
+        lock (_lock)
+        {
+            return _currentTelemetry;
+        }
+    }
+
+    public void PublishAvailable(
+        IracingFrameSnapshot snapshot,
+        TelemetrySample currentTelemetry)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(currentTelemetry);
 
         TaskCompletionSource signal;
         lock (_lock)
@@ -35,6 +48,7 @@ internal sealed class IracingConnectionState
             _observation = new ReplayFrameObservation.Available(
                 checked(_observation.Version + 1),
                 ValidateParticipantMetadata(DecodeReplayFrame(snapshot, _metadata)));
+            _currentTelemetry = currentTelemetry;
             signal = RotateSignal();
         }
 
@@ -84,6 +98,7 @@ internal sealed class IracingConnectionState
             {
                 _observation = new ReplayFrameObservation.Unavailable(
                     checked(_observation.Version + 1));
+                _currentTelemetry = null;
                 _metadataSource = null;
                 _metadata = IracingReplayContextMetadata.Empty;
                 signal = RotateSignal();

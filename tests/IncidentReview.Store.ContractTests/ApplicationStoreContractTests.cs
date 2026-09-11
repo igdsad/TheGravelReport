@@ -20,6 +20,7 @@ public sealed class ApplicationStoreContractTests
             typeof(GetIncidents),
             typeof(GetIncidentCheckpoints),
             typeof(EnsureSession),
+            typeof(PromoteSessionIdentity),
             typeof(EstablishIncidentCheckpoint),
             typeof(RecordDetectedIncident),
             typeof(AnnotateIncident),
@@ -37,6 +38,40 @@ public sealed class ApplicationStoreContractTests
                 candidate.IsGenericType &&
                 candidate.GetGenericTypeDefinition() == typeof(IStoreQuery<>))));
         Assert.IsTrue(contractTypes.Skip(7).All(type => typeof(IStoreCommand).IsAssignableFrom(type)));
+    }
+
+    [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    public void PromotionRequiresALegacyIdentityAndDurableEvidence()
+    {
+        var durable = CreateDescriptor("promote-durable");
+        var connectionScoped = SimulatorSessionDescriptor.TryCreate(
+            durable.Simulator,
+            durable.SessionKey,
+            durable.SessionNumber,
+            durable.Mode,
+            SimulatorIdentityScope.ConnectionScoped).Value;
+        var promotedAt = UtcInstant.TryCreateUnixMilliseconds(2_000).Value;
+
+        var valid = PromoteSessionIdentity.TryCreate(
+            SessionIdentity.Generate(),
+            durable,
+            promotedAt);
+        var alreadyDeterministic = PromoteSessionIdentity.TryCreate(
+            SessionIdentity.CreateDurable(durable.Simulator, durable.SessionKey),
+            durable,
+            promotedAt);
+        var transient = PromoteSessionIdentity.TryCreate(
+            SessionIdentity.Generate(),
+            connectionScoped,
+            promotedAt);
+
+        Assert.IsTrue(valid.IsSuccess);
+        Assert.AreEqual(
+            SessionIdentity.CreateDurable(durable.Simulator, durable.SessionKey),
+            valid.Value.DeterministicIdentity);
+        Assert.AreEqual(StoreErrorCodes.InvalidCommand, alreadyDeterministic.Error!.Code);
+        Assert.AreEqual(StoreErrorCodes.InvalidCommand, transient.Error!.Code);
     }
 
     [TestMethod]
@@ -250,6 +285,14 @@ public sealed class ApplicationStoreContractTests
             instant,
             instant);
     }
+
+    private static SimulatorSessionDescriptor CreateDescriptor(string sessionKey) =>
+        SimulatorSessionDescriptor.TryCreate(
+            SimulatorCode.TryCreate("iracing").Value,
+            SimulatorSessionKey.TryCreate(sessionKey).Value,
+            SessionNumber.TryCreate(1).Value,
+            SessionMode.Live,
+            SimulatorIdentityScope.Durable).Value;
 
     private static void AssertInvalidRecord(
         StoredIncident incident,

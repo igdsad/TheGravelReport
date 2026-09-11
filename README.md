@@ -1,10 +1,10 @@
 # GravelReview
 
-GravelReview helps you find race incidents in iRacing. It saves the time, points, and driver name for each scored incident it can see. Pick a row, and GravelReview moves the iRacing replay to that spot. No more hunting through a long replay like a lost squirrel.
+GravelReview is a local-first Windows companion that helps you find race incidents in iRacing. It saves the time, points, and driver context for each scored incident iRacing exposes, and it lets a driver mark custom replay moments from a keyboard or wheel-mapped button. Pick a row and GravelReview moves the iRacing replay to that spot. Drivers can optionally join a league-review server and send custom markers to one central reviewer after they leave the car.
 
 GravelReview runs on your Windows PC. Your race data stays on your PC. It does not say who was at fault. A driver name tells you which car's score went up, not who caused the crash.
 
-This is a test release. The app has passed 629 tests. It still needs more tests with the live iRacing game.
+This is an alpha test release. The automated suite passes, but the app still needs broader testing with the live iRacing game.
 
 ## How to use it
 
@@ -51,6 +51,14 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 For each non-pace-car, non-spectator entry that iRacing includes in the current `DriverInfo:Drivers` session data with usable identity and counter evidence, GravelReview chooses one scored counter shape. When `CurDriverIncidentCount` is present, it uses that driver counter and keeps team drivers in separate streams. A negative or broken value is still driver-shaped; an opponent is skipped until a good value returns. When the field is absent, GravelReview supports the older cumulative `TeamIncidentCount` shape and keeps one stream for the team car. Team cars add the driver ID when needed. A no-team car is already keyed by its user ID. This keeps counters with different meanings out of the same checkpoint.
 
+For custom markers, set a submitter name and choose a Windows key gesture; `F9` is the default. A steering-wheel button works when its driver or mapping software emits that gesture. Pressing it during a live session immediately saves the session-relative replay position to local SQLite, so a network outage cannot discard the marker. The marker's deterministic ID comes from the iRacing-derived session identity and exact replay position—not the submitter name or local clock.
+
+One user can start a joinable event session locally, or use the address of the shared server, and share the generated code. The code contains both the advertised HTTP(S) server address and the deterministic iRacing session identity; other users paste that one code to join. Pending markers are sent only after authoritative telemetry says the driver is out of the car. The server keeps the first payload received for each deterministic event ID and reports later copies as duplicates; clients mark either an accepted or duplicate response synchronized and surface a duplicate warning.
+
+Join codes are locators, not secrets. The current public alpha endpoint has no authentication and plain HTTP provides no encryption: anyone who learns the address and session ID can submit a claimed name or race to be the first payload for an event ID. Use it only with that limitation understood; an authenticated TLS deployment remains future hardening work.
+
+The far-right status-bar button cycles the appearance through **Follow desktop → Light → Dark → Follow desktop**. Its monitor, sun, or moon icon shows the configured mode, and its tooltip states both the current mode and what the next click will select. Follow desktop reacts to Windows theme changes while the app is running; forced Light and Dark do not. The choice is applied immediately and saved to SQLite. If saving fails, GravelReview restores the previous appearance and reports that exact failure in the shared status/event stream.
+
 The participant key is opaque outside the iRacing adapter and is derived afresh from current roster evidence. Team-counter rows use `car-index:{CarIdx}:team:{TeamID}` for a positive `TeamID`, otherwise `car-index:{CarIdx}:user:{UserID}`. A current-driver row for a team car adds `:driver-user:{UserID}`. A row whose required identity evidence is missing, malformed, or non-positive is omitted until usable evidence returns; its saved checkpoint stays intact. The incident grid displays the driver name captured with each incident, falling back to team name, car number, or **Unknown driver** when that context is unavailable. **Recorded at** shows the full local time through milliseconds and its UTC offset; sorting that column uses the underlying instant rather than the formatted text. Review status remains durable data but is no longer shown in the primary grid.
 
 `PlayerCarMyIncidentCount` is never used. If the selected row counter is unavailable for the local car, GravelReview may use the matching scalar: `PlayerCarDriverIncidentCount` for a driver stream or `PlayerCarTeamIncidentCount` for a team stream. It never uses one kind as a substitute for the other. If session metadata does not match live `SessionNum`, or no safe identity exists, the adapter emits no local participant observation. When usable roster evidence returns, comparison resumes from that participant's saved checkpoint.
@@ -78,7 +86,7 @@ dotnet run --project .\src\IncidentReview.Host.Wpf\IncidentReview.Host.Wpf.cspro
 
 The database path must be an absolute local file path. Startup timeout accepts 1 through 120 seconds. The equivalent environment variables are `INCIDENTREVIEW_DatabasePath` and `INCIDENTREVIEW_StartupTimeoutSeconds`; command-line values take precedence. There is no JSON configuration file in the current runtime.
 
-Replay pause/playback behavior, preferred camera group, and theme mode are durable user preferences stored together through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while focusing the participant stored with the selected incident. Existing databases migrate to **Follow desktop** without changing any replay preference, and the stored mode is applied before the main window becomes visible.
+Replay pause/playback behavior, preferred camera group, theme mode, custom-event submitter name, custom-event key gesture, and optional join code are durable user preferences stored together through `IStore`; older lead-in settings remain compatible, while the primary UI supplies an explicit row-relative offset. Available camera names come from the active iRacing session. A named camera preference is matched case-insensitively against that catalog; no preference preserves the currently reported camera group while focusing the participant stored with the selected incident. Existing databases migrate to **Follow desktop**, an `F9` custom-event gesture, no submitter, and no joined session without changing any replay preference; the stored theme mode is applied before the main window becomes visible.
 
 ## Appearance and branding
 
@@ -112,19 +120,24 @@ Create the Windows x64 release artifacts with the repository-owned packaging scr
 
 The script performs a locked restore, publishes the untrimmed self-contained single-file host, validates the exact output, and smoke-tests the renamed executable with an isolated temporary database. It leaves `artifacts\release\win-x64\GravelReview-win-x64.exe` for local use and `artifacts\release\win-x64\GravelReview-win-x64.zip` for a GitHub release. The ZIP is the distributable asset because it contains both the executable and the required `THIRD-PARTY-NOTICES\iracing-sdk-1.20.md`; the target machine does not need a separately installed .NET Desktop Runtime. The external filename uses the GravelReview product name while the internal `IncidentReview.Host.Wpf` assembly identity remains unchanged. An installer and updater have not been selected.
 
+The repository also contains a self-contained Linux x64 event server. It accepts the same versioned custom-event POSTs and stores the first payload for each deterministic event ID in its own SQLite inbox. See [`deploy/server/README.md`](deploy/server/README.md) for publish, systemd installation, configuration, and health-check instructions; the target server does not need a system-wide .NET runtime.
+
 ## Architecture
 
 The application is split by behavioral boundary:
 
 - `Results` and `Domain` own dependency-light primitives and rules.
-- `*.Contracts` projects own simulator-neutral store, telemetry, replay, and application interfaces and immutable values.
-- `Application` orchestrates use cases through those contracts; it has no SQLite, Dapper, DbUp, WPF, or Windows interop reference.
-- `Store.Sqlite` is one `IStore` implementation. It owns Dapper SQL, connections, transactions, row mapping, DbUp, and schema validation.
-- `Iracing` is the only production assembly that knows the SDK ABI or replay broadcast protocol.
+- `*.Contracts` projects own simulator-neutral store, telemetry, replay, event-sync, and application interfaces and immutable values.
+- `Application` orchestrates use cases through those contracts; it owns local-first custom-event/outbox policy but has no SQLite, Dapper, DbUp, WPF, Kestrel, HTTP wire, or Windows interop reference.
+- `Store.Sqlite` is one `IStore` implementation. It owns Dapper SQL, connections, transactions, row mapping, DbUp, schema validation, and the durable custom-event outbox rows.
+- `EventSync.Contracts` defines versioned join-code, submission, publisher, receiver, and joinable-session-host capabilities. `EventSync.Http` is the replaceable `HttpClient`/Kestrel adapter and is the only event-sync assembly that owns JSON wire DTOs and HTTP routes. `EventSync.Sqlite` is the cross-platform first-write-wins server inbox.
+- `Iracing` is the only production assembly that knows the SDK ABI or replay broadcast protocol. It exposes both the meaningful telemetry stream and a read-only latest-frame snapshot, so a hotkey marker uses the freshest accepted replay position even when position-only stream updates are coalesced.
 - `Desktop.Wpf` talks only to `Application.Contracts` plus domain/result values. It renders one immutable root presentation state; UI events are reduced into a replacement state and external effects remain outside the reducer. That root also keeps configured theme policy separate from the resolved Light/Dark palette. Windows detection and palette application are isolated behind desktop interfaces.
-- `Host.Wpf` is the sole composition root and selects the concrete adapters using Microsoft Generic Host and its built-in DI container.
+- `Host.Wpf` is the Windows desktop composition root. `Host.Server` is the independent headless Linux-capable composition root for `EventSync.Http` and `EventSync.Sqlite`. Both select concrete adapters using Microsoft hosting and its built-in DI container; neither owns business rules.
 
 Every store mutation is an immutable typed `IStoreCommand` with an `OperationId`. The SQLite adapter executes it in one owned transaction, writes its operation fingerprint in the same transaction, and supports reconciliation after an indeterminate commit. Runtime values are Dapper parameters; raw SQL is private to the adapter. DbUp applies the checksum-pinned embedded migrations before the store gate opens.
+
+Durable sessions, detected incidents, and custom events use namespaced RFC UUIDv5 identities. A durable session is derived from canonical simulator code plus the exact validated opaque iRacing event key; an incident is derived from session, participant identity, counter epoch, and resulting incident total; a custom event is derived from session, replay session number, and integer session-time milliseconds. Existing UUIDv7 session/incident rows remain readable, while connection-scoped provisional identities continue to use UUIDv7 and cannot be hosted or joined.
 
 Boundary rules are defined once in [`eng/ArchitecturePolicy.props`](eng/ArchitecturePolicy.props), enforced during MSBuild, inspected again in compiled-assembly architecture tests, and supplemented by repository analyzers for non-constant Dapper SQL, missing Dapper mutation transactions (including `CommandDefinition`), and nested service-provider construction.
 
@@ -148,7 +161,7 @@ Dependency versions are centralized in [`Directory.Packages.props`](Directory.Pa
 
 The runtime is intentionally small but is not Microsoft-only. Dapper and DbUp are approved third-party exceptions, and SQLite/SQLitePCLRaw are third-party components. The SQLite provider is Microsoft's `Microsoft.Data.Sqlite.Core`; `SQLitePCLRaw.bundle_winsqlite3` binds to the Windows-serviced `winsqlite3.dll` rather than shipping a separate SQLite engine.
 
-JSON is not part of storage, internal messaging, or current configuration. A future user-requested export may use `System.Text.Json` behind a separate export contract.
+JSON is not part of storage, configuration, or in-process application contracts. `System.Text.Json` is used only inside the versioned HTTP event-sync adapter's bounded wire protocol; a future user-requested export may use it independently behind a separate export contract.
 
 ## Current acceptance gaps
 
@@ -159,6 +172,7 @@ JSON is not part of storage, internal messaging, or current configuration. A fut
 - Confirm that replay focus uses the saved car/team across heat numbers. A saved driver-scoped team identity is reduced to the stable team car for focus; changed, missing, or ambiguous car/team evidence must fail clearly.
 - Add package-level WPF UI Automation that combines the independent shared-memory protocol simulator with the existing hidden native Windows broadcast receiver; those mechanisms are currently tested separately.
 - Complete packaged visual acceptance for both palettes, all interaction states, common scaling levels, Windows high contrast, live Follow-desktop switching, and restart persistence.
+- Harden the deployed public-alpha event-sync server for production use, including authentication/authorization, TLS termination, discovery, abuse controls, retention, and container-hosting operations. The current endpoint is unauthenticated and unencrypted, and the join code deliberately grants no security property.
 - Complete crash/full/locked/corrupt-database campaigns, coverage enforcement, fuzz/mutation/stress jobs, dependency/license inventory, and SBOM generation.
 - Add WPF editing for annotations/classification and explicit reviewed/dismissed actions; add export only as a separate capability.
 

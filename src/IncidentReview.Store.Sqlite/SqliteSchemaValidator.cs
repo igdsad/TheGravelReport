@@ -9,12 +9,13 @@ namespace IncidentReview.Store.Sqlite;
 
 internal sealed class SqliteSchemaValidator
 {
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 5;
     private static readonly Version MinimumSqliteVersion = new(3, 8, 0);
 
     private static readonly string[] RequiredTables =
     [
         "ApplicationPreferences",
+        "CustomEvent",
         "Incident",
         "IncidentCheckpoint",
         "SchemaVersions",
@@ -44,6 +45,12 @@ internal sealed class SqliteSchemaValidator
             "session_id", "participant_identity", "counter_epoch", "last_incident_points_total",
             "last_replay_session_number", "last_replay_session_time_ms", "updated_at_utc_ms",
         ]),
+        ("CustomEvent",
+        [
+            "custom_event_id", "session_id", "replay_session_number",
+            "replay_session_time_ms", "submitter_name", "occurred_at_utc_ms",
+            "synchronized_at_utc_ms",
+        ]),
         ("StoreOperation",
         [
             "operation_id", "command_kind", "command_version",
@@ -53,7 +60,7 @@ internal sealed class SqliteSchemaValidator
         [
             "preferences_id", "replay_lead_in_ms", "auto_pause",
             "playback_speed", "preferred_camera", "updated_at_utc_ms",
-            "theme_preference",
+            "theme_preference", "submitter_name", "custom_event_key", "event_join_code",
         ]),
     ];
 
@@ -149,6 +156,10 @@ internal sealed class SqliteSchemaValidator
                 connection,
                 "IncidentCheckpoint",
                 cancellationToken)),
+            ("custom-event foreign key", () => HasCascadeForeignKey(
+                connection,
+                "CustomEvent",
+                cancellationToken)),
         };
 
         foreach (var check in checks)
@@ -224,6 +235,9 @@ internal sealed class SqliteSchemaValidator
                     playback_speed AS PlaybackSpeed,
                     preferred_camera AS PreferredCamera,
                     theme_preference AS ThemePreference,
+                    submitter_name AS SubmitterName,
+                    custom_event_key AS CustomEventKey,
+                    event_join_code AS EventJoinCode,
                     updated_at_utc_ms AS UpdatedAtUnixMilliseconds
                 FROM ApplicationPreferences
                 ORDER BY preferences_id;
@@ -241,7 +255,10 @@ internal sealed class SqliteSchemaValidator
                     row.PlaybackSpeed,
                     row.AutoPause == 1,
                     row.PreferredCamera,
-                    (ThemePreference)row.ThemePreference).IsSuccess
+                    (ThemePreference)row.ThemePreference,
+                    row.SubmitterName,
+                    row.CustomEventKey,
+                    row.EventJoinCode).IsSuccess
                 && UtcInstant.TryCreateUnixMilliseconds(row.UpdatedAtUnixMilliseconds).IsSuccess;
         }
         catch (Exception exception) when (
@@ -415,6 +432,7 @@ internal sealed class SqliteSchemaValidator
                 "Session" => "PRAGMA table_info('Session');",
                 "Incident" => "PRAGMA table_info('Incident');",
                 "IncidentCheckpoint" => "PRAGMA table_info('IncidentCheckpoint');",
+                "CustomEvent" => "PRAGMA table_info('CustomEvent');",
                 "StoreOperation" => "PRAGMA table_info('StoreOperation');",
                 "ApplicationPreferences" => "PRAGMA table_info('ApplicationPreferences');",
                 _ => throw new InvalidOperationException("The schema manifest contains an unknown table."),
@@ -449,6 +467,7 @@ internal sealed class SqliteSchemaValidator
         {
             "Incident" => "PRAGMA foreign_key_list('Incident');",
             "IncidentCheckpoint" => "PRAGMA foreign_key_list('IncidentCheckpoint');",
+            "CustomEvent" => "PRAGMA foreign_key_list('CustomEvent');",
             _ => throw new ArgumentOutOfRangeException(nameof(table)),
         };
 
@@ -537,6 +556,12 @@ internal sealed class SqliteSchemaValidator
         public string? PreferredCamera { get; init; }
 
         public int ThemePreference { get; init; }
+
+        public string? SubmitterName { get; init; }
+
+        public required string CustomEventKey { get; init; }
+
+        public string? EventJoinCode { get; init; }
 
         public long UpdatedAtUnixMilliseconds { get; init; }
     }

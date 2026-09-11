@@ -104,6 +104,7 @@
         "dependencies": {
           "IncidentReview.Application.Contracts": "[1.0.0, )",
           "IncidentReview.Domain": "[1.0.0, )",
+          "IncidentReview.EventSync.Contracts": "[1.0.0, )",
           "IncidentReview.Replay.Contracts": "[1.0.0, )",
           "IncidentReview.Results": "[1.0.0, )",
           "IncidentReview.Store.Contracts": "[1.0.0, )",
@@ -121,6 +122,13 @@
       "incidentreview.domain": {
         "type": "Project",
         "dependencies": {
+          "IncidentReview.Results": "[1.0.0, )"
+        }
+      },
+      "incidentreview.eventsync.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "IncidentReview.Domain": "[1.0.0, )",
           "IncidentReview.Results": "[1.0.0, )"
         }
       },

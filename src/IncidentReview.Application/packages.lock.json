@@ -21,6 +21,13 @@
           "IncidentReview.Results": "[1.0.0, )"
         }
       },
+      "incidentreview.eventsync.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "IncidentReview.Domain": "[1.0.0, )",
+          "IncidentReview.Results": "[1.0.0, )"
+        }
+      },
       "incidentreview.replay.contracts": {
         "type": "Project",
         "dependencies": {

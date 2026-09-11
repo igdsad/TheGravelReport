@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
     <ProjectReference Include="../../src/IncidentReview.Application/IncidentReview.Application.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <ProjectReference Include="../../src/IncidentReview.EventSync.Contracts/IncidentReview.EventSync.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
     <ProjectReference Include="../../src/IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />

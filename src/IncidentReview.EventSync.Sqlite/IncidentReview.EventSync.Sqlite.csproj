@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>IncidentReview.EventSync.Sqlite</AssemblyName>
+    <RootNamespace>IncidentReview.EventSync.Sqlite</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../IncidentReview.EventSync.Contracts/IncidentReview.EventSync.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.Domain/IncidentReview.Domain.csproj" />
+    <ProjectReference Include="../IncidentReview.Results/IncidentReview.Results.csproj" />
+  </ItemGroup>
+</Project>

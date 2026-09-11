@@ -32,6 +32,27 @@ public interface IIncidentReviewService
         IncidentAnnotation annotation,
         CancellationToken cancellationToken);
 
+    public Task<Result> CreateCustomEventAsync(CancellationToken cancellationToken);
+
+    public Task<Result> ReviewCustomEventAsync(
+        CustomEventId customEventId,
+        ReplayOffset offset,
+        CancellationToken cancellationToken);
+
+    public Task<Result<string>> StartCustomEventSessionAsync(
+        Uri listenUri,
+        Uri advertisedBaseUri,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Creates a join code for an always-on shared server without starting a local listener.
+    /// </summary>
+    public Task<Result<string>> CreateCustomEventJoinCodeAsync(
+        Uri serverBaseUri,
+        CancellationToken cancellationToken);
+
+    public Task<Result> StopCustomEventSessionAsync(CancellationToken cancellationToken);
+
     public Task<Result<UserPreferences>> GetPreferencesAsync(CancellationToken cancellationToken);
 
     public Task<Result> UpdatePreferencesAsync(

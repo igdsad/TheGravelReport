@@ -57,6 +57,140 @@ public sealed class SqliteIncidentStoreTests
     }
 
     [TestMethod]
+    [TestProperty("Requirement", "IR-SES-001")]
+    [TestProperty("Requirement", "IR-STR-003")]
+    [TestProperty("Requirement", "IR-STR-005")]
+    public async Task LegacyDurableSessionPromotionIsAtomicIdempotentAndPreservesDependents()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var context = await CreateInitializedStore(database);
+        var descriptor = CreateDescriptor("legacy-session");
+        var legacyIdentity = SessionIdentity.Generate();
+        var ensure = EnsureSession.Create(
+            legacyIdentity,
+            descriptor,
+            UtcInstant.TryCreateUnixMilliseconds(1_000).Value);
+        Assert.IsTrue((await context.Store.ExecuteAsync(ensure, CancellationToken.None)).IsSuccess);
+
+        var baseline = CreateCheckpoint(
+            legacyIdentity,
+            counter: 0,
+            time: 1_000,
+            participantIdentity: "participant-1");
+        var secondBaseline = CreateCheckpoint(
+            legacyIdentity,
+            counter: 0,
+            time: 1_100,
+            participantIdentity: "participant-2");
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(null, baseline).Value,
+            CancellationToken.None)).IsSuccess);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            EstablishIncidentCheckpoint.TryCreate(null, secondBaseline).Value,
+            CancellationToken.None)).IsSuccess);
+        var incident = CreateIncident(
+            legacyIdentity,
+            total: 2,
+            delta: 2,
+            time: 2_000,
+            participantIdentity: "participant-1");
+        var secondIncident = CreateIncident(
+            legacyIdentity,
+            total: 2,
+            delta: 2,
+            time: 2_100,
+            participantIdentity: "participant-2");
+        var next = CreateCheckpoint(
+            legacyIdentity,
+            counter: 2,
+            time: 2_000,
+            participantIdentity: "participant-1");
+        var secondNext = CreateCheckpoint(
+            legacyIdentity,
+            counter: 2,
+            time: 2_100,
+            participantIdentity: "participant-2");
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(incident, baseline, next).Value,
+            CancellationToken.None)).IsSuccess);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordDetectedIncident.TryCreate(secondIncident, secondBaseline, secondNext).Value,
+            CancellationToken.None)).IsSuccess);
+        var customEvent = StoredCustomEvent.CreatePending(
+            legacyIdentity,
+            ReplayPosition.TryCreate(
+                SessionNumber.TryCreate(1).Value,
+                SessionTime.TryCreateMilliseconds(2_500).Value).Value,
+            SubmitterName.TryCreate("Legacy Driver").Value,
+            UtcInstant.TryCreateUnixMilliseconds(2_500).Value);
+        Assert.IsTrue((await context.Store.ExecuteAsync(
+            RecordCustomEvent.TryCreate(customEvent).Value,
+            CancellationToken.None)).IsSuccess);
+
+        var promotion = PromoteSessionIdentity.TryCreate(
+            legacyIdentity,
+            descriptor,
+            UtcInstant.TryCreateUnixMilliseconds(3_000).Value);
+        Assert.IsTrue(promotion.IsSuccess, promotion.Error?.ToString());
+
+        var result = await context.Store.ExecuteAsync(promotion.Value, CancellationToken.None);
+        var retry = await context.Store.ExecuteAsync(promotion.Value, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess, result.Error?.ToString());
+        Assert.IsTrue(retry.IsSuccess, retry.Error?.ToString());
+        var deterministicIdentity = SessionIdentity.CreateDurable(
+            descriptor.Simulator,
+            descriptor.SessionKey);
+        Assert.AreEqual(deterministicIdentity, promotion.Value.DeterministicIdentity);
+        Assert.AreEqual(5, deterministicIdentity.Value.Version);
+        Assert.IsFalse((await context.Store.QueryAsync(
+            new GetSession(legacyIdentity),
+            CancellationToken.None)).Value.IsFound);
+        var session = await context.Store.QueryAsync(
+            new GetSessionBySimulatorKey(descriptor.Simulator, descriptor.SessionKey),
+            CancellationToken.None);
+        Assert.AreEqual(deterministicIdentity, session.Value.Value!.Id);
+        var incidents = await context.Store.QueryAsync(
+            new GetIncidents(deterministicIdentity),
+            CancellationToken.None);
+        Assert.HasCount(2, incidents.Value);
+        foreach (var promotedIncident in incidents.Value)
+        {
+            Assert.AreEqual(deterministicIdentity, promotedIncident.Session);
+            Assert.AreEqual(
+                IncidentId.CreateDetected(
+                    deterministicIdentity,
+                    promotedIncident.Participant.Identity,
+                    promotedIncident.CounterEpoch,
+                    promotedIncident.Points),
+                promotedIncident.Id);
+        }
+
+        Assert.IsFalse(incidents.Value.Any(promotedIncident =>
+            promotedIncident.Id == incident.Id || promotedIncident.Id == secondIncident.Id));
+        Assert.AreNotEqual(incidents.Value[0].Id, incidents.Value[1].Id);
+        var checkpoints = await context.Store.QueryAsync(
+            new GetIncidentCheckpoints(deterministicIdentity),
+            CancellationToken.None);
+        Assert.HasCount(2, checkpoints.Value);
+        Assert.IsTrue(checkpoints.Value.All(checkpoint =>
+            checkpoint.Session == deterministicIdentity));
+        var customEvents = await context.Store.QueryAsync(
+            new GetCustomEvents(deterministicIdentity),
+            CancellationToken.None);
+        Assert.HasCount(1, customEvents.Value);
+        Assert.AreEqual(
+            CustomEventId.CreateDeterministic(deterministicIdentity, customEvent.Position),
+            customEvents.Value[0].Id);
+        Assert.AreNotEqual(customEvent.Id, customEvents.Value[0].Id);
+        Assert.AreEqual(deterministicIdentity, customEvents.Value[0].Session);
+        var outcome = await context.Store.QueryAsync(
+            new GetOperationOutcome(promotion.Value.OperationId),
+            CancellationToken.None);
+        Assert.AreSame(OperationOutcome.Committed, outcome.Value);
+    }
+
+    [TestMethod]
     [TestProperty("Requirement", "IR-INC-005")]
     [TestProperty("Requirement", "IR-STR-005")]
     public async Task CheckpointCompareAndSwapKeepsIncidentInsertAtomicAndRetryIdempotent()
@@ -474,6 +608,13 @@ public sealed class SqliteIncidentStoreTests
             FROM StoreOperation
             WHERE command_kind = 'incident.record-detected'
               AND command_version = 2;
+            """));
+        Assert.AreEqual(2L, ExecuteScalarInt64(
+            connection,
+            """
+            SELECT COUNT(DISTINCT payload_fingerprint_sha256)
+            FROM StoreOperation
+            WHERE command_kind = 'incident.record-detected';
             """));
     }
 

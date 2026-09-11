@@ -395,7 +395,7 @@ internal sealed class IracingTelemetrySource : ITelemetrySource, IAsyncDisposabl
                     _connectionState.PublishUnavailable();
                     break;
                 case IracingTelemetryLifecycleEffect.PublishReplayFrame replay:
-                    _connectionState.PublishAvailable(replay.Frame);
+                    _connectionState.PublishAvailable(replay.Frame, replay.Sample);
                     break;
                 case IracingTelemetryLifecycleEffect.PublishTelemetry telemetry:
                     if (!writer.TryWrite(telemetry.Event))

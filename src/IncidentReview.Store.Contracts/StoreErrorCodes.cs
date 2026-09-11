@@ -39,6 +39,9 @@ public static class StoreErrorCodes
     public static ErrorCode CheckpointConflict { get; } =
         ErrorCode.Define("store.checkpoint.conflict");
 
+    public static ErrorCode CustomEventIdentityConflict { get; } =
+        ErrorCode.Define("store.custom-event.identity-conflict");
+
     public static ErrorCode EntityNotFound { get; } =
         ErrorCode.Define("store.entity.not-found");
 

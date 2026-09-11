@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../IncidentReview.Application.Contracts/IncidentReview.Application.Contracts.csproj" />
+    <ProjectReference Include="../IncidentReview.EventSync.Contracts/IncidentReview.EventSync.Contracts.csproj" />
     <ProjectReference Include="../IncidentReview.Store.Contracts/IncidentReview.Store.Contracts.csproj" />
     <ProjectReference Include="../IncidentReview.Telemetry.Contracts/IncidentReview.Telemetry.Contracts.csproj" />
     <ProjectReference Include="../IncidentReview.Replay.Contracts/IncidentReview.Replay.Contracts.csproj" />

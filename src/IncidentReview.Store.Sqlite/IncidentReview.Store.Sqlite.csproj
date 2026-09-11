@@ -21,6 +21,10 @@
                       LogicalName="IncidentReview.Store.Sqlite.Migrations.002_AddThemePreference.sql" />
     <EmbeddedResource Include="Migrations/003_AddIncidentParticipants.sql"
                       LogicalName="IncidentReview.Store.Sqlite.Migrations.003_AddIncidentParticipants.sql" />
+    <EmbeddedResource Include="Migrations/004_DeterministicIdentitiesAndEventSettings.sql"
+                      LogicalName="IncidentReview.Store.Sqlite.Migrations.004_DeterministicIdentitiesAndEventSettings.sql" />
+    <EmbeddedResource Include="Migrations/005_AddCustomEventOutbox.sql"
+                      LogicalName="IncidentReview.Store.Sqlite.Migrations.005_AddCustomEventOutbox.sql" />
   </ItemGroup>
 
   <ItemGroup>
