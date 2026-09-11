@@ -91,7 +91,24 @@ jobs:
 
       - name: Verify release source
         shell: pwsh
-        run: .\eng\verify.ps1 -Configuration Release
+        run: |
+          $logPath = Join-Path $env:RUNNER_TEMP 'release-verification.log'
+          try {
+              & .\eng\verify.ps1 -Configuration Release *>&1 |
+                  Tee-Object -FilePath $logPath
+          }
+          catch {
+              $_ | Out-String | Add-Content -LiteralPath $logPath
+              $diagnostic = (Get-Content -LiteralPath $logPath -Tail 80) -join "`n"
+              if ($diagnostic.Length -gt 6000) {
+                  $diagnostic = $diagnostic.Substring($diagnostic.Length - 6000)
+              }
+
+              $diagnostic = $diagnostic.Replace('%', '%25')
+              $diagnostic = $diagnostic.Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error title=Release verification failed::$diagnostic"
+              exit 1
+          }
 
       - name: Package Windows application
         shell: pwsh
