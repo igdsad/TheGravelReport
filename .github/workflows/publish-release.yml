@@ -1,0 +1,162 @@
+name: Publish release assets
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - .github/workflows/publish-release.yml
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to package and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release-assets
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and attach binaries
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and check out release tag
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          $tag = $env:REQUESTED_TAG
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+              [xml]$project = Get-Content `
+                  -LiteralPath src/IncidentReview.Host.Server/IncidentReview.Host.Server.csproj `
+                  -Raw
+              $version = @($project.Project.PropertyGroup.Version) `
+                  | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } `
+                  | Select-Object -First 1
+              $tag = "v$version"
+          }
+
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+              throw "The requested release tag is invalid."
+          }
+
+          git rev-parse --verify "refs/tags/$tag^{commit}"
+          if ($LASTEXITCODE -ne 0) {
+              throw "The requested release tag does not exist."
+          }
+
+          git -c advice.detachedHead=false checkout --detach "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) {
+              throw "The release tag could not be checked out."
+          }
+
+          [xml]$serverProject = Get-Content `
+              -LiteralPath src/IncidentReview.Host.Server/IncidentReview.Host.Server.csproj `
+              -Raw
+          [xml]$desktopProject = Get-Content `
+              -LiteralPath src/IncidentReview.Host.Wpf/IncidentReview.Host.Wpf.csproj `
+              -Raw
+          $expectedVersion = $tag.Substring(1)
+          if ($serverProject.Project.PropertyGroup.Version -ne $expectedVersion -or
+              $desktopProject.Project.PropertyGroup.Version -ne $expectedVersion) {
+              throw "The release tag and host project versions do not match."
+          }
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Install repository SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Verify release source
+        shell: pwsh
+        run: .\eng\verify.ps1 -Configuration Release
+
+      - name: Package Windows application
+        shell: pwsh
+        run: .\eng\publish.ps1
+
+      - name: Package Linux server
+        shell: pwsh
+        run: .\eng\publish-server.ps1
+
+      - name: Create release and upload binaries
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $serverArchive =
+              "artifacts/release/linux-x64/GravelReview-server-linux-x64-$($env:RELEASE_TAG).tar.gz"
+          $serverChecksum = "$serverArchive.sha256"
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+              $releaseArguments = @(
+                  "release", "create", $env:RELEASE_TAG,
+                  "--repo", $env:GITHUB_REPOSITORY,
+                  "--verify-tag",
+                  "--title", "GravelReview $env:RELEASE_TAG",
+                  "--notes-from-tag"
+              )
+              if ($env:RELEASE_TAG.Contains("-")) {
+                  $releaseArguments += "--prerelease"
+              }
+
+              & gh @releaseArguments
+              if ($LASTEXITCODE -ne 0) {
+                  throw "The GitHub release could not be created."
+              }
+          }
+
+          gh release upload $env:RELEASE_TAG `
+              artifacts/release/win-x64/GravelReview-win-x64.exe `
+              artifacts/release/win-x64/GravelReview-win-x64.zip `
+              $serverArchive `
+              $serverChecksum `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber
+          if ($LASTEXITCODE -ne 0) {
+              throw "The release assets could not be uploaded."
+          }
+
+          $expectedAssets = @(
+              "GravelReview-win-x64.exe",
+              "GravelReview-win-x64.zip",
+              (Split-Path -Leaf $serverArchive),
+              (Split-Path -Leaf $serverChecksum)
+          )
+          $actualAssets = @(
+              gh release view $env:RELEASE_TAG `
+                  --repo $env:GITHUB_REPOSITORY `
+                  --json assets `
+                  --jq '.assets[].name'
+          )
+          if ($LASTEXITCODE -ne 0) {
+              throw "The published release assets could not be verified."
+          }
+
+          $missingAssets = @($expectedAssets | Where-Object { $_ -notin $actualAssets })
+          if ($missingAssets.Count -ne 0) {
+              throw "The published release is missing: $($missingAssets -join ', ')."
+          }
