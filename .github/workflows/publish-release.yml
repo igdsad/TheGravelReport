@@ -95,33 +95,168 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           $logPath = Join-Path $env:RUNNER_TEMP 'release-verification.log'
+          $PSNativeCommandUseErrorActionPreference = $false
           try {
               if ($env:RELEASE_TAG -eq 'v0.0.3-alpha') {
-                  # This immutable tag predates the durable split of its visual WPF
-                  # startup probe. GitHub's hosted runner starves that one probe at
-                  # its fixed ten-second bound; the exact tag passes it locally.
-                  $excludedTest =
-                      'IncidentReview.Desktop.Wpf.Tests.DesktopThemeOrderingTests.' +
-                      'StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary'
+                  # The immutable tag passes all 713 tests locally. On the smaller
+                  # hosted runner, accept a retry only when the ordinary full run
+                  # fails exclusively in its two time-bounded Windows UI probes.
                   Write-Warning (
-                      "For v0.0.3-alpha only, excluding the hosted-runner-incompatible " +
-                      "test '$excludedTest'."
+                      'For v0.0.3-alpha only, retrying the two known Windows timing ' +
+                      'probes in isolation if the complete test run starves them.'
                   )
 
                   & .\eng\build.ps1 -Configuration Release *>&1 |
                       Tee-Object -FilePath $logPath
 
-                  & dotnet test .\IncidentReview.slnx `
-                      --configuration Release `
-                      --no-restore `
-                      --no-build `
-                      --no-ansi `
-                      --no-progress `
-                      --minimum-expected-tests 712 `
-                      --filter "FullyQualifiedName!=$excludedTest" *>&1 |
-                      Tee-Object -FilePath $logPath
-                  if ($LASTEXITCODE -ne 0) {
-                      throw "The scoped v0.0.3-alpha release test run failed."
+                  function Get-LastTestSummaryValue {
+                      param(
+                          [Parameter(Mandatory)]
+                          [string] $Text,
+
+                          [Parameter(Mandatory)]
+                          [string] $Name
+                      )
+
+                      $pattern =
+                          "(?m)^\s*$([regex]::Escape($Name)):\s*(?<value>\d+)\s*\r?$"
+                      $matches = [regex]::Matches($Text, $pattern)
+                      if ($matches.Count -eq 0) {
+                          throw "The test output has no '$Name' summary value."
+                      }
+
+                      return [int]$matches[$matches.Count - 1].Groups['value'].Value
+                  }
+
+                  function Invoke-IsolatedProbe {
+                      param(
+                          [Parameter(Mandatory)]
+                          [string] $Label,
+
+                          [Parameter(Mandatory)]
+                          [string] $Project,
+
+                          [Parameter(Mandatory)]
+                          [string] $FullyQualifiedName
+                      )
+
+                      $output = @(
+                          & dotnet test $Project `
+                              --configuration Release `
+                              --no-restore `
+                              --no-build `
+                              --no-ansi `
+                              --no-progress `
+                              --output Normal `
+                              --minimum-expected-tests 1 `
+                              --filter "FullyQualifiedName=$FullyQualifiedName" 2>&1
+                      )
+                      $exitCode = $LASTEXITCODE
+                      $output | Tee-Object -FilePath $logPath
+                      if ($exitCode -ne 0) {
+                          throw "The isolated $Label probe failed with code $exitCode."
+                      }
+
+                      $text = $output -join "`n"
+                      $total = Get-LastTestSummaryValue -Text $text -Name 'total'
+                      $failed = Get-LastTestSummaryValue -Text $text -Name 'failed'
+                      $succeeded = Get-LastTestSummaryValue -Text $text -Name 'succeeded'
+                      $skipped = Get-LastTestSummaryValue -Text $text -Name 'skipped'
+                      if ($total -ne 1 -or $failed -ne 0 -or
+                          $succeeded -ne 1 -or $skipped -ne 0) {
+                          throw "The isolated $Label probe reported an invalid summary."
+                      }
+                  }
+
+                  $testOutput = @(
+                      & dotnet test .\IncidentReview.slnx `
+                          --configuration Release `
+                          --no-restore `
+                          --no-build `
+                          --no-ansi `
+                          --no-progress `
+                          --output Normal `
+                          --minimum-expected-tests 713 2>&1
+                  )
+                  $testExitCode = $LASTEXITCODE
+                  $testOutput | Tee-Object -FilePath $logPath
+                  $testText = $testOutput -join "`n"
+                  $total = Get-LastTestSummaryValue -Text $testText -Name 'total'
+                  $failed = Get-LastTestSummaryValue -Text $testText -Name 'failed'
+                  $succeeded = Get-LastTestSummaryValue -Text $testText -Name 'succeeded'
+                  $skipped = Get-LastTestSummaryValue -Text $testText -Name 'skipped'
+                  $errorValues = @(
+                      [regex]::Matches(
+                          $testText,
+                          '(?m)^\s*errors?:\s*(?<value>\d+)\s*\r?$') |
+                          ForEach-Object { [int]$_.Groups['value'].Value }
+                  )
+                  if ($total -ne 713 -or $skipped -ne 0 -or
+                      ($succeeded + $failed) -ne 713 -or
+                      @($errorValues | Where-Object { $_ -ne 0 }).Count -ne 0) {
+                      throw "The complete test run reported an invalid summary."
+                  }
+
+                  if ($testExitCode -eq 0) {
+                      if ($failed -ne 0 -or $succeeded -ne 713) {
+                          throw "The successful test process reported failed tests."
+                      }
+                  }
+                  else {
+                      if ($testExitCode -notin @(1, 2) -or
+                          $failed -lt 1 -or $failed -gt 2) {
+                          throw "The complete test run failed with an ineligible result."
+                      }
+
+                      $failedLineMatches = [regex]::Matches(
+                          $testText,
+                          '(?m)^\s*failed\s+(?<name>[A-Za-z_][A-Za-z0-9_.]*)' +
+                          '\s+\([^\r\n)]+\)\s*\r?$')
+                      $failedNames = @(
+                          $failedLineMatches |
+                              ForEach-Object { $_.Groups['name'].Value } |
+                              Sort-Object -Unique
+                      )
+                      if ($failedNames.Count -eq 0) {
+                          throw "The failed tests could not be identified safely."
+                      }
+
+                      $wpfProbe =
+                          'IncidentReview.Desktop.Wpf.Tests.DesktopThemeOrderingTests.' +
+                          'StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary'
+                      $iracingProbe =
+                          'IncidentReview.Iracing.Tests.WindowsReplayMessageSenderTests.' +
+                          'ProductionSenderDeliversExactGoldenVectorToHiddenNativeWindow'
+                      $probeKeys = @()
+                      foreach ($failedName in $failedNames) {
+                          if ($failedName -in @(
+                                  'StartupSequenceAppliesStoredPaletteBeforeApplicationRunBoundary',
+                                  $wpfProbe)) {
+                              $probeKeys += 'wpf'
+                          }
+                          elseif ($failedName -in @(
+                                  'ProductionSenderDeliversExactGoldenVectorToHiddenNativeWindow',
+                                  $iracingProbe)) {
+                              $probeKeys += 'iracing'
+                          }
+                          else {
+                              throw "Unexpected failed test '$failedName'."
+                          }
+                      }
+
+                      $probeKeys = @($probeKeys | Sort-Object -Unique)
+                      if ($probeKeys.Count -ne $failed) {
+                          throw "The failed-test names do not match the test summary."
+                      }
+
+                      Invoke-IsolatedProbe `
+                          -Label 'WPF startup' `
+                          -Project .\tests\IncidentReview.Desktop.Wpf.Tests\IncidentReview.Desktop.Wpf.Tests.csproj `
+                          -FullyQualifiedName $wpfProbe
+                      Invoke-IsolatedProbe `
+                          -Label 'iRacing native-window' `
+                          -Project .\tests\IncidentReview.Iracing.Tests\IncidentReview.Iracing.Tests.csproj `
+                          -FullyQualifiedName $iracingProbe
                   }
 
                   & dotnet run `
