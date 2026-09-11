@@ -120,15 +120,12 @@ Push-Location -LiteralPath $repositoryRoot
 try {
     Invoke-DotNet -ArgumentList @(
         'restore', $hostProject,
-        '--runtime', 'linux-x64',
         '--locked-mode',
         '-p:RestoreLockedMode=true'
     )
     Invoke-DotNet -ArgumentList @(
         'publish', $hostProject,
         '--configuration', 'Release',
-        '--runtime', 'linux-x64',
-        '--self-contained', 'true',
         '--no-restore',
         '--output', $publishDirectory
     )

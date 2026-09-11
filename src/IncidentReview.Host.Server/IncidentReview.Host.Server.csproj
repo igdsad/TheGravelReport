@@ -16,6 +16,7 @@
     <DebugType>None</DebugType>
     <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
     <PublishTrimmed>false</PublishTrimmed>
+    <AllowedReferenceRelatedFileExtensions>.pri;.dll.config;.exe.config</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
 
   <ItemGroup>
